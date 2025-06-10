@@ -81,7 +81,7 @@ describe("Treasury", function () {
     it("Should only allow owner to whitelist tokens", async function () {
       await expect(
         treasury.connect(user1).setTokenWhitelist(await weth.getAddress(), true)
-      ).to.be.revertedWith("Ownable: caller is not the owner");
+      ).to.be.revertedWithCustomError(treasury, "OwnableUnauthorizedAccount");
     });
 
     it("Should emit WhitelistUpdated event", async function () {
@@ -146,7 +146,7 @@ describe("Treasury", function () {
       await treasury.sweepToken(await usdc.getAddress(), owner.address, amount);
       
       const finalBalance = await usdc.balanceOf(owner.address);
-      expect(finalBalance).to.equal(initialBalance + amount);
+      expect(finalBalance).to.equal(initialBalance + BigInt(amount));
     });
 
     it("Should allow owner to withdraw ETH", async function () {
@@ -163,7 +163,7 @@ describe("Treasury", function () {
     it("Should only allow owner to withdraw", async function () {
       await expect(
         treasury.connect(user1).sweepToken(await usdc.getAddress(), user1.address, toUsdc("100"))
-      ).to.be.revertedWith("Ownable: caller is not the owner");
+      ).to.be.revertedWithCustomError(treasury, "OwnableUnauthorizedAccount");
     });
 
     it("Should not allow withdrawing more than balance", async function () {
