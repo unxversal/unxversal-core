@@ -58,6 +58,20 @@ export const TEST_CONSTANTS = {
     MAX_LOCK_TIME: 4 * 365 * 24 * 60 * 60, // 4 years
   },
 
+  // Gauge parameters
+  GAUGE: {
+    EPOCH_DURATION: 7 * 24 * 60 * 60, // 1 week
+    MIN_GAUGE_WEIGHT: 100, // 1%
+    MAX_GAUGE_WEIGHT: 5000, // 50%
+  },
+
+  // VeUNXV parameters
+  VEUNXV: {
+    MAX_LOCK_TIME: 4 * 365 * 24 * 60 * 60, // 4 years
+    MIN_LOCK_TIME: 7 * 24 * 60 * 60, // 1 week
+    WEEK: 7 * 24 * 60 * 60,
+  },
+
   // Fee parameters
   FEES: {
     BPS_DENOMINATOR: 10000,

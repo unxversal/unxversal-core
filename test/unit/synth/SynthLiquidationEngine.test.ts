@@ -30,36 +30,50 @@ describe("SynthLiquidationEngine", function () {
     const oracle = await MockOracleFactory.deploy();
     await (oracle as any).setPrice(1, TEST_CONSTANTS.PRICES.ETH);
 
-    // Deploy USDCVault
-    const USDCVaultFactory = await ethers.getContractFactory("USDCVault");
-    const usdcVault = await USDCVaultFactory.deploy(
-      await usdc.getAddress(),
-      owner.address, // treasury
-      owner.address
-    );
-
-    // Deploy SynthFactory
+    // Deploy SynthFactory first (only needs oracle)
     const SynthFactoryFactory = await ethers.getContractFactory("SynthFactory");
     const synthFactory = await SynthFactoryFactory.deploy(
-      await usdc.getAddress(),
-      await oracle.getAddress(),
-      owner.address
+      owner.address, // _initialOwner
+      await oracle.getAddress() // _oracleAddress
     );
 
-    // Deploy SynthLiquidationEngine
+    // Deploy USDCVault (needs SynthFactory)
+    const USDCVaultFactory = await ethers.getContractFactory("USDCVault");
+    const usdcVault = await USDCVaultFactory.deploy(
+      await usdc.getAddress(), // _usdcTokenAddress
+      await oracle.getAddress(), // _oracleAddress
+      await synthFactory.getAddress(), // _synthFactoryAddress
+      owner.address // _initialOwner
+    );
+
+    // Deploy SynthLiquidationEngine (needs both)
     const SynthLiquidationEngineFactory = await ethers.getContractFactory("SynthLiquidationEngine");
     const liquidationEngine = await SynthLiquidationEngineFactory.deploy(
-      await synthFactory.getAddress(),
-      await usdcVault.getAddress(),
-      await oracle.getAddress(),
-      owner.address
+      await usdcVault.getAddress(), // _usdcVaultAddress
+      await synthFactory.getAddress(), // _synthFactoryAddress
+      await oracle.getAddress(), // _oracleAddress
+      await usdc.getAddress(), // _usdcTokenAddress
+      owner.address // _initialOwner
     );
 
-    // Create a synthetic token for testing
-    const tx = await synthFactory.createSynth("Synthetic ETH", "sETH", 1);
-    const receipt = await tx.wait();
-    const event = receipt.logs.find((log: any) => log.fragment?.name === "SynthCreated");
-    const synthAddress = event.args[0];
+    // Create a synthetic token for testing using the proper deploySynth function
+    const synthAddress = await synthFactory.deploySynth.staticCall(
+      "Synthetic ETH",
+      "sETH", 
+      1, // assetId
+      15000, // customMinCRbps (150%)
+      await usdcVault.getAddress() // controllerAddress
+    );
+    
+    // Actually execute the transaction
+    await synthFactory.deploySynth(
+      "Synthetic ETH",
+      "sETH", 
+      1, // assetId
+      15000, // customMinCRbps (150%)
+      await usdcVault.getAddress() // controllerAddress
+    );
+    
     const synthToken = await ethers.getContractAt("SynthToken", synthAddress);
 
     // Setup initial state

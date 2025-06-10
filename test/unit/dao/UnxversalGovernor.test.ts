@@ -24,8 +24,7 @@ describe("UnxversalGovernor", function () {
 
     // Deploy UNXV token
     const UNXVFactory = await ethers.getContractFactory("UNXV");
-    // @ts-expect-error: Constructor parameter mismatch
-    const unxv = await UNXVFactory.deploy(owner.address);
+    const unxv = await UNXVFactory.deploy();
 
     // Deploy VeUNXV
     const VeUNXVFactory = await ethers.getContractFactory("VeUNXV");
@@ -43,12 +42,12 @@ describe("UnxversalGovernor", function () {
     // Deploy UnxversalGovernor
     const GovernorFactory = await ethers.getContractFactory("UnxversalGovernor");
     const governor = await GovernorFactory.deploy(
-      await unxv.getAddress(),
-      await veUNXV.getAddress(),
-      await timelock.getAddress(),
-      TEST_CONSTANTS.GOVERNANCE.VOTING_PERIOD,
-      TEST_CONSTANTS.GOVERNANCE.PROPOSAL_THRESHOLD,
-      TEST_CONSTANTS.GOVERNANCE.QUORUM
+      await veUNXV.getAddress(), // IVotes _token (should be veUNXV)
+      await timelock.getAddress(), // TimelockController _timelock
+      TEST_CONSTANTS.GOVERNANCE.VOTING_DELAY, // uint256 _votingDelay
+      TEST_CONSTANTS.GOVERNANCE.VOTING_PERIOD, // uint256 _votingPeriod
+      TEST_CONSTANTS.GOVERNANCE.PROPOSAL_THRESHOLD, // uint256 _proposalThreshold
+      TEST_CONSTANTS.GOVERNANCE.QUORUM // uint256 _quorumPercentage
     );
 
     // Deploy mock target contract for testing

@@ -16,7 +16,7 @@ describe("UNXV Token", function () {
     const [owner, user1, user2] = await ethers.getSigners();
 
     const UNXVFactory = await ethers.getContractFactory("UNXV");
-    const unxv = await UNXVFactory.deploy(owner.address);
+    const unxv = await UNXVFactory.deploy();
 
     return { unxv, owner, user1, user2 };
   }
@@ -31,7 +31,7 @@ describe("UNXV Token", function () {
 
   describe("Deployment", function () {
     it("Should set the correct name and symbol", async function () {
-      expect(await unxv.name()).to.equal("Unxversal Token");
+      expect(await unxv.name()).to.equal("unxversal");
       expect(await unxv.symbol()).to.equal("UNXV");
     });
 
@@ -42,76 +42,50 @@ describe("UNXV Token", function () {
     it("Should assign initial supply to owner", async function () {
       const totalSupply = await unxv.totalSupply();
       const ownerBalance = await unxv.balanceOf(owner.address);
+      const expectedSupply = ethers.parseEther("1000000000"); // 1 billion tokens
+      
       expect(ownerBalance).to.equal(totalSupply);
-      expect(totalSupply).to.equal(TEST_CONSTANTS.TOKENS.INITIAL_SUPPLY);
+      expect(totalSupply).to.equal(expectedSupply);
     });
 
-    it("Should set owner as initial admin", async function () {
-      const DEFAULT_ADMIN_ROLE = await unxv.DEFAULT_ADMIN_ROLE();
-      expect(await unxv.hasRole(DEFAULT_ADMIN_ROLE, owner.address)).to.be.true;
-    });
-  });
-
-  describe("Minting", function () {
-    it("Should allow minter to mint tokens", async function () {
-      const MINTER_ROLE = await unxv.MINTER_ROLE();
-      await unxv.grantRole(MINTER_ROLE, owner.address);
-      
-      const mintAmount = ethers.parseEther("1000");
-      const initialSupply = await unxv.totalSupply();
-      
-      await unxv.mint(user1.address, mintAmount);
-      
-      expect(await unxv.balanceOf(user1.address)).to.equal(mintAmount);
-      expect(await unxv.totalSupply()).to.equal(initialSupply + mintAmount);
+    it("Should set owner as contract owner", async function () {
+      expect(await unxv.owner()).to.equal(owner.address);
     });
 
-    it("Should revert if non-minter tries to mint", async function () {
-      const mintAmount = ethers.parseEther("1000");
-      
-      await expect(
-        unxv.connect(user1).mint(user1.address, mintAmount)
-      ).to.be.revertedWith("UNXV: Caller is not a minter");
-    });
-
-    it("Should allow admin to grant minter role", async function () {
-      const MINTER_ROLE = await unxv.MINTER_ROLE();
-      
-      await unxv.grantRole(MINTER_ROLE, user1.address);
-      
-      expect(await unxv.hasRole(MINTER_ROLE, user1.address)).to.be.true;
+    it("Should not have minting finished initially", async function () {
+      expect(await unxv.mintingFinished()).to.be.false;
     });
   });
 
-  describe("Minting Controls", function () {
-    it("Should allow admin to disable minting", async function () {
-      await unxv.disableMinting();
-      expect(await unxv.mintingDisabled()).to.be.true;
+  describe("Minting Control", function () {
+    it("Should allow owner to finish minting", async function () {
+      await unxv.finishMinting();
+      expect(await unxv.mintingFinished()).to.be.true;
     });
 
-    it("Should revert minting when disabled", async function () {
-      const MINTER_ROLE = await unxv.MINTER_ROLE();
-      await unxv.grantRole(MINTER_ROLE, owner.address);
-      await unxv.disableMinting();
-      
-      const mintAmount = ethers.parseEther("1000");
-      
+    it("Should emit MintingFinished event", async function () {
+      await expect(unxv.finishMinting())
+        .to.emit(unxv, "MintingFinished");
+    });
+
+    it("Should revert if non-owner tries to finish minting", async function () {
       await expect(
-        unxv.mint(user1.address, mintAmount)
-      ).to.be.revertedWith("UNXV: Minting disabled");
+        unxv.connect(user1).finishMinting()
+      ).to.be.revertedWithCustomError(unxv, "OwnableUnauthorizedAccount");
     });
 
-    it("Should revert if non-admin tries to disable minting", async function () {
-      await expect(
-        unxv.connect(user1).disableMinting()
-      ).to.be.revertedWith("AccessControl:");
-    });
-
-    it("Should not allow re-enabling minting once disabled", async function () {
-      await unxv.disableMinting();
+    it("Should revert if minting is already finished", async function () {
+      await unxv.finishMinting();
       
-      // There should be no function to re-enable minting
-      expect(unxv.enableMinting).to.be.undefined;
+      // After finishing minting, ownership is renounced, so subsequent calls fail due to ownership
+      await expect(
+        unxv.finishMinting()
+      ).to.be.revertedWithCustomError(unxv, "OwnableUnauthorizedAccount");
+    });
+
+    it("Should renounce ownership after finishing minting", async function () {
+      await unxv.finishMinting();
+      expect(await unxv.owner()).to.equal(ethers.ZeroAddress);
     });
   });
 
@@ -188,7 +162,7 @@ describe("UNXV Token", function () {
       
       await expect(
         unxv.connect(user1).transfer(user2.address, transferAmount)
-      ).to.be.revertedWith("ERC20: transfer amount exceeds balance");
+      ).to.be.revertedWithCustomError(unxv, "ERC20InsufficientBalance");
     });
 
     it("Should handle transferFrom with allowance", async function () {
@@ -213,33 +187,6 @@ describe("UNXV Token", function () {
     });
   });
 
-  describe("Access Control", function () {
-    it("Should allow admin to grant roles", async function () {
-      const MINTER_ROLE = await unxv.MINTER_ROLE();
-      
-      await unxv.grantRole(MINTER_ROLE, user1.address);
-      
-      expect(await unxv.hasRole(MINTER_ROLE, user1.address)).to.be.true;
-    });
-
-    it("Should allow admin to revoke roles", async function () {
-      const MINTER_ROLE = await unxv.MINTER_ROLE();
-      
-      await unxv.grantRole(MINTER_ROLE, user1.address);
-      await unxv.revokeRole(MINTER_ROLE, user1.address);
-      
-      expect(await unxv.hasRole(MINTER_ROLE, user1.address)).to.be.false;
-    });
-
-    it("Should not allow non-admin to grant roles", async function () {
-      const MINTER_ROLE = await unxv.MINTER_ROLE();
-      
-      await expect(
-        unxv.connect(user1).grantRole(MINTER_ROLE, user2.address)
-      ).to.be.revertedWith("AccessControl:");
-    });
-  });
-
   describe("Events", function () {
     it("Should emit Transfer event on transfer", async function () {
       const transferAmount = ethers.parseEther("100");
@@ -255,14 +202,6 @@ describe("UNXV Token", function () {
       await expect(unxv.approve(user1.address, approveAmount))
         .to.emit(unxv, "Approval")
         .withArgs(owner.address, user1.address, approveAmount);
-    });
-
-    it("Should emit RoleGranted event when granting role", async function () {
-      const MINTER_ROLE = await unxv.MINTER_ROLE();
-      
-      await expect(unxv.grantRole(MINTER_ROLE, user1.address))
-        .to.emit(unxv, "RoleGranted")
-        .withArgs(MINTER_ROLE, user1.address, owner.address);
     });
   });
 }); 

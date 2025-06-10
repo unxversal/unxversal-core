@@ -27,20 +27,25 @@ describe("USDCVault", function () {
     // Deploy mock yield strategy (could be Compound, Aave, etc.)
     const yieldStrategy = await MockERC20Factory.deploy("Strategy Token", "ST", 18, 0);
 
+    // Deploy mock oracle 
+    const MockOracleFactory = await ethers.getContractFactory("MockOracle");
+    const oracle = await MockOracleFactory.deploy();
+    await (oracle as any).setPrice(1, TEST_CONSTANTS.PRICES.ETH);
+
+    // Deploy SynthFactory first (needed by USDCVault)
+    const SynthFactoryFactory = await ethers.getContractFactory("SynthFactory");
+    const synthFactory = await SynthFactoryFactory.deploy(
+      owner.address, // _initialOwner
+      await oracle.getAddress() // _oracleAddress
+    );
+
     // Deploy USDCVault
     const USDCVaultFactory = await ethers.getContractFactory("USDCVault");
     const usdcVault = await USDCVaultFactory.deploy(
-      await usdc.getAddress(),
-      treasury.address,
-      owner.address
-    );
-
-    // Deploy mock SynthFactory for integration
-    const SynthFactoryFactory = await ethers.getContractFactory("SynthFactory");
-    const synthFactory = await SynthFactoryFactory.deploy(
-      await usdc.getAddress(),
-      owner.address, // Mock oracle
-      treasury.address
+      await usdc.getAddress(), // _usdcTokenAddress
+      await oracle.getAddress(), // _oracleAddress
+      await synthFactory.getAddress(), // _synthFactoryAddress
+      owner.address // _initialOwner
     );
 
     // Setup initial state
