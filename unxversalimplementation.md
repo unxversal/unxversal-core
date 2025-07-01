@@ -1,712 +1,349 @@
-# **unxversal Implementation Plan**
-*A Comprehensive Technical Roadmap for Building the DeFi Operating System on Sui*
+# **unxversal Implementation Roadmap**
+*A phased build-out plan from MVP to full DeFi operating system*
 
 ---
 
-## **📋 Overview**
+## 📜 Document Purpose
+This document translates the high-level unxversal vision into an actionable build sequence.  
+For **each phase** we specify:
+1. **Primary Objectives & Rationale** (what problem we solve first)
+2. **On-Chain Deliverables** (Move packages deployed to Sui)
+3. **Off-Chain / Backend Services** (indexers, keepers, bots, CLI tools)
+4. **UI / Front-End Milestones** (user-facing apps & dashboards)
+5. **Dependencies & Tests** (audit, fuzz, integration pipelines)
 
-This document outlines the complete implementation strategy for unxversal, organized in logical phases based on dependencies and complexity. Each phase details what components need to be built on-chain (Sui Move), off-chain (services/infrastructure), and in the frontend (user interface).
-
-**Total Estimated Timeline:** 18-24 months for full implementation  
-**Team Size:** 8-12 engineers (4 Move, 3 Backend, 3 Frontend, 2 DevOps)
-
----
-
-## **🎯 Implementation Phases**
-
-### **Phase 1: Foundation Layer (Months 1-4)**
-*"Build the bedrock that everything else depends on"*
-
-**Priority:** CRITICAL - Nothing else can function without these components
-
-#### **🔗 On-Chain Components (Sui Move)**
-
-**1.1 UNXV Token & Basic Governance**
-```move
-// Core modules to implement
-unxv::coin                 // ERC-20 style fungible token with 9 decimals
-unxv::supply              // Hard-capped 1B supply management
-unxv::transfer_hooks      // Checkpoint voting power on transfers
-gov::timelock            // 48-hour execution delay for sensitive operations
-gov::governor            // Basic proposal/voting logic (OpenZeppelin Bravo port)
-treasury::safe           // Multi-sig treasury for UNXV holdings
-```
-
-**Key Resources:**
-- `Supply<UNXV>` - Tracks total supply and mint capabilities
-- `GovernorConfig` - Voting thresholds, delays, quorum requirements  
-- `TimelockConfig` - Execution delays and grace periods
-- `TreasurySafe` - Multi-signature wallet for protocol funds
-
-**Critical Functions:**
-- `mint_genesis()` - One-time mint of all 1B tokens to distribution buckets
-- `propose()` / `vote()` / `queue()` / `execute()` - Governance flow
-- `treasury_execute()` - Protected treasury operations
-
-**1.2 Fee Sink Infrastructure**
-```move
-fee_sink::core           // Base swap-to-UNXV functionality  
-fee_sink::routing        // Route UNXV to burn/treasury/insurance
-fee_sink::deepbook_rfq   // RFQ swap integration with DeepBook
-fee_sink::slippage_guard // Protect against price manipulation
-```
-
-**Key Resources:**
-- `FeeSinkConfig` - Global routing percentages and slippage limits
-- `SwapRegistry` - Track swap transactions for audit trails
-
-**1.3 Oracle Infrastructure**
-```move
-oracle::pyth_adapter     // Verify Pyth price attestations  
-oracle::fallback_twap    // DeepBook TWAP calculations when Pyth fails
-oracle::staleness_check  // Detect and handle stale price feeds
-oracle::confidence_score // Risk-weight prices based on confidence intervals
-```
-
-**Key Resources:**
-- `PriceInfo` - Standardized price data across all protocols
-- `OracleConfig` - Staleness tolerance, confidence thresholds
-
-**1.4 Synthetic Asset System (Critical Dependency)**
-```move
-synth::vault             // USDC collateral management
-synth::factory           // Deploy new synthetic assets
-synth::liquidation       // Handle undercollateralized positions  
-synth::debt_shares       // Global debt pool accounting
-synth::asset_registry    // Map Pyth price IDs to synthetic assets
-```
-
-**Key Resources:**
-- `Position` - User's collateral and debt position
-- `SynthInfo` - Metadata for each synthetic asset (sBTC, sETH, etc.)
-- `GlobalDebt` - System-wide debt tracking
-- `CollateralVault` - USDC backing all synthetics
-
-**Critical Functions:**
-- `mint_synth()` / `burn_synth()` - Core user operations
-- `liquidate()` - Maintain system solvency
-- `add_synth()` - Governance-controlled asset addition
-
-#### **🏗️ Off-Chain Infrastructure**
-
-**1.1 Core Indexer Service**
-```typescript
-// Services to build
-sui-indexer/
-├── event-processor/      // Process all Sui blockchain events
-├── price-aggregator/     // Collect and validate Pyth price feeds  
-├── position-monitor/     // Track user positions across all protocols
-├── liquidation-scanner/  // Identify at-risk positions
-└── api-server/          // GraphQL API for frontends and bots
-```
-
-**Key Features:**
-- Real-time event processing from Sui fullnode
-- Pyth price feed validation and caching
-- Position health monitoring across all protocols
-- RESTful + GraphQL APIs for data access
-
-**1.2 Relayer Network**
-```typescript
-relayer-mesh/
-├── websocket-server/    // Real-time price and event broadcasts
-├── order-relay/         // Submit orders to DeepBook on behalf of users
-├── fee-collector/       // Automated fee collection and swapping
-└── keeper-coordinator/  // Coordinate automated protocol maintenance
-```
-
-**1.3 Development Tools**
-```typescript
-sdk/
-├── typescript/          // Client SDK for web applications
-├── rust/               // SDK for high-performance bots
-├── python/             // SDK for data analysis and scripting  
-└── move-utils/         // Common Move utilities and testing helpers
-```
-
-#### **🎨 Frontend Components**
-
-**1.1 Core Web Application (Next.js/React)**
-```typescript
-frontend/
-├── components/
-│   ├── WalletConnect/   // Sui wallet integration
-│   ├── TokenBalance/    // Display UNXV and other token balances
-│   ├── PriceFeeds/      // Live price display from Pyth
-│   └── Governance/      // Proposal viewing and voting UI
-├── pages/
-│   ├── dashboard/       // Portfolio overview
-│   ├── governance/      // DAO proposals and voting
-│   └── synthetics/      // Mint/burn synthetic assets
-└── hooks/
-    ├── useWallet/       // Wallet connection and signing
-    ├── usePrices/       // Real-time price subscriptions
-    └── usePositions/    // User position tracking
-```
-
-**Key Features:**
-- Wallet connection (Sui Wallet, Suiet, Ethos)
-- Real-time price feeds via WebSocket
-- Transaction signing and submission
-- Basic governance interface
-
-**1.2 Admin Dashboard**
-```typescript
-admin-dashboard/
-├── protocol-metrics/    // TVL, volume, fee collection
-├── risk-monitoring/     // System health and liquidation queue  
-├── governance-tools/    // Proposal creation and management
-└── treasury-management/ // Fund allocation and spending
-```
+The order reflects critical-path dependencies, quick wins for adoption, and progressive hardening of risk.
 
 ---
 
-### **Phase 2: Core Financial Services (Months 4-8)**
-*"Build the money markets that generate yield and liquidity"*
+## 🗺️ Phase-by-Phase Timeline
 
-#### **🔗 On-Chain Components**
-
-**2.1 Lending Protocol (uCoin)**
-```move
-lend::pool              // Core lending pool with multiple assets
-lend::interest_model    // Algorithmic interest rate calculations
-lend::utoken            // Interest-bearing receipt tokens  
-lend::controller        // Risk parameters and collateral factors
-lend::flashloan         // Single-transaction borrowing
-lend::liquidation       // Automated liquidation of bad debt
-```
-
-**Key Resources:**
-- `PoolConfig` - Global lending pool configuration
-- `MarketInfo` - Per-asset lending market data (supply, borrow rates)
-- `AccountLiquidity` - User's borrowing capacity across all assets
-- `UToken<T>` - Yield-bearing tokens (uUSDC, uUNXV, etc.)
-
-**2.2 Liquid Staking (sSUI)**
-```move
-lstake::vault           // SUI staking pool management
-lstake::validator_set   // Stake distribution across validators
-lstake::rewards         // Staking reward distribution  
-lstake::unstake_queue   // Handle unbonding period
-lstake::rebase          // Daily exchange rate updates
-```
-
-**Key Resources:**
-- `StakePool` - Aggregated SUI stake across validators
-- `StakeBatch` - Queued stake/unstake operations
-- `RewardDistribution` - Track and distribute staking yields
-
-**2.3 Cross-Margin Account System**
-```move
-margin::account         // Unified margin across all protocols
-margin::health          // Portfolio health calculations
-margin::liquidation     // Cross-protocol liquidation logic
-margin::collateral      // Collateral factor management
-```
-
-**Key Resources:**
-- `CrossMargin` - User's unified margin account
-- `PositionSummary` - Aggregated position data across protocols
-
-#### **🏗️ Off-Chain Infrastructure**
-
-**2.1 Liquidation Bot Framework**
-```rust
-liquidation-bots/
-├── health-monitor/      // Continuously scan for liquidatable positions
-├── liquidation-executor/ // Execute profitable liquidations
-├── flash-loan-coordinator/ // Optimize capital efficiency via flash loans
-└── profit-tracker/      // Track and optimize liquidation profitability
-```
-
-**2.2 Validator Management Service**
-```typescript
-validator-service/
-├── performance-monitor/ // Track validator performance and uptime
-├── stake-rebalancer/   // Automatically rebalance stake distribution
-├── reward-collector/   // Collect and distribute staking rewards
-└── slashing-detector/  // Monitor for validator slashing events
-```
-
-**2.3 Interest Rate Oracle**
-```typescript
-rate-oracle/
-├── utilization-tracker/ // Monitor lending pool utilization rates
-├── rate-calculator/    // Compute optimal interest rates
-├── reserve-manager/    // Manage protocol reserves
-└── yield-optimizer/    // Optimize yields across different protocols
-```
-
-#### **🎨 Frontend Components**
-
-**2.1 Lending Interface**
-```typescript
-lending/
-├── SupplyPanel/        // Supply assets to earn interest
-├── BorrowPanel/        // Borrow against collateral
-├── PositionManager/    // Manage lending positions
-├── HealthMeter/        // Visual health factor display
-└── FlashLoanBuilder/   // Construct flash loan transactions
-```
-
-**2.2 Liquid Staking Interface**  
-```typescript
-staking/
-├── StakeInterface/     // Stake SUI to receive sSUI
-├── UnstakeQueue/       // Manage unstaking requests
-├── RewardsTracker/     // Track staking yields
-├── ValidatorInfo/      // Display validator performance
-└── ExchangeRateChart/  // Historical sSUI:SUI exchange rate
-```
+| Phase | Target Quarter | Milestone Tag | Primary User Personas Unlocked |
+|-------|----------------|--------------|--------------------------------|
+| **0** | Month 0        | *Dev Bootstrap* | Core devs & auditors |
+| **1** | Q1             | *DAO Genesis* | Governors, Treasury ops |
+| **2** | Q1             | *Spot v1* | Active traders |
+| **3** | Q2             | *Synth MVP* | Traders, power users |
+| **4** | Q2             | *Lend α* | Yield farmers |
+| **5** | Q3             | *Relayer Mesh* | Infra providers |
+| **6** | Q3             | *Perps β* | Active traders, liquidators |
+| **7** | Q4             | *Dated Futures* | Hedgers, risk managers |
+| **8** | Q4             | *Options β* | Risk managers, structured desks |
+| **9** | Q1 +1          | *Exotics α* | Institutional desks |
+| **10**| Q1 +1          | *LP Vaults* | Passive capital |
+| **11**| Q2 +1          | *Liquid Staking* | Newcomers, yield farmers |
+| **12**| Q2 +1          | *Gas Futures* | Protocol treasuries |
+| **13**| Rolling        | *Infra Tooling* | Bots, keepers, explorers |
+| **14**| Rolling        | *Cross-Chain* | New ecosystems |
 
 ---
 
-### **Phase 3: Spot Trading & Basic Derivatives (Months 8-12)**
-*"Enable sophisticated trading across all asset classes"*
+## 🔧 Phase 0 — Development Bootstrap
+**Goal**: Establish tooling & CI so every later phase lands fast & safely.
 
-#### **🔗 On-Chain Components**
+### On-Chain
+- *N/A* (Use Sui testnet faucet only)
 
-**3.1 Spot DEX Integration**
-```move
-dex::deepbook_wrapper   // Wrapper around native DeepBook
-dex::order_router       // Intelligent order routing
-dex::fee_collector      // Collect and route trading fees
-dex::market_maker       // Automated market making tools
-```
+### Off-Chain
+- Monorepo scaffolding (`pnpm`, `cargo`, `move` workspace)  
+- GitHub Actions: lint, unit tests, `sui move test`, static analysis  
+- Local Sui-Fullnode docker image for deterministic e2e tests  
+- `forge-fuzz` harness for Move invariants (via Move Prover)
 
-**3.2 Perpetual Futures**
-```move
-perps::market           // Perpetual futures market configuration
-perps::clearing         // Position management and settlement
-perps::funding          // Funding rate calculations and payments
-perps::liquidation      // Margin and liquidation logic
-perps::insurance        // Insurance fund management
-```
+### UI
+- Storybook + Tailwind design system  
+- Wallet adapter abstraction (Suiet, Nightly, Ethos)
 
-**Key Resources:**
-- `MarketInfo` - Configuration for each perps market
-- `Position` - User's perpetual position (size, entry price, margin)
-- `FundingIndex` - Cumulative funding rate tracking
-- `InsuranceFund` - Backstop for market losses
-
-**3.3 Dated Futures**
-```move
-futures::series         // Individual futures contracts
-futures::settlement     // Cash settlement at expiry
-futures::margin         // Margin requirements and calculations
-futures::factory        // Create new futures series
-```
-
-#### **🏗️ Off-Chain Infrastructure**
-
-**3.1 Trading Engine Support**
-```typescript
-trading-infrastructure/
-├── orderbook-indexer/  // Real-time orderbook state management
-├── fill-processor/     // Process trading fills and update positions
-├── funding-calculator/ // Compute and apply funding rates
-├── settlement-engine/  // Handle futures settlement at expiry
-└── market-data-feed/   // Aggregate and distribute market data
-```
-
-**3.2 Market Making Framework**
-```rust
-market-making/
-├── strategy-engine/    // Pluggable market making strategies
-├── inventory-manager/  // Manage inventory across multiple assets
-├── risk-calculator/    // Real-time risk management
-├── pnl-tracker/       // Track profit and loss across positions
-└── hedge-coordinator/ // Coordinate hedging across venues
-```
-
-**3.3 Trading Bots SDK**
-```typescript
-trading-bots/
-├── signal-processing/  // Technical analysis and signal generation
-├── execution-engine/   // Optimal trade execution
-├── portfolio-manager/  // Multi-asset portfolio management
-├── risk-manager/      // Position sizing and risk controls
-└── backtesting/       // Historical strategy testing
-```
-
-#### **🎨 Frontend Components**
-
-**3.1 Advanced Trading Interface**
-```typescript
-trading/
-├── TradingView/        // Full-featured charting with indicators
-├── OrderEntry/         // Advanced order types and management
-├── PositionManager/    // Manage positions across spot/perps/futures
-├── MarketDepth/        // Real-time orderbook visualization
-├── TradeHistory/       // Historical trade and PnL tracking
-└── PortfolioAnalytics/ // Risk metrics and performance analysis
-```
-
-**3.2 Perpetuals Interface**
-```typescript
-perps/
-├── PerpsTradingPanel/  // Leverage trading interface
-├── FundingRateDisplay/ // Real-time funding rates
-├── PositionSizer/      // Calculate optimal position sizes
-├── LiquidationPrice/   // Display liquidation levels
-└── CrossMarginView/    // Unified margin across all positions
-```
+### Tests / Audits
+- Coverage >85 % on unit tests  
+- Pre-commit hooks (prettier, clippy, move-lint)
 
 ---
 
-### **Phase 4: Options & Advanced Derivatives (Months 12-16)**
-*"Complete the derivatives suite with sophisticated instruments"*
+## 🏛️ Phase 1 — DAO Genesis & UNXV Token
+### Objectives
+1. Deploy immutable `UNXV` coin & vesting escrows.  
+2. Launch `ve-Locker`, `Governor`, `Timelock`, and seeded Treasury.
 
-#### **🔗 On-Chain Components**
+### On-Chain Components
+| Module | Resource | Notes |
+|--------|----------|-------|
+| `unxv::coin` | `Coin` | 1 B supply, mint cap burned |
+| `unxv_ve::locker` | `Locker<NFT>` | Linear decay voting power |
+| `gov::bravo` | `Proposal`, `Receipt` | Ported from OZ Governor-Bravo |
+| `gov::timelock` | `Timelock` | 48 h delay |
+| `treasury::safe` | `Safe` | Owns UNXV & USDC |
 
-**4.1 Options Protocol**
-```move
-options::series         // European options contracts
-options::clearing       // Option writing and exercise
-options::greeks         // Black-Scholes pricing and greeks
-options::settlement     // Cash settlement at expiry
-options::rfq            // Request-for-quote system
-options::margin         // Portfolio margin calculations
-```
+### Off-Chain
+- CLI: `unxv-gov` to create & simulate proposals.  
+- DAO dashboard indexer (Postgres) syncing proposal & vote events.
 
-**4.2 Exotic Derivatives**
-```move
-exotics::barriers       // Barrier options (knock-in/knock-out)
-exotics::power_perps    // Power perpetuals (convex payoffs)
-exotics::range_accrual  // Range-bound yield instruments  
-exotics::path_dependent // Path-dependent payoff calculations
-```
+### UI
+- Governance portal (proposals, vote signing, vesting viewer).  
+- Token dashboard (balance, lock, delegate).
 
-**4.3 Gas Futures**
-```move
-gas_futures::series     // Gas cost hedging contracts
-gas_futures::reserve    // SUI reserve management
-gas_futures::settlement // Gas unit settlement
-gas_futures::amm        // Automated market maker for gas futures
-```
-
-#### **🏗️ Off-Chain Infrastructure**
-
-**4.1 Options Pricing Engine**
-```rust
-options-engine/
-├── volatility-surface/ // Build and maintain implied volatility surfaces
-├── greeks-calculator/  // Real-time options greeks computation
-├── pricing-models/     // Black-Scholes and advanced pricing models
-├── expiry-processor/   // Handle options expiry and settlement
-└── risk-calculator/    // Portfolio-level options risk management
-```
-
-**4.2 Exotic Derivatives Engine**
-```typescript
-exotics-engine/
-├── barrier-monitor/    // Monitor barrier conditions for knock-in/out options
-├── path-tracker/       // Track price paths for path-dependent payoffs
-├── variance-calculator/ // Compute realized variance for power perps
-├── range-monitor/      // Monitor price ranges for accrual products
-└── settlement-engine/  // Complex settlement calculations
-```
-
-#### **🎨 Frontend Components**
-
-**4.1 Options Trading Interface**
-```typescript
-options/
-├── OptionsChain/       // Full options chain with greeks
-├── StrategyBuilder/    // Visual options strategy construction
-├── ImpliedVolatility/  // IV surface visualization
-├── PositionAnalyzer/   // Options position analytics
-├── ExpiryCalendar/     // Track upcoming option expirations
-└── GreeksMatrix/       // Portfolio greeks dashboard
-```
-
-**4.2 Exotic Derivatives Interface**
-```typescript
-exotics/
-├── BarrierOptions/     // Barrier option trading and monitoring
-├── PowerPerps/         // Power perpetual trading interface
-├── RangeProducts/      // Range-accrual product interface
-├── PayoffVisualizer/   // Interactive payoff diagrams
-└── StructuredProducts/ // Complex structured product builder
-```
+### Dependencies
+- Audit of token & DAO contracts (Quantstamp).  
+- Move Prover proofs on supply-cap & vote-count invariants.
 
 ---
 
-### **Phase 5: LP Vaults & Advanced Strategies (Months 16-20)**
-*"Automate sophisticated strategies for passive users"*
+## 🏪 Phase 2 — Spot DEX v1 (DeepBook Wrapper)
+### Objectives
+Ship first **end-user utility**: real trading & UNXV fee capture.
 
-#### **🔗 On-Chain Components**
+### On-Chain
+| Module | Functionality |
+|--------|---------------|
+| `dex::router` | Safe wrappers around DeepBook `place/cancel/fill` |
+| `fee_sink::dex` | Swap taker fee asset→UNXV; route splits |
+| `relayer::registry` | Store WS relayer reputations (opt-in) |
 
-**5.1 LP Vault Framework**
-```move
-vaults::core            // Base vault infrastructure
-vaults::strategy_base   // Interface for pluggable strategies
-vaults::risk_manager    // Vault-level risk management
-vaults::fee_collector   // Performance and management fees
-vaults::rebalancer      // Automated portfolio rebalancing
-```
+### Off-Chain
+- **Indexer + Relayer** binary:  
+  • Streams DeepBook events → WS  
+  • Caches order-book deltas in Redis.
+- `@unxv/sdk` TypeScript:  
+  `connect()`, `matchBest()`, `simulateFill()`.
 
-**5.2 Strategy Implementations**
-```move
-strategies::delta_neutral    // Market-neutral market making
-strategies::funding_arbitrage // Capture funding rate spreads
-strategies::basis_trading    // Spot-futures basis capture
-strategies::covered_calls    // Automated covered call writing
-strategies::range_maker      // Provide liquidity in price ranges
-```
+### UI
+- **Trading GUI** (Next.js):  
+  Orderbook, depth, recent trades, wallet panel, fee rebate banner.
 
-#### **🏗️ Off-Chain Infrastructure**
-
-**5.1 Strategy Execution Engine**
-```rust
-strategy-engine/
-├── signal-aggregator/   // Combine multiple data sources for decisions
-├── execution-optimizer/ // Optimize trade execution across venues
-├── rebalancing-engine/  // Automated portfolio rebalancing
-├── performance-tracker/ // Track strategy performance and metrics
-└── risk-monitor/        // Real-time strategy risk monitoring
-```
-
-**5.2 Vault Management Service**
-```typescript
-vault-management/
-├── deposit-processor/   // Handle vault deposits and withdrawals
-├── share-calculator/    // Calculate vault share prices
-├── fee-distributor/     // Distribute performance fees
-├── report-generator/    // Generate vault performance reports
-└── governance-interface/ // Vault governance and parameter updates
-```
-
-#### **🎨 Frontend Components**
-
-**5.1 Vault Management Interface**
-```typescript
-vaults/
-├── VaultExplorer/      // Browse available vault strategies
-├── PerformanceDashboard/ // Historical vault performance
-├── DepositWithdraw/    // Vault deposit/withdrawal interface
-├── StrategyExplainer/  // Educational content about strategies
-├── RiskMetrics/        // Vault risk metrics and warnings
-└── FeeCalculator/      // Calculate fees and net returns
-```
+### Tests
+- Load test: 1000 orders/s, <500 ms WS latency.
+- Integration: taker fee auto-swaps within same tx.
 
 ---
 
-### **Phase 6: Advanced Governance & Optimization (Months 20-24)**
-*"Complete the ecosystem with advanced governance and optimizations"*
+## 🧪 Phase 3 — Synthetic Assets MVP
+### Objectives
+Enable broad asset coverage → network effect for later derivatives.
 
-#### **🔗 On-Chain Components**
+### On-Chain
+| Module | Key Resources | Description |
+|--------|---------------|-------------|
+| `synth::vault` | `Position`, `GlobalDebt` | CR calc, mint/burn |
+| `synth::factory` | — | List new synth via Pyth ID |
+| `fee_sink::mintburn` | — | 15 bps mint fee routing |
 
-**6.1 Advanced Governance**
-```move
-gov::ve_locker          // Vote-escrowed UNXV with time decay
-gov::gauge_controller   // Direct emissions via gauge voting
-gov::snapshot_voting    // Gas-efficient off-chain voting
-gov::delegation         // Delegate voting power to others
-gov::emergency_pause    // Emergency pause mechanisms
-```
+### Off-Chain
+- Oracle attestation relay (LayerZero) auto-posts Pyth price objects.  
+- Keeper: fallback DeepBook VWAP writer if Pyth stale.
 
-**6.2 Cross-Chain Infrastructure**
-```move
-bridge::wormhole        // Cross-chain UNXV transfers
-bridge::message_passing // Cross-chain protocol coordination
-bridge::liquidity_sync  // Synchronize liquidity across chains
-```
+### UI
+- Mint/Burn wizard, CR slider, liquidation price preview.  
+- Synth watch-list auto-generates DeepBook pairs.
 
-**6.3 Gas Optimization**
-```move
-gas::batch_processor    // Batch multiple operations
-gas::compression        // Compress transaction data
-gas::sponsored_tx       // Gasless transactions for users
-```
-
-#### **🏗️ Off-Chain Infrastructure**
-
-**6.1 Advanced Analytics**
-```typescript
-analytics/
-├── protocol-metrics/   // Comprehensive protocol analytics
-├── user-behavior/      // User engagement and retention analysis
-├── risk-modeling/      // Advanced risk modeling and stress testing
-├── yield-optimization/ // Optimize yields across all protocols
-└── competitive-analysis/ // Monitor competitor protocols
-```
-
-**6.2 Cross-Chain Services**
-```rust
-cross-chain/
-├── bridge-monitor/     // Monitor cross-chain transfers
-├── liquidity-manager/  // Manage liquidity across chains
-├── arbitrage-detector/ // Detect cross-chain arbitrage opportunities
-└── message-relayer/    // Relay messages between chains
-```
-
-#### **🎨 Frontend Components**
-
-**6.1 Advanced Governance Interface**
-```typescript
-governance/
-├── ProposalBuilder/    // Advanced proposal creation tools
-├── VotingInterface/    // Vote on proposals with delegation
-├── GaugeVoting/        // Weekly gauge weight voting
-├── TreasuryDashboard/  // Treasury fund management
-├── EmergencyControls/  // Emergency pause and recovery tools
-└── GovernanceAnalytics/ // Governance participation metrics
-```
-
-**6.2 Cross-Chain Interface**
-```typescript
-cross-chain/
-├── BridgeInterface/    // Cross-chain asset transfers
-├── LiquidityManager/   // Manage liquidity across chains
-├── ArbitrageTracker/   // Track cross-chain arbitrage
-└── NetworkStatus/      // Monitor all connected networks
-```
+### Dependencies
+- Testnet Pyth integration with alerting on price drift.  
+- Quantitative fuzzing on CR & liquidation math.
 
 ---
 
-## **🏗️ Infrastructure Requirements**
+## 💵 Phase 4 — Lending α (uCoin Money Market)
+### Objectives
+Unlock idle capital yield & flash-loan infra for later bots.
 
-### **Development Environment**
-```bash
-# Required tools and dependencies
-sui-cli                 # Sui blockchain CLI tools
-move-analyzer          # Move language server
-docker & docker-compose # Containerized services
-postgresql             # Primary database
-redis                  # Caching and message queues
-nginx                  # Load balancing and reverse proxy
-prometheus & grafana   # Monitoring and alertics
-```
+### On-Chain
+| Module | Resource | Notes |
+|--------|----------|-------|
+| `lend::pool` | `PoolConfig`, `MarketInfo` | All markets share one pool |
+| `lend::utoken` | `UToken<T>` | Interest-bearing receipt coin |
+| `lend::flashloan` | — | Single block atomic loan |
+| `fee_sink::reserve` | — | Reserve factor UNXV routing |
 
-### **Production Infrastructure**
-```yaml
-# Kubernetes deployment structure
-services:
-  sui-fullnode:         # Local Sui fullnode for reliability
-    replicas: 3
-    resources: 8 CPU, 32GB RAM, 1TB SSD
-  
-  indexer-service:      # Event processing and data aggregation
-    replicas: 5
-    resources: 4 CPU, 16GB RAM, 500GB SSD
-  
-  api-gateway:          # GraphQL and REST API
-    replicas: 3
-    resources: 2 CPU, 8GB RAM
-  
-  websocket-service:    # Real-time data streaming
-    replicas: 3
-    resources: 2 CPU, 8GB RAM
-  
-  liquidation-bots:     # Automated liquidation services
-    replicas: 2
-    resources: 4 CPU, 8GB RAM
-  
-  database:
-    postgresql:         # Primary data storage
-      replicas: 3 (primary + 2 replicas)
-      resources: 8 CPU, 64GB RAM, 2TB SSD
-    
-    redis:              # Caching and sessions
-      replicas: 3
-      resources: 2 CPU, 8GB RAM
-```
+### Off-Chain
+- Rate model CLI to simulate utilisation curves.  
+- Liquidation-pricing oracle (uses DeepBook mid).
 
-### **Security Requirements**
-```typescript
-security_measures = {
-  smart_contracts: [
-    "Formal verification with Move Prover",
-    "Multiple security audits (Trail of Bits, OpenZeppelin, etc.)",
-    "Bug bounty program with significant rewards",
-    "Gradual deployment with increasing TVL caps"
-  ],
-  
-  infrastructure: [
-    "Multi-signature wallets for all admin functions",
-    "Hardware security modules (HSMs) for key management",
-    "Regular penetration testing",
-    "Incident response procedures"
-  ],
-  
-  operational: [
-    "24/7 monitoring and alerting",
-    "Emergency pause mechanisms",
-    "Automated backup procedures",
-    "Disaster recovery planning"
-  ]
-}
-```
+### UI
+- Supply / Borrow panel, health factor meter, interest graphs.  
+- Flash-loan sandbox with code snippets.
+
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
 
 ---
 
-## **📊 Success Metrics & KPIs**
+## 🌐 Phase 5 — Relayer Mesh & Public Indexer
+### Objectives
+Hardening real-time data infra for perps & options latency needs.
 
-### **Phase 1 Targets**
-- ✅ UNXV token successfully deployed and distributed
-- ✅ Basic governance operational (proposals, voting, execution)
-- ✅ Synthetic assets minted (>$10M TVL in synths)
-- ✅ Fee collection and routing functional
+### On-Chain
+- *No new modules* (mesh off-chain).
 
-### **Phase 2 Targets**
-- ✅ Lending protocol operational (>$50M TVL)
-- ✅ Liquid staking (>30% of SUI staked through sSUI)
-- ✅ Cross-margin system functional
-- ✅ Zero liquidation failures
+### Off-Chain
+| Service | Description |
+|---------|-------------|
+| Mesh Node | Combines indexer + WS broadcaster + libp2p gossip |
+| Aggregator | Optional Cloudflare R2 cached snapshot for thin clients |
 
-### **Phase 3 Targets**
-- ✅ Spot trading volume >$1B cumulative
-- ✅ Perpetual futures >$500M daily volume
-- ✅ Futures markets for major assets operational
-- ✅ Market making bots profitable
+CLI: `relayer-node start --peer=<addr>`.
 
-### **Phase 4 Targets**
-- ✅ Options markets with healthy IV surfaces
-- ✅ Exotic derivatives generating unique yield
-- ✅ Gas futures market established
-- ✅ Sophisticated users onboarded
-
-### **Phase 5 Targets**  
-- ✅ LP vaults >$100M AUM
-- ✅ Automated strategies outperforming manual trading
-- ✅ Passive users earning yield across ecosystem
-- ✅ Strategy performance tracking operational
-
-### **Phase 6 Targets**
-- ✅ Advanced governance features utilized
-- ✅ Cross-chain expansion operational
-- ✅ Protocol optimized for efficiency
-- ✅ Self-sustaining ecosystem achieved
+### UI
+- Latency dashboard, relayer uptime leaderboard.
 
 ---
 
-## **🎯 Critical Success Factors**
+## ⚡ Phase 6 — Perpetual Futures β
+### Objectives
+Deliver high-leverage trading; backstop risk with insurance fund.
 
-### **Technical Excellence**
-- Move smart contracts must be formally verified and audited
-- Off-chain infrastructure must handle high throughput with low latency
-- Frontend must provide CEX-quality user experience
-- Integration testing across all components
+### On-Chain
+| Module | Functionality |
+|--------|---------------|
+| `perps::market` | Market params registry |
+| `perps::account` | Cross-margin struct |
+| `perps::clearing` | Open/close, margin flows |
+| `perps::funding` | Index accumulator, 10 % skim |
+| `perps::liquidation` | Close-factor & penalties |
+| `insurance::perps` | UNXV-denominated fund |
 
-### **Economic Design**
-- Fee mechanisms must create sustainable value accrual to UNXV
-- Risk parameters must maintain protocol solvency
-- Incentive alignment across all participants
-- Treasury management for long-term sustainability
+### Off-Chain
+- Funding-rate keeper (trigger `tick()` hourly).  
+- Liquidation bot starter kit (Rust) using flash-loan.
 
-### **Community & Adoption**
-- Strong developer ecosystem with comprehensive documentation
-- Active governance participation from token holders
-- Strategic partnerships with major DeFi protocols
-- Educational content for user onboarding
+### UI
+- Advanced trading terminal: ladder, position panel, funding APR chart.  
+- Liquidation watch list & risk bar.
 
-### **Regulatory Compliance**
-- Legal review of all financial products
-- Compliance framework for global operations
-- KYC/AML procedures where required
-- Regular legal updates as regulations evolve
+### Tests / Audits
+- Suiet fuzz on funding math.  
+- External audit (Trail of Bits) pre-mainnet.
 
 ---
 
-**🚀 This implementation plan provides a clear roadmap for building unxversal into the comprehensive DeFi operating system envisioned. Each phase builds upon previous work while delivering immediate value to users.** 
+## 📅 Phase 7 — Dated Futures
+*(light delta since shares margin engine with perps)*
+
+### On-Chain
+| Module | Note |
+|--------|------|
+| `futures::series` | Immutable params per expiry |
+| `futures::clearing` | Settle at expiry TWAP |
+| `fee_sink::futures` | 5 bps fee → UNXV split |
+
+### Off-Chain
+- Keeper to call `freeze_price()` 30 min pre-expiry & `settle_expiry()`.
+
+### UI
+- Futures calendar, basis chart, expiry settlement timeline.
+
+---
+
+## 🎭 Phase 8 — Options β
+### On-Chain
+| Module | Highlights |
+|--------|------------|
+| `options::series` | Strike, expiry, IVCap |
+| `options::orderbook` | EIP-712 RFQ settle |
+| `insurance::options` | Capitalised by premium fees |
+
+### Off-Chain
+- Black-Scholes IV calculator library (WASM).  
+- RFQ signer bot template.
+
+### UI
+- Volatility surface heat-map, strategy builder (spreads).  
+- Writer dashboard with collateral ramp preview.
+
+---
+
+## 🎪 Phase 9 — Exotics α
+*(Barrier options, range accruals, power perps)*
+
+### On-Chain
+Shared margin + new `exotics::*` engine; see `exotics.md`.
+
+### Off-Chain
+- Barrier monitor daemon storing min/max price ring-buffer.
+
+### UI
+- Pay-off graph playground, live barrier status badge.
+
+---
+
+## 🤖 Phase 10 — LP Vaults
+### On-Chain
+| Module | Notes |
+|--------|------|
+| `lp::vault` | Deposits, uLP shares |
+| `lp::strategy_base` | Trait + delegate scripts |
+| `fee_sink::lp` | 10 % perf fee routing |
+
+### Off-Chain
+- Keeper framework: `rebalance()` jobs per strategy.  
+- Strategy SDK to compile Move delegate modules.
+
+### UI
+- Vault gallery, risk score, performance charts, high-water mark.
+
+---
+
+## 🌊 Phase 11 — Liquid Staking (sSUI)
+### On-Chain
+| Module | Resource |
+|--------|----------|
+| `lstake::vault` | StakePool, StakeBatch |
+| `lstake::coin` | sSUI rebasing coin |
+| `fee_sink::lstake` | 5 % skim swap |
+
+### Off-Chain
+- Validator performance oracle & auto-rebalancer.
+
+### UI
+- sSUI APY chart, stake/unstake flow, validator set display.
+
+---
+
+## ⛽ Phase 12 — Gas Futures
+*(see `gasfut.md` for detail)*
+
+### On-Chain
+`gasfut::*` series, AMM, reserve pool, risk module.
+
+### Off-Chain
+- Δ-hedge daemon shorting SUI/USDC perps when reserve Δ rises.
+
+### UI
+- Quote widget: break-even vs historic gas volatility.
+
+---
+
+## 🏗️ Phase 13 — Infrastructure Tooling (Rolling)
+- **Liquidation Bots**: Open-source templates, Docker images.  
+- **Oracle Keepers**: SLA monitor & fail-over scripts.  
+- **Block Explorer Plugins**: UI modules for Sui explorers to decode unxversal events.
+
+---
+
+## 🌉 Phase 14 — Cross-Chain Expansion
+- Wormhole UNXV bridge contracts.  
+- Mirror spot markets on external chains via price stream.
+
+---
+
+## ✅ Test, Audit, and Launch Gates
+| Gate | Metric |
+|------|--------|
+| Unit test coverage | ≥85 % for each Move package |
+| Fuzz & Prover invariants | No critical counter-examples |
+| External security audit | Passed w/ all Highs fixed |
+| Load/latency test | ≤1 s P90 end-to-end tx time |
+| Bug bounty | Code4rena ≥$100k pool before mainnet |
+
+---
+
+## 📡 Deployment & Operations
+- **CI/CD**: Tag → build Move release → run testnet smoke → propose DAO upgrade.  
+- **Monitoring**: Grafana + Prometheus dashboards for relayers, keepers, Pyth freshness, fee_sink slippage.  
+- **Incident Response**: PagerDuty alerts wired to Guardian multisig holders.
+
+---
+
+## 🌟 Conclusion
+This phased roadmap balances **utility first** (spot DEX) with **risk-managed complexity** (perps → options → exotics).  
+Each step compounds liquidity, fee flow, and community engagement while ensuring audits and monitoring are in place before escalating systemic risk.
+
+*Iterate fast, ship safely, and let every new module amplify the UNXV flywheel.* 
