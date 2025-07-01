@@ -139,6 +139,16 @@ Enable broad asset coverage → network effect for later derivatives.
 - Testnet Pyth integration with alerting on price drift.  
 - Quantitative fuzzing on CR & liquidation math.
 
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+##### Flow & UX Summary — Phase 3
+- **USDC Collateralisation**: Users deposit USDC using `synth::vault::deposit`, creating a `Position`.
+- **Mint Synths**: `mint<Synth>` computes max issuable amount from real-time collateral ratio via `GlobalDebt`, mints synth coins, and increases `debt_shares`.
+- **Burn & Withdraw**: `burn<Synth>` repays debt; once health ≥ threshold, `withdraw` returns surplus collateral.
+- **Asset Listing**: Governors add new synths through `synth::factory::add_synth` (price ID + symbol). The front-end auto-lists pairs.
+- **Planned helpers**: `synth::vault::liquidate`, `synth::vault::health_factor`, `synth::factory::pause_synth`.
+
 ---
 
 ## 💵 Phase 4 — Lending α (uCoin Money Market)
@@ -164,6 +174,14 @@ Unlock idle capital yield & flash-loan infra for later bots.
 ### Tests
 - Invariant: totalCash + totalBorrows + reserves = assets().
 
+##### Flow & UX Summary — Phase 4
+- **Supply & uToken Mint**: Users supply assets via `lend::pool::supply<T>` which mints `UToken<T>` via `lend::utoken::mint`; APY shows through exchange rate.
+- **Borrowing**: `lend::pool::borrow<U>` allows leveraged positions, tracked in `AccountLiquidity`.
+- **Interest & Reserves**: `accrue_interest` runs per block (keeper/on-demand) and routes reserve factor to `fee_sink::reserve::on_accrue`.
+- **Flash Loans**: `lend::flashloan::execute` grants atomic loans that must be repaid within tx.
+- **Liquidations**: `lend::liquidation::liquidate` repays debt and seizes collateral when accounts fall below threshold.
+- **Planned helpers**: `lend::pool::{enter_market,exit_market,pause_asset}`, `lend::liquidation::set_close_factor`.
+
 ---
 
 ## 🌐 Phase 5 — Relayer Mesh & Public Indexer
@@ -183,6 +201,16 @@ CLI: `relayer-node start --peer=<addr>`.
 
 ### UI
 - Latency dashboard, relayer uptime leaderboard.
+
+### Tests / Audits
+- Suiet fuzz on funding math.  
+- External audit (Trail of Bits) pre-mainnet.
+
+##### Flow & UX Summary — Phase 5
+- **Mesh Node**: `relayer-node start` indexes on-chain events and broadcasts order-book diffs over WS + gossip.
+- **Aggregator Snapshot**: A cloud worker periodically uploads compressed snapshots for quick client bootstrap.
+- **Client Sync**: UI loads snapshot → verifies → subscribes to live stream for ms-latency data.
+- **Uptime Rewards**: Future DAO proposals may allocate UNXV to relayers with high heartbeat scores.
 
 ---
 
@@ -212,6 +240,14 @@ Deliver high-leverage trading; backstop risk with insurance fund.
 - Suiet fuzz on funding math.  
 - External audit (Trail of Bits) pre-mainnet.
 
+##### Flow & UX Summary — Phase 6
+- **Market Creation**: DAO executes `perps::market::add_market` (symbol, leverage limits). UI auto-lists new tab.
+- **Open / Close**: Traders call `perps::clearing::{open,close}`; positions live in `perps::account::CrossMargin`.
+- **Funding**: Keeper triggers `perps::funding::tick` hourly; 10 % skim goes to `fee_sink::perps::on_funding_skim`.
+- **Margin Ops**: `add_margin` adds collateral; `withdraw` frees excess if safe.
+- **Liquidation**: `perps::liquidation::liquidate` closes positions below maintenance margin; deficits tap `insurance::perps::Fund`.
+- **Planned helpers**: `perps::market::update_params`, `perps::account::get_liq_price`, `insurance::perps::slash`.
+
 ---
 
 ## 📅 Phase 7 — Dated Futures
@@ -229,6 +265,15 @@ Deliver high-leverage trading; backstop risk with insurance fund.
 
 ### UI
 - Futures calendar, basis chart, expiry settlement timeline.
+
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+##### Flow & UX Summary — Phase 7
+- **Series Creation**: Governors call helper `create_series` to instantiate `FutureSeries` with asset & expiry.
+- **Trade Settlement**: Batched RFQ fills go through `futures::clearing::fill_orders`.
+- **Freeze & Settle**: Keeper freezes TWAP 30 min pre-expiry; after expiry anyone calls `settle_expiry` to realise PnL.
+- **Planned helpers**: `futures::series::pause`, `futures::clearing::close_position`.
 
 ---
 
@@ -248,6 +293,16 @@ Deliver high-leverage trading; backstop risk with insurance fund.
 - Volatility surface heat-map, strategy builder (spreads).  
 - Writer dashboard with collateral ramp preview.
 
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+##### Flow & UX Summary — Phase 8
+- **Write Options**: Sellers lock collateral via `options::clearing::write`, minting option tokens.
+- **RFQ Buy**: Buyers present signed RFQ to `options::clearing::buy`; premium transfers atomically.
+- **Exercise**: If ITM after expiry, holders call `exercise` for payout.
+- **Liquidations**: `liquidate_writer` seizes collateral when writers under-collateralise.
+- **Planned helpers**: `options::series::create`, `options::series::update_iv_cap`, `options::clearing::close`.
+
 ---
 
 ## 🎪 Phase 9 — Exotics α
@@ -261,6 +316,16 @@ Shared margin + new `exotics::*` engine; see `exotics.md`.
 
 ### UI
 - Pay-off graph playground, live barrier status badge.
+
+### Tests / Audits
+- Suiet fuzz on funding math.  
+- External audit (Trail of Bits) pre-mainnet.
+
+##### Flow & UX Summary — Phase 9
+- **Barrier Watch**: Off-chain daemon feeds prices into `exotics::engine::knock_check` to update status.
+- **Settle**: Anyone can call `engine::settle` after barrier event or expiry to distribute payouts.
+- **UI**: Dashboard shows live barrier badge and payoff graph.
+- **Planned helpers**: `exotics::series::create`, barrier-type enum, `exotics::engine::pause`.
 
 ---
 
@@ -279,6 +344,15 @@ Shared margin + new `exotics::*` engine; see `exotics.md`.
 ### UI
 - Vault gallery, risk score, performance charts, high-water mark.
 
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+##### Flow & UX Summary — Phase 10
+- **Deposit**: `lp::vault::deposit` mints shares proportional to NAV.
+- **Rebalance**: Keeper calls `lp::strategy_base::rebalance`; PnL reported via `lp::vault::report` and fees skimmed.
+- **Withdraw**: `lp::vault::withdraw` burns shares and returns assets.
+- **Planned helpers**: `lp::vault::set_strategy`, `lp::vault::pause`, performance-fee setter.
+
 ---
 
 ## 🌊 Phase 11 — Liquid Staking (sSUI)
@@ -295,6 +369,15 @@ Shared margin + new `exotics::*` engine; see `exotics.md`.
 ### UI
 - sSUI APY chart, stake/unstake flow, validator set display.
 
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+##### Flow & UX Summary — Phase 11
+- **Stake**: `lstake::vault::deposit` swaps SUI → sSUI (rebasing).
+- **Unstake**: `request_unstake` moves sSUI into a batch claimable after `claim_epoch`.
+- **Claim**: After epoch, `claim` redeems SUI minus skim via `fee_sink::lstake`.
+- **Planned helpers**: `lstake::vault::rebalance_validators`, `lstake::vault::compound_rewards`.
+
 ---
 
 ## ⛽ Phase 12 — Gas Futures
@@ -308,6 +391,16 @@ Shared margin + new `exotics::*` engine; see `exotics.md`.
 
 ### UI
 - Quote widget: break-even vs historic gas volatility.
+
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+##### Flow & UX Summary — Phase 12
+- **Series Create**: DAO calls `gasfut::series::create` to list new future.
+- **Swap Exposure**: Traders use `gasfut::amm::swap` to long/short gas costs.
+- **Reserve Hedge**: Bot hedges AMM Δ via SUI/USDC perps.
+- **Settle**: `gasfut::series::settle_expiry` (upcoming) handles PnL on expiry.
+- **Planned helpers**: `gasfut::amm::add_liquidity`.
 
 ---
 
@@ -347,3 +440,462 @@ This phased roadmap balances **utility first** (spot DEX) with **risk-managed co
 Each step compounds liquidity, fee flow, and community engagement while ensuring audits and monitoring are in place before escalating systemic risk.
 
 *Iterate fast, ship safely, and let every new module amplify the UNXV flywheel.* 
+
+---
+
+## 📘 Appendix A — Comprehensive Module Pseudocode
+*High-level Move skeletons for every module across all phases. Function names, visibility, and key resource fields serve as guidance during development. Error handling, events, and full generics intentionally omitted for brevity.*
+
+> **Legend**  
+> `has key` → object stored on chain  
+> `has store` → generic type param  
+> `ctx: &mut TxContext` → Sui transaction context  
+> `sig: &signer` → required signer for mutating auth
+
+### Phase 1 — DAO Genesis
+
+#### `unxv::coin`
+```move
+module unxv::coin {
+    struct Supply has key { total: u64 }
+    public fun initialise(sig: &signer, total: u64, ctx: &mut TxContext);
+    public fun mint(sig: &signer, amount: u64, ctx: &mut TxContext): Coin<UNXV>;
+    public fun burn(sig: &signer, coin: Coin<UNXV>, ctx: &mut TxContext);
+    public fun transfer(from: &signer, to: address, amount: u64, ctx: &mut TxContext);
+}
+```
+
+#### `unxv_ve::locker`
+```move
+module unxv_ve::locker {
+    struct Locker has key {
+        id: UID,
+        owner: address,
+        amount: u64,
+        unlock_ts: u64,
+        slope: u128,
+        bias: u128,
+        delegate: address,
+    }
+    public fun lock(sig: &signer, amount: u64, duration_sec: u64, ctx: &mut TxContext): Locker;
+    public fun extend(sig: &signer, locker: &mut Locker, add_dur: u64);
+    public fun merge(sig: &signer, a:&mut Locker, b: Locker);
+    public fun delegate(sig: &signer, locker:&mut Locker, to: address);
+}
+```
+
+#### `gov::bravo`
+```move
+module gov::bravo {
+    struct Proposal has key { id: u64, proposer: address, eta: u64, executed: bool, canceled: bool }
+    public fun propose(sig:&signer, targets: vector<address>, values: vector<u64>, calldatas: vector<vector<u8>>, description: vector<u8>, ctx:&mut TxContext): Proposal;
+    public fun cast_vote(sig:&signer, proposal_id:u64, support:bool);
+    public fun queue(sig:&signer, proposal_id:u64, ctx:&mut TxContext);
+    public fun execute(sig:&signer, proposal_id:u64, ctx:&mut TxContext);
+    public fun cancel(sig:&signer, proposal_id:u64);
+}
+```
+
+#### `gov::timelock`
+```move
+module gov::timelock {
+    struct Timelock has key { delay: u64 }
+    public fun queue(sig:&signer, tx: TimelockTx, eta:u64);
+    public fun execute(sig:&signer, tx_id:u64, ctx:&mut TxContext);
+}
+```
+
+#### `treasury::safe`
+```move
+module treasury::safe {
+    struct Safe has key { id: UID, owner: address }
+    public fun execute(sig:&signer, safe:&mut Safe, calls: vector<vector<u8>>, ctx:&mut TxContext);
+}
+```
+
+##### Flow & UX Summary — Phase 1
+- **Mint & Distribution**: Core multisig calls `unxv::coin::initialise` to mint the full UNXV supply directly into `treasury::safe`. Subsequent token grants use `unxv::coin::transfer`.
+- **Lock → Vote Flow**: A holder calls `unxv_ve::locker::lock` which mints an on-chain veNFT (`Locker`). Voting weight decays linearly toward `unlock_ts` via the `bias` field. The dApp UI presents an amount × duration slider and signs the single `lock` call.
+- **Delegation**: Owners delegate voting power via `locker::delegate`; this is surfaced in the governance dashboard as "Voting to ...".
+- **Proposal Lifecycle**: Any address meeting the threshold calls `gov::bravo::propose`. After voting, `queue` transfers calldata to `gov::timelock`; `execute` becomes callable once the 48 h `delay` has passed.
+- **Treasury Actions**: Passed proposals typically invoke `treasury::safe::execute` to fund contributors or trigger upgrades.
+- **Planned helper functions**: `unxv_ve::locker::unlock`, `gov::bravo::state`, `treasury::safe::deposit`.
+
+---
+
+### Phase 2 — Spot DEX Wrapper
+
+#### `dex::router`
+```move
+module dex::router {
+    public fun place_limit(sig:&signer, market: address, side:u8, price:u64, size:u64, relayer: option<address>, ctx:&mut TxContext);
+    public fun cancel(sig:&signer, market: address, order_id: u128, ctx:&mut TxContext);
+    public fun batch(sig:&signer, calls: vector<vector<u8>>, ctx:&mut TxContext);
+}
+```
+
+#### `fee_sink::dex`
+```move
+module fee_sink::dex {
+    public fun on_fill(asset: Coin<T>, fee_bps: u64, relayer: option<address>, ctx:&mut TxContext);
+}
+```
+
+#### `relayer::registry`
+```move
+module relayer::registry {
+    struct Relayer has key { id: UID, addr: address, score: u64 }
+    public fun register(sig:&signer, ctx:&mut TxContext): Relayer;
+    public fun slash(sig:&signer, relayer:&mut Relayer, delta:u64);
+    public fun boost(sig:&signer, relayer:&mut Relayer, delta:u64);
+}
+```
+
+##### Flow & UX Summary — Phase 2
+- **Place / Cancel Orders**: Traders sign `dex::router::place_limit` or `batch`; the router forwards to DeepBook and emits `PlaceEvent` for relayer meshes.
+- **Realtime Orderbook**: Relayers stream DeepBook events over WebSocket; the Next.js GUI merges deltas for sub-100 ms depth rendering.
+- **Fee Capture**: `fee_sink::dex::on_fill` swaps taker fees to UNXV and credits the treasury in the same tx.
+- **Relayer Reputation**: Market-makers call `relayer::registry::register`. Scores are DAO-governed via `boost` / `slash`.
+- **Planned helper functions**: `dex::router::place_market`, `dex::router::cancel_all`, `relayer::registry::deregister`.
+
+---
+
+### Phase 3 — Synthetic Assets
+
+#### `synth::vault`
+```move
+module synth::vault {
+    struct Position has key { id: UID, owner: address, collateral_usdc: u64, debt_shares: u128 }
+    struct GlobalDebt has key { id: UID, total_debt_usd: u128, total_shares:u128 }
+    public fun deposit(sig:&signer, usdc: Coin<USDC>, ctx:&mut TxContext);
+    public fun mint<Synth: store>(sig:&signer, amount: u64, ctx:&mut TxContext);
+    public fun burn<Synth: store>(sig:&signer, amount: u64, ctx:&mut TxContext);
+    public fun withdraw(sig:&signer, usdc_amount: u64, ctx:&mut TxContext);
+}
+```
+
+#### `synth::factory`
+```move
+module synth::factory {
+    struct SynthInfo has key { id: UID, price_id: vector<u8>, symbol: vector<u8>, decimals:u8 }
+    public fun add_synth(sig:&signer, price_id: vector<u8>, symbol: vector<u8>, dec:u8, ctx:&mut TxContext): SynthInfo;
+}
+```
+
+#### `fee_sink::mintburn`
+```move
+module fee_sink::mintburn {
+    public fun route(asset: Coin<T>, fee_bps:u64, ctx:&mut TxContext);
+}
+```
+
+##### Flow & UX Summary — Phase 3
+- **USDC Collateralisation**: Users deposit USDC using `synth::vault::deposit`, creating a `Position`.
+- **Mint Synths**: `mint<Synth>` computes max issuable amount from real-time collateral ratio via `GlobalDebt`, mints synth coins, and increases `debt_shares`.
+- **Burn & Withdraw**: `burn<Synth>` repays debt; once health ≥ threshold, `withdraw` returns surplus collateral.
+- **Asset Listing**: Governors add new synths through `synth::factory::add_synth` (price ID + symbol). The front-end auto-lists pairs.
+- **Planned helpers**: `synth::vault::liquidate`, `synth::vault::health_factor`, `synth::factory::pause_synth`.
+
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+---
+
+### Phase 4 — Lending Market
+
+#### `lend::pool`
+```move
+module lend::pool {
+    struct MarketInfo has key { asset: TypeTag, reserve_factor: u64, collateral_factor: u64 }
+    struct AccountLiquidity has key { id: UID, owner: address, borrows: vector<(TypeTag,u128)>, collaterals: vector<(TypeTag,u128)> }
+    public fun supply<T: store>(sig:&signer, amount:u64, ctx:&mut TxContext);
+    public fun withdraw<T: store>(sig:&signer, u_tokens:u64, ctx:&mut TxContext);
+    public fun borrow<T: store>(sig:&signer, amount:u64, ctx:&mut TxContext);
+    public fun repay<T: store>(sig:&signer, amount:u64, ctx:&mut TxContext);
+    public fun accrue_interest<T: store>(market:&mut MarketInfo, ctx:&mut TxContext);
+}
+```
+
+#### `lend::utoken`
+```move
+module lend::utoken {
+    struct UToken<T> has key, store { supply:u128 }
+    public fun mint<T: store>(sig:&signer, underlying: Coin<T>, ctx:&mut TxContext): Coin<UToken<T>>;
+    public fun redeem<T: store>(sig:&signer, u_token: Coin<UToken<T>>, ctx:&mut TxContext): Coin<T>;
+}
+```
+
+#### `lend::flashloan`
+```move
+module lend::flashloan {
+    public fun execute<T: store>(sig:&signer, pool: address, amount:u64, payload: vector<u8>, ctx:&mut TxContext);
+}
+```
+
+#### `lend::liquidation`
+```move
+module lend::liquidation {
+    public fun liquidate<T: store>(sig:&signer, borrower: address, repay_asset: TypeTag, max_repay:u64, ctx:&mut TxContext);
+}
+```
+
+#### `fee_sink::reserve`
+```move
+module fee_sink::reserve {
+    public fun on_accrue<T: store>(asset: Coin<T>, reserve_factor:u64, ctx:&mut TxContext);
+}
+```
+
+##### Flow & UX Summary — Phase 4
+- **Supply & uToken Mint**: Users supply assets via `lend::pool::supply<T>` which mints `UToken<T>` via `lend::utoken::mint`; APY shows through exchange rate.
+- **Borrowing**: `lend::pool::borrow<U>` allows leveraged positions, tracked in `AccountLiquidity`.
+- **Interest & Reserves**: `accrue_interest` runs per block (keeper/on-demand) and routes reserve factor to `fee_sink::reserve::on_accrue`.
+- **Flash Loans**: `lend::flashloan::execute` grants atomic loans that must be repaid within tx.
+- **Liquidations**: `lend::liquidation::liquidate` repays debt and seizes collateral when accounts fall below threshold.
+- **Planned helpers**: `lend::pool::{enter_market,exit_market,pause_asset}`, `lend::liquidation::set_close_factor`.
+
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+---
+
+### Phase 5 — Relayer Mesh (off-chain only)
+*No new on-chain modules; omitted.*
+
+### Tests / Audits
+- Suiet fuzz on funding math.  
+- External audit (Trail of Bits) pre-mainnet.
+
+##### Flow & UX Summary — Phase 5
+- **Mesh Node**: `relayer-node start` indexes on-chain events and broadcasts order-book diffs over WS + gossip.
+- **Aggregator Snapshot**: A cloud worker periodically uploads compressed snapshots for quick client bootstrap.
+- **Client Sync**: UI loads snapshot → verifies → subscribes to live stream for ms-latency data.
+- **Uptime Rewards**: Future DAO proposals may allocate UNXV to relayers with high heartbeat scores.
+
+### Tests / Audits
+- Suiet fuzz on funding math.  
+- External audit (Trail of Bits) pre-mainnet.
+
+---
+
+### Phase 6 — Perpetual Futures
+
+#### `perps::market`
+```move
+module perps::market {
+    struct MarketInfo has key { id: UID, symbol: vector<u8>, max_leverage:u64, maint_margin:u64, funding_cap:u64 }
+    public fun add_market(sig:&signer, info: MarketInfo, ctx:&mut TxContext);
+}
+```
+
+#### `perps::account`
+```move
+module perps::account {
+    struct CrossMargin has key { id: UID, owner: address, collateral_usd:u64, positions: vector<(address, Position)> }
+    struct Position { size:i128, entry_price:u128, last_funding:u128 }
+}
+```
+
+#### `perps::clearing`
+```move
+module perps::clearing {
+    public fun open(sig:&signer, market: address, notional:u64, side: bool, ctx:&mut TxContext);
+    public fun close(sig:&signer, market: address, notional:u64, ctx:&mut TxContext);
+    public fun add_margin(sig:&signer, usdc: Coin<USDC>, ctx:&mut TxContext);
+    public fun withdraw(sig:&signer, amount:u64, ctx:&mut TxContext);
+}
+```
+
+#### `perps::funding`
+```move
+module perps::funding {
+    public fun tick(market:&mut perps::market::MarketInfo, ctx:&mut TxContext);
+}
+```
+
+#### `perps::liquidation`
+```move
+module perps::liquidation {
+    public fun liquidate(sig:&signer, trader: address, market: address, max_close:u64, ctx:&mut TxContext);
+}
+```
+
+#### `insurance::perps`
+```move
+module insurance::perps {
+    struct Fund has key { id: UID, balance_unxv:u64 }
+    public fun deposit(sig:&signer, amt: Coin<UNXV>, ctx:&mut TxContext);
+    public fun pay(trader: address, usd_amount:u64, ctx:&mut TxContext);
+}
+```
+
+#### `fee_sink::perps`
+```move
+module fee_sink::perps {
+    public fun on_taker_fee(asset: Coin<T>, ctx:&mut TxContext);
+    public fun on_funding_skim(asset: Coin<T>, ctx:&mut TxContext);
+}
+```
+
+##### Flow & UX Summary — Phase 6
+- **Market Creation**: DAO executes `perps::market::add_market` (symbol, leverage limits). UI auto-lists new tab.
+- **Open / Close**: Traders call `perps::clearing::{open,close}`; positions live in `perps::account::CrossMargin`.
+- **Funding**: Keeper triggers `perps::funding::tick` hourly; 10 % skim goes to `fee_sink::perps::on_funding_skim`.
+- **Margin Ops**: `add_margin` adds collateral; `withdraw` frees excess if safe.
+- **Liquidation**: `perps::liquidation::liquidate` closes positions below maintenance margin; deficits tap `insurance::perps::Fund`.
+- **Planned helpers**: `perps::market::update_params`, `perps::account::get_liq_price`, `insurance::perps::slash`.
+
+### Tests / Audits
+- Suiet fuzz on funding math.  
+- External audit (Trail of Bits) pre-mainnet.
+
+---
+
+### Phase 7 — Dated Futures
+```move
+module futures::series {
+    struct FutureSeries has key { id: UID, asset: vector<u8>, expiry:u64, max_leverage:u64 }
+}
+
+module futures::clearing {
+    public fun fill_orders(sig:&signer, series: address, orders: vector<u128>, sizes: vector<u64>, ctx:&mut TxContext);
+    public fun settle_expiry(sig:&signer, series: address, ctx:&mut TxContext);
+}
+```
+
+##### Flow & UX Summary — Phase 7
+- **Series Creation**: Governors call helper `create_series` to instantiate `FutureSeries` with asset & expiry.
+- **Trade Settlement**: Batched RFQ fills go through `futures::clearing::fill_orders`.
+- **Freeze & Settle**: Keeper freezes TWAP 30 min pre-expiry; after expiry anyone calls `settle_expiry` to realise PnL.
+- **Planned helpers**: `futures::series::pause`, `futures::clearing::close_position`.
+
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+---
+
+### Phase 8 — Options
+```move
+module options::series {
+    struct OptionSeries has key { id: UID, underlier: vector<u8>, strike:u128, expiry:u64, iv_cap:u64, call: bool }
+}
+
+module options::clearing {
+    public fun write(sig:&signer, series: address, contracts:u64, collateral: Coin<USDC>, ctx:&mut TxContext);
+    public fun buy(sig:&signer, series: address, contracts:u64, premium: Coin<USDC>, ctx:&mut TxContext);
+    public fun exercise(sig:&signer, series: address, ctx:&mut TxContext);
+    public fun liquidate_writer(sig:&signer, writer: address, series: address, ctx:&mut TxContext);
+}
+```
+
+##### Flow & UX Summary — Phase 8
+- **Write Options**: Sellers lock collateral via `options::clearing::write`, minting option tokens.
+- **RFQ Buy**: Buyers present signed RFQ to `options::clearing::buy`; premium transfers atomically.
+- **Exercise**: If ITM after expiry, holders call `exercise` for payout.
+- **Liquidations**: `liquidate_writer` seizes collateral when writers under-collateralise.
+- **Planned helpers**: `options::series::create`, `options::series::update_iv_cap`, `options::clearing::close`.
+
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+---
+
+### Phase 9 — Exotics (selected)
+```move
+module exotics::series { /* similar to options */ }
+module exotics::engine {
+    public fun knock_check(price:u128, series: address);
+    public fun settle(sig:&signer, series: address, ctx:&mut TxContext);
+}
+```
+
+##### Flow & UX Summary — Phase 9
+- **Barrier Watch**: Off-chain daemon feeds prices into `exotics::engine::knock_check` to update status.
+- **Settle**: Anyone can call `engine::settle` after barrier event or expiry to distribute payouts.
+- **UI**: Dashboard shows live barrier badge and payoff graph.
+- **Planned helpers**: `exotics::series::create`, barrier-type enum, `exotics::engine::pause`.
+
+### Tests
+- Suiet fuzz on funding math.  
+- External audit (Trail of Bits) pre-mainnet.
+
+---
+
+### Phase 10 — LP Vaults
+```move
+module lp::vault {
+    struct VaultConfig has key { id: UID, asset: TypeTag, strategy: address, tvl_cap:u128 }
+    struct DepositorPosition has key { id: UID, shares:u128 }
+    public fun deposit<T: store>(sig:&signer, asset: Coin<T>, ctx:&mut TxContext);
+    public fun withdraw<T: store>(sig:&signer, shares:u128, ctx:&mut TxContext);
+    public fun report(sig:&signer, vault:&mut VaultConfig, pnl:u128, ctx:&mut TxContext);
+}
+
+module lp::strategy_base {
+    public fun rebalance(vault: &mut lp::vault::VaultConfig, ctx:&mut TxContext);
+}
+```
+
+##### Flow & UX Summary — Phase 10
+- **Deposit**: `lp::vault::deposit` mints shares proportional to NAV.
+- **Rebalance**: Keeper calls `lp::strategy_base::rebalance`; PnL reported via `lp::vault::report` and fees skimmed.
+- **Withdraw**: `lp::vault::withdraw` burns shares and returns assets.
+- **Planned helpers**: `lp::vault::set_strategy`, `lp::vault::pause`, performance-fee setter.
+
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+---
+
+### Phase 11 — Liquid Staking
+```move
+module lstake::vault {
+    struct StakePool has key { id: UID, total_sui:u128, total_shares:u128 }
+    struct StakeBatch has key { id: UID, amount:u64, claim_epoch:u64 }
+    public fun deposit(sig:&signer, sui: Coin<SUI>, ctx:&mut TxContext): Coin<sSUI>;
+    public fun request_unstake(sig:&signer, s_sui: Coin<sSUI>, ctx:&mut TxContext);
+    public fun claim(sig:&signer, batch_id: u64, ctx:&mut TxContext);
+}
+```
+
+##### Flow & UX Summary — Phase 11
+- **Stake**: `lstake::vault::deposit` swaps SUI → sSUI (rebasing).
+- **Unstake**: `request_unstake` moves sSUI into a batch claimable after `claim_epoch`.
+- **Claim**: After epoch, `claim` redeems SUI minus skim via `fee_sink::lstake`.
+- **Planned helpers**: `lstake::vault::rebalance_validators`, `lstake::vault::compound_rewards`.
+
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+---
+
+### Phase 12 — Gas Futures
+```move
+module gasfut::series { /* similar concept to futures::series */ }
+module gasfut::amm { public fun swap(sig:&signer, in_coin: Coin<T>, out_min:u64, ctx:&mut TxContext); }
+```
+
+##### Flow & UX Summary — Phase 12
+- **Series Create**: DAO calls `gasfut::series::create` to list new future.
+- **Swap Exposure**: Traders use `gasfut::amm::swap` to long/short gas costs.
+- **Reserve Hedge**: Bot hedges AMM Δ via SUI/USDC perps.
+- **Settle**: `gasfut::series::settle_expiry` (upcoming) handles PnL on expiry.
+- **Planned helpers**: `gasfut::amm::add_liquidity`.
+
+### Tests
+- Invariant: totalCash + totalBorrows + reserves = assets().
+
+---
+
+### Phase 13 — Infrastructure Tooling
+*Purely off-chain helpers—pseudocode omitted.*
+
+### Phase 14 — Cross-Chain Bridge
+*Relies on Wormhole contracts; separate spec.*
+
+---
+
+### 🛠️ Next Steps
+1. Convert these skeletons into full Move packages with access modifiers, events, and exhaustive tests.  
+2. Flesh-out error codes, authority models, and integration points.  
+3. Iterate module-by-module following the phase order in this document. 
