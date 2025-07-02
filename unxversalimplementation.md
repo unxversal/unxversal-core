@@ -258,6 +258,7 @@ Deliver high-leverage trading; backstop risk with insurance fund.
 |--------|------|
 | `futures::series` | Immutable params per expiry |
 | `futures::clearing` | Settle at expiry TWAP |
+| `futures::factory` | Permissionless series listing w/ bond & veto |
 | `fee_sink::futures` | 5 bps fee → UNXV split |
 
 ### Off-Chain
@@ -270,10 +271,20 @@ Deliver high-leverage trading; backstop risk with insurance fund.
 - Invariant: totalCash + totalBorrows + reserves = assets().
 
 ##### Flow & UX Summary — Phase 7
-- **Series Creation**: Governors call helper `create_series` to instantiate `FutureSeries` with asset & expiry.
-- **Trade Settlement**: Batched RFQ fills go through `futures::clearing::fill_orders`.
-- **Freeze & Settle**: Keeper freezes TWAP 30 min pre-expiry; after expiry anyone calls `settle_expiry` to realise PnL.
-- **Planned helpers**: `futures::series::pause`, `futures::clearing::close_position`.
+Two avenues to list a new dated-future series:
+
+1. **DAO Path (governance proposal)**  
+   • The Timelock/governor calls `futures::factory::create_series_dao`, which bypasses the bond/veto mechanics and activates instantly.  Ideal for quarterly "official" expiries.  
+
+2. **Permissionless Path**  
+   • Any account may call `futures::factory::create_series_user` (same as previous `create_series`) posting an UNXV bond.  A 12-hour guardian/DAO veto window can cancel unsafe listings; bond is slashed on veto/spam.
+
+Shared flow after activation:  
+• `SeriesActivated` event fires → relayers/UI auto-list.  
+• Traders use RFQ fills into `futures::clearing::fill_orders`.  
+• Keeper runs `freeze_price()` 30 min pre-expiry, then `settle_expiry()` handles PnL.  
+
+Planned helpers: `futures::series::pause`, `futures::clearing::close_position`, `futures::factory::update_bond_size`.
 
 ---
 
@@ -385,6 +396,7 @@ Shared margin + new `exotics::*` engine; see `exotics.md`.
 
 ### On-Chain
 `gasfut::*` series, AMM, reserve pool, risk module.
++`gasfut::factory` permissionless series listing (bond + guardian veto).
 
 ### Off-Chain
 - Δ-hedge daemon shorting SUI/USDC perps when reserve Δ rises.
@@ -396,11 +408,13 @@ Shared margin + new `exotics::*` engine; see `exotics.md`.
 - Invariant: totalCash + totalBorrows + reserves = assets().
 
 ##### Flow & UX Summary — Phase 12
-- **Series Create**: DAO calls `gasfut::series::create` to list new future.
-- **Swap Exposure**: Traders use `gasfut::amm::swap` to long/short gas costs.
-- **Reserve Hedge**: Bot hedges AMM Δ via SUI/USDC perps.
-- **Settle**: `gasfut::series::settle_expiry` (upcoming) handles PnL on expiry.
-- **Planned helpers**: `gasfut::amm::add_liquidity`.
+- **Permissionless Listing**: Anyone can call `gasfut::factory::create_series_user` with `{expiry, contract_size}` and post an UNXV bond. Guardians have 12 h to `veto` unsafe listings; bond is slashed on veto or spam.
+- **DAO Listing**: Timelock/governor may instead call `gasfut::factory::create_series_dao` for immediate activation with no bond.
+- **Series Activation**: After activation (or after veto window), a `GasSeriesActivated` event is emitted; relayers auto-list the contract in the gas-futures quote widget.
+- **Trading Exposure**: Users trade exposure through `gasfut::amm::swap`, quoting against a virtual reserve; price tracks implied gas volatility.
+- **Reserve Hedging**: Off-chain daemon monitors AMM Δ and hedges via SUI/USDC perps, keeping the pool delta-neutral.
+- **Settlement**: Keeper (or anyone) calls `gasfut::series::settle_expiry` at maturity to transfer PnL; user-path bond is refunded if volume > MIN_VOL.
+- **Planned helpers**: `gasfut::amm::add_liquidity`, `gasfut::factory::update_bond_size`.
 
 ---
 
@@ -763,11 +777,50 @@ module futures::clearing {
 }
 ```
 
+#### `futures::factory`
+```move
+module futures::factory {
+    struct ListingBond has key { id: UID, amount: u64 }
+
+    /// Governor/Timelock-only instant listing (no bond, no veto window).
+    public fun create_series_dao(
+        sig:&signer,
+        underlier: vector<u8>,
+        expiry: u64,
+        max_leverage:u64,
+        ctx:&mut TxContext
+    ): address;
+
+    /// Permissionless listing.  Caller posts `bond`; subject to guardian veto.
+    public fun create_series_user(
+        sig:&signer,
+        underlier: vector<u8>,
+        expiry: u64,
+        max_leverage:u64,
+        bond: Coin<UNXV>,
+        ctx:&mut TxContext
+    ): address;
+
+    /// Guardian / DAO veto within window.
+    public fun veto(sig:&signer, series: address, ctx:&mut TxContext);
+}
+```
+
 ##### Flow & UX Summary — Phase 7
-- **Series Creation**: Governors call helper `create_series` to instantiate `FutureSeries` with asset & expiry.
-- **Trade Settlement**: Batched RFQ fills go through `futures::clearing::fill_orders`.
-- **Freeze & Settle**: Keeper freezes TWAP 30 min pre-expiry; after expiry anyone calls `settle_expiry` to realise PnL.
-- **Planned helpers**: `futures::series::pause`, `futures::clearing::close_position`.
+Two avenues to list a new dated-future series:
+
+1. **DAO Path (governance proposal)**  
+   • The Timelock/governor calls `futures::factory::create_series_dao`, which bypasses the bond/veto mechanics and activates instantly.  Ideal for quarterly "official" expiries.  
+
+2. **Permissionless Path**  
+   • Any account may call `futures::factory::create_series_user` (same as previous `create_series`) posting an UNXV bond.  A 12-hour guardian/DAO veto window can cancel unsafe listings; bond is slashed on veto/spam.
+
+Shared flow after activation:  
+• `SeriesActivated` event fires → relayers/UI auto-list.  
+• Traders use RFQ fills into `futures::clearing::fill_orders`.  
+• Keeper runs `freeze_price()` 30 min pre-expiry, then `settle_expiry()` handles PnL.  
+
+Planned helpers: `futures::series::pause`, `futures::clearing::close_position`, `futures::factory::update_bond_size`.
 
 ### Tests
 - Invariant: totalCash + totalBorrows + reserves = assets().
@@ -875,12 +928,40 @@ module gasfut::series { /* similar concept to futures::series */ }
 module gasfut::amm { public fun swap(sig:&signer, in_coin: Coin<T>, out_min:u64, ctx:&mut TxContext); }
 ```
 
+#### `gasfut::factory`
+```move
+module gasfut::factory {
+    struct GasSeriesBond has key { id: UID, amount:u64 }
+
+    /// Governor/Timelock direct listing.
+    public fun create_series_dao(
+        sig:&signer,
+        expiry:u64,
+        contract_size:u64,
+        ctx:&mut TxContext
+    ): address;
+
+    /// Permissionless listing with bond + veto window.
+    public fun create_series_user(
+        sig:&signer,
+        expiry:u64,
+        contract_size:u64,
+        bond: Coin<UNXV>,
+        ctx:&mut TxContext
+    ): address;
+
+    public fun veto(sig:&signer, series: address, ctx:&mut TxContext);
+}
+```
+
 ##### Flow & UX Summary — Phase 12
-- **Series Create**: DAO calls `gasfut::series::create` to list new future.
-- **Swap Exposure**: Traders use `gasfut::amm::swap` to long/short gas costs.
-- **Reserve Hedge**: Bot hedges AMM Δ via SUI/USDC perps.
-- **Settle**: `gasfut::series::settle_expiry` (upcoming) handles PnL on expiry.
-- **Planned helpers**: `gasfut::amm::add_liquidity`.
+- **Permissionless Listing**: Anyone can call `gasfut::factory::create_series_user` with `{expiry, contract_size}` and post an UNXV bond. Guardians have 12 h to `veto` unsafe listings; bond is slashed on veto or spam.
+- **DAO Listing**: Timelock/governor may instead call `gasfut::factory::create_series_dao` for immediate activation with no bond.
+- **Series Activation**: After activation (or after veto window), a `GasSeriesActivated` event is emitted; relayers auto-list the contract in the gas-futures quote widget.
+- **Trading Exposure**: Users trade exposure through `gasfut::amm::swap`, quoting against a virtual reserve; price tracks implied gas volatility.
+- **Reserve Hedging**: Off-chain daemon monitors AMM Δ and hedges via SUI/USDC perps, keeping the pool delta-neutral.
+- **Settlement**: Keeper (or anyone) calls `gasfut::series::settle_expiry` at maturity to transfer PnL; user-path bond is refunded if volume > MIN_VOL.
+- **Planned helpers**: `gasfut::amm::add_liquidity`, `gasfut::factory::update_bond_size`.
 
 ### Tests
 - Invariant: totalCash + totalBorrows + reserves = assets().
