@@ -35,72 +35,72 @@ UnXversal Synthetics enables permissionless creation and trading of synthetic as
 #### 1. SynthRegistry (Shared Object)
 ```move
 struct SynthRegistry has key {
-    id: UID,
-    synthetics: Table<String, SyntheticAsset>,
-    oracle_feeds: Table<String, vector<u8>>, // Pyth price feed IDs
-    global_params: GlobalParams,
-    admin_cap: Option<AdminCap>,
+    id: UID,                                      // Unique identifier for the registry object
+    synthetics: Table<String, SyntheticAsset>,    // Maps asset symbols to their metadata (e.g., "sBTC" -> SyntheticAsset)
+    oracle_feeds: Table<String, vector<u8>>,      // Maps asset symbols to Pyth price feed IDs for price lookups
+    global_params: GlobalParams,                  // System-wide risk parameters that apply to all synthetic assets
+    admin_cap: Option<AdminCap>,                  // Optional admin capability for initial setup, destroyed after deployment
 }
 
 struct GlobalParams has store {
-    min_collateral_ratio: u64,     // 150% = 1500 basis points
-    liquidation_threshold: u64,    // 120% = 1200 basis points
-    liquidation_penalty: u64,      // 5% = 500 basis points
-    max_synthetics: u64,           // Max synthetic types
-    stability_fee: u64,            // Annual percentage
+    min_collateral_ratio: u64,     // Minimum collateral-to-debt ratio (150% = 1500 basis points) - safety buffer
+    liquidation_threshold: u64,    // Ratio below which liquidation is triggered (120% = 1200 basis points)
+    liquidation_penalty: u64,      // Penalty fee taken from liquidated collateral (5% = 500 basis points)
+    max_synthetics: u64,           // Maximum number of synthetic asset types to prevent unbounded growth
+    stability_fee: u64,            // Annual interest rate charged on outstanding debt for protocol sustainability
 }
 
 /// AdminCap grants privileged access for initial setup and emergency functions
 /// Will be destroyed after deployment to make protocol immutable
 struct AdminCap has key, store {
-    id: UID,
+    id: UID,    // Unique identifier for the admin capability object
 }
 ```
 
 #### 2. SyntheticAsset (Stored in Registry)
 ```move
 struct SyntheticAsset has store {
-    name: String,
-    symbol: String,
-    decimals: u8,
-    pyth_feed_id: vector<u8>,
-    min_collateral_ratio: u64,
-    total_supply: u64,
-    deepbook_pool_id: Option<ID>,
-    is_active: bool,
-    created_at: u64,
+    name: String,                     // Full name of the synthetic asset (e.g., "Synthetic Bitcoin")
+    symbol: String,                   // Trading symbol (e.g., "sBTC") used for identification and trading
+    decimals: u8,                     // Number of decimal places for token precision (typically 8 for BTC, 18 for ETH)
+    pyth_feed_id: vector<u8>,         // Pyth Network price feed identifier for real-time price data
+    min_collateral_ratio: u64,        // Asset-specific minimum collateral ratio (may differ from global for riskier assets)
+    total_supply: u64,                // Total amount of this synthetic asset minted across all users
+    deepbook_pool_id: Option<ID>,     // DeepBook pool ID for trading this synthetic against USDC
+    is_active: bool,                  // Whether minting/burning is currently enabled (emergency pause capability)
+    created_at: u64,                  // Timestamp of asset creation for analytics and ordering
 }
 ```
 
 #### 3. CollateralVault (Owned Object)
 ```move
 struct CollateralVault has key {
-    id: UID,
-    owner: address,
-    collateral_balance: Balance<USDC>,    // USDC-only collateral
-    synthetic_debt: Table<String, u64>,  // synth_symbol -> amount owed
-    last_update: u64,
-    liquidation_price: Table<String, u64>, // cached liquidation prices per synthetic
+    id: UID,                                  // Unique identifier for this user's vault
+    owner: address,                           // Address of the vault owner (only they can modify it)
+    collateral_balance: Balance<USDC>,        // Amount of USDC collateral deposited in this vault
+    synthetic_debt: Table<String, u64>,       // Maps synthetic symbols to amounts owed (e.g., "sBTC" -> 50000000)
+    last_update: u64,                         // Timestamp of last vault modification for fee calculations
+    liquidation_price: Table<String, u64>,    // Cached liquidation prices per synthetic to optimize gas usage
 }
 ```
 
 #### 4. SyntheticCoin (Transferable Asset)
 ```move
 struct SyntheticCoin<phantom T> has key, store {
-    id: UID,
-    balance: Balance<T>,
-    synthetic_type: String,
+    id: UID,                 // Unique identifier for this coin object
+    balance: Balance<T>,     // The actual token balance of the synthetic asset
+    synthetic_type: String,  // String identifier linking back to SyntheticAsset in registry
 }
 ```
 
 #### 5. LiquidationBot (Service Object)
 ```move
 struct LiquidationBot has key {
-    id: UID,
-    operator: address,
-    min_profit_threshold: u64,
-    max_liquidation_amount: u64,
-    whitelisted_assets: VecSet<String>,
+    id: UID,                                // Unique identifier for this liquidation bot
+    operator: address,                      // Address authorized to operate this bot
+    min_profit_threshold: u64,              // Minimum profit required before executing liquidation (gas optimization)
+    max_liquidation_amount: u64,            // Maximum debt amount this bot will liquidate per transaction
+    whitelisted_assets: VecSet<String>,     // Synthetic asset types this bot is configured to liquidate
 }
 ```
 
@@ -110,72 +110,72 @@ struct LiquidationBot has key {
 ```move
 // When new synthetic asset is created
 struct SyntheticAssetCreated has copy, drop {
-    asset_name: String,
-    asset_symbol: String,
-    pyth_feed_id: vector<u8>,
-    creator: address,
-    deepbook_pool_id: ID,
-    timestamp: u64,
+    asset_name: String,         // Full name of the created asset for display purposes
+    asset_symbol: String,       // Trading symbol for identification in UIs and trading
+    pyth_feed_id: vector<u8>,   // Price feed ID for price tracking and validation
+    creator: address,           // Address that created this asset (initially admin, later community)
+    deepbook_pool_id: ID,       // DeepBook pool ID for immediate trading capability
+    timestamp: u64,             // Creation time for chronological ordering and analytics
 }
 
 // When synthetic is minted
 struct SyntheticMinted has copy, drop {
-    vault_id: ID,
-    synthetic_type: String,
-    amount_minted: u64,
-    usdc_collateral_deposited: u64,
-    minter: address,
-    new_collateral_ratio: u64,
-    timestamp: u64,
+    vault_id: ID,                       // Vault that minted the synthetic for position tracking
+    synthetic_type: String,             // Type of synthetic minted (e.g., "sBTC")
+    amount_minted: u64,                 // Amount of synthetic tokens created
+    usdc_collateral_deposited: u64,     // Amount of USDC collateral backing this mint
+    minter: address,                    // User who performed the minting operation
+    new_collateral_ratio: u64,          // Updated collateral ratio after minting for risk monitoring
+    timestamp: u64,                     // Mint time for analytics and fee calculations
 }
 
 // When synthetic is burned
 struct SyntheticBurned has copy, drop {
-    vault_id: ID,
-    synthetic_type: String,
-    amount_burned: u64,
-    usdc_collateral_withdrawn: u64,
-    burner: address,
-    new_collateral_ratio: u64,
-    timestamp: u64,
+    vault_id: ID,                       // Vault that burned the synthetic for position tracking
+    synthetic_type: String,             // Type of synthetic burned (e.g., "sBTC")
+    amount_burned: u64,                 // Amount of synthetic tokens destroyed
+    usdc_collateral_withdrawn: u64,     // Amount of USDC collateral released back to user
+    burner: address,                    // User who performed the burning operation
+    new_collateral_ratio: u64,          // Updated collateral ratio after burning
+    timestamp: u64,                     // Burn time for analytics and tracking
 }
 ```
 
 #### 2. Liquidation Events
 ```move
 struct LiquidationExecuted has copy, drop {
-    vault_id: ID,
-    liquidator: address,
-    liquidated_amount: u64,
-    usdc_collateral_seized: u64,
-    liquidation_penalty: u64,
-    synthetic_type: String,
-    timestamp: u64,
+    vault_id: ID,                   // Vault that was liquidated for risk tracking
+    liquidator: address,            // Address that performed the liquidation and earned rewards
+    liquidated_amount: u64,         // Amount of synthetic debt repaid during liquidation
+    usdc_collateral_seized: u64,    // Amount of USDC collateral taken by liquidator
+    liquidation_penalty: u64,       // Penalty amount deducted from vault owner's collateral
+    synthetic_type: String,         // Type of synthetic that was liquidated
+    timestamp: u64,                 // Liquidation time for risk analysis and monitoring
 }
 
 struct LiquidationBotRegistered has copy, drop {
-    bot_id: ID,
-    operator: address,
-    min_profit_threshold: u64,
-    timestamp: u64,
+    bot_id: ID,                     // Unique identifier for the registered bot
+    operator: address,              // Address authorized to operate this bot
+    min_profit_threshold: u64,      // Minimum profit threshold for bot operation efficiency
+    timestamp: u64,                 // Registration time for tracking bot ecosystem growth
 }
 ```
 
 #### 3. Fee Events
 ```move
 struct FeeCollected has copy, drop {
-    fee_type: String, // "mint", "burn", "stability"
-    amount: u64,
-    asset_type: String,
-    user: address,
-    unxv_discount_applied: bool,
-    timestamp: u64,
+    fee_type: String,               // Type of fee collected ("mint", "burn", "stability") for revenue breakdown
+    amount: u64,                    // Amount of fee collected in the respective asset
+    asset_type: String,             // Asset used to pay the fee (USDC, UNXV, or synthetic)
+    user: address,                  // User who paid the fee for user analytics
+    unxv_discount_applied: bool,    // Whether UNXV discount was used for tokenomics tracking
+    timestamp: u64,                 // Fee collection time for revenue analytics
 }
 
 struct UnxvBurned has copy, drop {
-    amount_burned: u64,
-    fee_source: String,
-    timestamp: u64,
+    amount_burned: u64,     // Amount of UNXV tokens permanently removed from supply
+    fee_source: String,     // Source of fees that generated this burn ("minting", "trading", etc.)
+    timestamp: u64,         // Burn time for tokenomics analytics and supply tracking
 }
 ```
 
@@ -184,81 +184,81 @@ struct UnxvBurned has copy, drop {
 ### 1. Synthetic Asset Creation
 ```move
 public fun create_synthetic_asset(
-    registry: &mut SynthRegistry,
-    asset_name: String,
-    asset_symbol: String,
-    pyth_feed_id: vector<u8>,
-    min_collateral_ratio: u64,
-    deepbook_registry: &mut Registry,
-    ctx: &mut TxContext,
-): ID // Returns DeepBook pool ID
+    registry: &mut SynthRegistry,       // Central registry to store the new asset metadata
+    asset_name: String,                 // Human-readable name (e.g., "Synthetic Bitcoin")
+    asset_symbol: String,               // Trading symbol (e.g., "sBTC") for identification
+    pyth_feed_id: vector<u8>,           // Pyth price feed ID for real-time price data
+    min_collateral_ratio: u64,          // Minimum collateral ratio specific to this asset's risk profile
+    deepbook_registry: &mut Registry,   // DeepBook registry for creating trading pools
+    ctx: &mut TxContext,                // Transaction context for object creation and events
+): ID // Returns DeepBook pool ID for immediate trading setup
 ```
 
 ### 2. Collateral Management
 ```move
 public fun deposit_collateral(
-    vault: &mut CollateralVault,
-    usdc_collateral: Coin<USDC>,
-    ctx: &mut TxContext,
+    vault: &mut CollateralVault,    // User's vault to receive the collateral
+    usdc_collateral: Coin<USDC>,    // USDC coins being deposited as collateral
+    ctx: &mut TxContext,            // Transaction context for event emission
 )
 
 public fun withdraw_collateral(
-    vault: &mut CollateralVault,
-    amount: u64,
-    registry: &SynthRegistry,
-    price_info: &PriceInfoObject,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): Coin<USDC>
+    vault: &mut CollateralVault,        // User's vault to withdraw collateral from
+    amount: u64,                        // Amount of USDC to withdraw (in smallest units)
+    registry: &SynthRegistry,           // Registry for accessing global parameters and asset data
+    price_info: &PriceInfoObject,       // Pyth price data for collateral ratio calculations
+    clock: &Clock,                      // Sui clock for timestamp validation and fee calculations
+    ctx: &mut TxContext,                // Transaction context for event emission
+): Coin<USDC>  // Returns the withdrawn USDC collateral
 ```
 
 ### 3. Synthetic Minting/Burning
 ```move
 public fun mint_synthetic<T>(
-    vault: &mut CollateralVault,
-    synthetic_type: String,
-    amount: u64,
-    registry: &SynthRegistry,
-    price_info: &PriceInfoObject,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): SyntheticCoin<T>
+    vault: &mut CollateralVault,        // User's vault providing collateral for minting
+    synthetic_type: String,             // Type of synthetic to mint (e.g., "sBTC")
+    amount: u64,                        // Amount of synthetic tokens to mint
+    registry: &SynthRegistry,           // Registry for asset parameters and validation
+    price_info: &PriceInfoObject,       // Current price data for collateral ratio calculation
+    clock: &Clock,                      // Sui clock for fee calculations and validation
+    ctx: &mut TxContext,                // Transaction context for object creation and events
+): SyntheticCoin<T>  // Returns newly minted synthetic tokens
 
 public fun burn_synthetic<T>(
-    vault: &mut CollateralVault,
-    synthetic_coin: SyntheticCoin<T>,
-    registry: &SynthRegistry,
-    price_info: &PriceInfoObject,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): Option<Coin<USDC>> // Returns USDC collateral if any
+    vault: &mut CollateralVault,        // User's vault to reduce debt and potentially release collateral
+    synthetic_coin: SyntheticCoin<T>,   // Synthetic tokens being burned to reduce debt
+    registry: &SynthRegistry,           // Registry for asset parameters and fee calculations
+    price_info: &PriceInfoObject,       // Current price data for collateral calculations
+    clock: &Clock,                      // Sui clock for fee calculations
+    ctx: &mut TxContext,                // Transaction context for events
+): Option<Coin<USDC>>  // Returns USDC collateral if any is released
 ```
 
 ### 4. Liquidation
 ```move
 public fun liquidate_vault<T>(
-    vault: &mut CollateralVault,
-    synthetic_type: String,
-    liquidation_amount: u64,
-    registry: &SynthRegistry,
-    price_info: &PriceInfoObject,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): (SyntheticCoin<T>, Coin<USDC>) // Returns debt repaid, USDC collateral seized
+    vault: &mut CollateralVault,        // Undercollateralized vault being liquidated
+    synthetic_type: String,             // Type of synthetic debt being repaid
+    liquidation_amount: u64,            // Amount of debt to repay (limited by vault debt and max liquidation)
+    registry: &SynthRegistry,           // Registry for liquidation parameters and penalties
+    price_info: &PriceInfoObject,       // Current price data for liquidation calculations
+    clock: &Clock,                      // Sui clock for timestamp validation
+    ctx: &mut TxContext,                // Transaction context for events
+): (SyntheticCoin<T>, Coin<USDC>)  // Returns (debt repaid as synthetic tokens, USDC collateral seized)
 ```
 
 ### 5. Flash Loan Integration
 ```move
 public fun flash_mint_arbitrage<BaseAsset, QuoteAsset>(
-    pool: &mut Pool<BaseAsset, QuoteAsset>,
-    vault: &mut CollateralVault,
-    synthetic_type: String,
-    arbitrage_amount: u64,
-    registry: &SynthRegistry,
-    price_info: &PriceInfoObject,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): FlashLoan // Hot potato for atomic arbitrage
+    pool: &mut Pool<BaseAsset, QuoteAsset>,  // DeepBook pool for executing arbitrage trades
+    vault: &mut CollateralVault,             // Vault to temporarily mint synthetics for arbitrage
+    synthetic_type: String,                  // Type of synthetic to flash mint
+    arbitrage_amount: u64,                   // Amount to flash mint for arbitrage opportunity
+    registry: &SynthRegistry,                // Registry for synthetic asset parameters
+    price_info: &PriceInfoObject,            // Price data for arbitrage calculations
+    clock: &Clock,                           // Sui clock for validation
+    ctx: &mut TxContext,                     // Transaction context
+): FlashLoan  // Returns hot potato that must be repaid in same transaction
 ```
 
 ## Fee Structure with UNXV Integration
@@ -272,27 +272,27 @@ public fun flash_mint_arbitrage<BaseAsset, QuoteAsset>(
 ### UNXV Discount Mechanism
 ```move
 struct FeeCalculation has drop {
-    base_fee: u64,
-    unxv_discount: u64,    // 20% discount
-    final_fee: u64,
-    payment_asset: String,  // "UNXV", "USDC", or "input_asset"
+    base_fee: u64,          // Original fee amount before any discounts
+    unxv_discount: u64,     // Discount amount when paying with UNXV (20% of base_fee)
+    final_fee: u64,         // Actual fee amount after applying discounts
+    payment_asset: String,  // Asset type used for payment ("UNXV", "USDC", or "input_asset")
 }
 
 public fun calculate_fee_with_discount(
-    base_fee: u64,
-    payment_asset: String,
-    unxv_balance: u64,
-): FeeCalculation
+    base_fee: u64,              // Original fee amount calculated from operation
+    payment_asset: String,      // Asset the user wants to pay fees with
+    unxv_balance: u64,          // User's available UNXV balance for discount eligibility
+): FeeCalculation  // Returns fee breakdown with discount calculations
 ```
 
 ### Auto-swap Integration
 ```move
 public fun process_fee_payment(
-    fee_amount: u64,
-    payment_asset: String,
-    user_balance_manager: &mut BalanceManager,
-    autoswap_contract: &mut AutoSwapContract,
-    ctx: &mut TxContext,
+    fee_amount: u64,                        // Amount of fee to be paid
+    payment_asset: String,                  // Asset type being used for payment
+    user_balance_manager: &mut BalanceManager,  // User's DeepBook balance manager for asset access
+    autoswap_contract: &mut AutoSwapContract,   // Contract for converting assets to UNXV
+    ctx: &mut TxContext,                    // Transaction context
 )
 ```
 
@@ -301,38 +301,38 @@ public fun process_fee_payment(
 ### 1. Collateral Ratio Monitoring
 ```move
 public fun check_vault_health(
-    vault: &CollateralVault,
-    synthetic_type: String,
-    registry: &SynthRegistry,
-    price_info: &PriceInfoObject,
-    clock: &Clock,
-): (u64, bool) // Returns (collateral_ratio, is_liquidatable)
+    vault: &CollateralVault,        // Vault to assess for liquidation risk
+    synthetic_type: String,         // Specific synthetic asset to check (for multi-asset vaults)
+    registry: &SynthRegistry,       // Registry for risk parameters and asset data
+    price_info: &PriceInfoObject,   // Current price data for accurate ratio calculation
+    clock: &Clock,                  // Sui clock for timestamp validation
+): (u64, bool)  // Returns (current collateral ratio in basis points, is liquidatable boolean)
 ```
 
 ### 2. Oracle Price Validation
 ```move
 public fun validate_price_feed(
-    price_info: &PriceInfoObject,
-    expected_feed_id: vector<u8>,
-    max_age: u64,
-    clock: &Clock,
-): I64
+    price_info: &PriceInfoObject,   // Pyth price data object to validate
+    expected_feed_id: vector<u8>,   // Expected Pyth feed ID to prevent feed substitution attacks
+    max_age: u64,                   // Maximum allowed age for price data (staleness check)
+    clock: &Clock,                  // Sui clock for timestamp comparison
+): I64  // Returns validated price with confidence interval
 ```
 
 ### 3. System Stability Checks
 ```move
 public fun check_system_stability(
-    registry: &SynthRegistry,
-    price_feeds: vector<PriceInfoObject>,
-    clock: &Clock,
-): SystemHealth
+    registry: &SynthRegistry,               // Registry containing all synthetic assets and parameters
+    price_feeds: vector<PriceInfoObject>,   // Current price data for all tracked assets
+    clock: &Clock,                          // Sui clock for calculations
+): SystemHealth  // Returns comprehensive system health metrics
 
 struct SystemHealth has drop {
-    total_collateral_value: u64,
-    total_synthetic_value: u64,
-    global_collateral_ratio: u64,
-    at_risk_vaults: u64,
-    system_solvent: bool,
+    total_collateral_value: u64,    // Total USD value of all collateral in the system
+    total_synthetic_value: u64,     // Total USD value of all outstanding synthetic debt
+    global_collateral_ratio: u64,   // System-wide collateral ratio (total_collateral / total_debt)
+    at_risk_vaults: u64,            // Number of vaults close to liquidation threshold
+    system_solvent: bool,           // Whether the system has sufficient collateral backing
 }
 ```
 
@@ -341,24 +341,24 @@ struct SystemHealth has drop {
 ### 1. Automatic Pool Creation
 ```move
 public fun create_deepbook_pool_for_synthetic(
-    synthetic_type: String,
-    registry: &mut SynthRegistry,
-    deepbook_registry: &mut Registry,
-    creation_fee: Coin<DEEP>,
-    ctx: &mut TxContext,
-): ID // Returns pool ID for synthetic/USDC pair
+    synthetic_type: String,             // Synthetic asset symbol to create pool for
+    registry: &mut SynthRegistry,       // Registry to store the pool ID reference
+    deepbook_registry: &mut Registry,   // DeepBook registry for pool creation
+    creation_fee: Coin<DEEP>,           // DEEP tokens required for pool creation fee
+    ctx: &mut TxContext,                // Transaction context
+): ID  // Returns newly created pool ID for synthetic/USDC trading pair
 ```
 
 ### 2. Liquidity Incentives
 ```move
 public fun provide_initial_liquidity<BaseAsset, QuoteAsset>(
-    pool: &mut Pool<BaseAsset, QuoteAsset>,
-    synthetic_amount: u64,
-    collateral_amount: u64,
-    price_range: PriceRange,
-    balance_manager: &mut BalanceManager,
-    trade_proof: &TradeProof,
-    ctx: &mut TxContext,
+    pool: &mut Pool<BaseAsset, QuoteAsset>,  // DeepBook pool to provide liquidity to
+    synthetic_amount: u64,                   // Amount of synthetic asset to provide as liquidity
+    collateral_amount: u64,                  // Amount of USDC collateral to provide as liquidity
+    price_range: PriceRange,                 // Price range for concentrated liquidity provision
+    balance_manager: &mut BalanceManager,    // User's balance manager for asset access
+    trade_proof: &TradeProof,                // Proof of authorization for DeepBook operations
+    ctx: &mut TxContext,                     // Transaction context
 )
 ```
 
@@ -392,11 +392,14 @@ public fun provide_initial_liquidity<BaseAsset, QuoteAsset>(
 ### 1. Price Feed Manager
 ```typescript
 class PriceFeedManager {
-    private pythClient: SuiPythClient;
-    private feedIds: Map<string, string>;
+    private pythClient: SuiPythClient;      // Client for connecting to Pyth Network price feeds
+    private feedIds: Map<string, string>;   // Maps synthetic symbols to their Pyth feed IDs
     
+    // Updates price feeds for specified synthetic assets
     async updatePriceFeeds(synthetics: string[]): Promise<void>;
+    // Validates that price data is fresh and within confidence bounds
     async validatePrices(synthetic: string): Promise<boolean>;
+    // Retrieves price with confidence interval for risk calculations
     async getPriceWithConfidence(synthetic: string): Promise<PriceData>;
 }
 ```
@@ -404,11 +407,14 @@ class PriceFeedManager {
 ### 2. Liquidation Bot
 ```typescript
 class LiquidationBot {
-    private suiClient: SuiClient;
-    private vaultMonitor: VaultMonitor;
+    private suiClient: SuiClient;           // Sui blockchain client for transaction execution
+    private vaultMonitor: VaultMonitor;     // Service for monitoring vault health status
     
+    // Scans all vaults to identify liquidation opportunities
     async scanForLiquidations(): Promise<LiquidationOpportunity[]>;
+    // Executes liquidation transaction for profitable opportunities
     async executeLiquidation(opportunity: LiquidationOpportunity): Promise<void>;
+    // Calculates expected profit from liquidating a specific vault
     async calculateProfitability(vault: VaultData): Promise<number>;
 }
 ```
@@ -416,11 +422,17 @@ class LiquidationBot {
 ### 3. Vault Manager
 ```typescript
 class VaultManager {
-    async createVault(): Promise<string>; // USDC-only collateral
+    // Creates a new USDC-collateralized vault for the user
+    async createVault(): Promise<string>;
+    // Deposits USDC collateral into specified vault
     async depositCollateral(vaultId: string, usdcAmount: number): Promise<void>;
+    // Withdraws USDC collateral while maintaining safe collateral ratio
     async withdrawCollateral(vaultId: string, usdcAmount: number): Promise<void>;
+    // Mints synthetic assets against vault collateral
     async mintSynthetic(vaultId: string, syntheticType: string, amount: number): Promise<void>;
+    // Burns synthetic assets to reduce debt and potentially release collateral
     async burnSynthetic(vaultId: string, syntheticType: string, amount: number): Promise<void>;
+    // Monitors vault health and liquidation risk
     async monitorHealth(vaultId: string): Promise<VaultHealth>;
 }
 ```
@@ -452,43 +464,41 @@ The `AdminCap` is a capability object that grants administrative privileges duri
 ### Initial Setup Functions (Requires AdminCap)
 ```move
 public fun initialize_synthetic_asset(
-    registry: &mut SynthRegistry,
-    _admin_cap: &AdminCap,
-    asset_name: String,
-    asset_symbol: String,
-    pyth_feed_id: vector<u8>,
-    min_collateral_ratio: u64,
-    ctx: &mut TxContext,
+    registry: &mut SynthRegistry,   // Central registry to initialize with new asset
+    _admin_cap: &AdminCap,          // Admin capability proving authorization for privileged operation
+    asset_name: String,             // Full descriptive name of the synthetic asset
+    asset_symbol: String,           // Trading symbol for the asset (e.g., "sBTC")
+    pyth_feed_id: vector<u8>,       // Pyth Network price feed identifier for price data
+    min_collateral_ratio: u64,      // Minimum collateral ratio for this specific asset
+    ctx: &mut TxContext,            // Transaction context for object creation
 )
 
 public fun update_global_params(
-    registry: &mut SynthRegistry,
-    _admin_cap: &AdminCap,
-    new_params: GlobalParams,
-    ctx: &mut TxContext,
+    registry: &mut SynthRegistry,   // Registry containing global parameters to update
+    _admin_cap: &AdminCap,          // Admin capability proving authorization
+    new_params: GlobalParams,       // New parameter values to apply system-wide
+    ctx: &mut TxContext,            // Transaction context for events
 )
 
 public fun emergency_pause(
-    registry: &mut SynthRegistry,
-    _admin_cap: &AdminCap,
-    ctx: &mut TxContext,
+    registry: &mut SynthRegistry,   // Registry to modify for system-wide pause
+    _admin_cap: &AdminCap,          // Admin capability proving emergency authorization
+    ctx: &mut TxContext,            // Transaction context for emergency events
 )
 ```
 
 ### Making Protocol Immutable
 ```move
 public fun destroy_admin_cap(admin_cap: AdminCap) {
-    let AdminCap { id } = admin_cap;
-    object::delete(id);
+    let AdminCap { id } = admin_cap;    // Destructure the capability object
+    object::delete(id);                 // Permanently delete the capability, making protocol immutable
 }
 
 // Or transfer to burn address
 public fun transfer_admin_to_burn(admin_cap: AdminCap, ctx: &mut TxContext) {
-    transfer::public_transfer(admin_cap, @0x0);
+    transfer::public_transfer(admin_cap, @0x0);  // Transfer to burn address (effectively destroying it)
 }
 ```
-
-Once the AdminCap is destroyed or transferred to a burn address, the protocol becomes truly immutable and decentralized.
 
 ## Security Considerations
 
