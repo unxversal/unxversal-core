@@ -8,56 +8,71 @@ The UnXversal Synthetics protocol creates a sophisticated ecosystem where multip
 
 #### **Core Object Hierarchy & Relationships**
 
+**ON-CHAIN OBJECTS:**
 ```
-SynthRegistry (Shared) ← Central authority & configuration
+SynthRegistry (Shared) ← Central configuration & synthetic asset definitions
     ↓ manages
-SyntheticAsset configs → DeepBook Pools ← trading venues
+SyntheticAsset configs → DeepBook Pools ← trading venues for synthetics
     ↓ references            ↓ provides liquidity
-SyntheticsVault<T> (Shared) ← user positions
-    ↓ tracks
-UserPosition (individual) → BalanceManager ← holds funds
-    ↓ validates              ↓ executes
-RiskManager (Service) → PriceOracle ← Pyth feeds
-    ↓ monitors              ↓ provides pricing
-LiquidationEngine ← processes liquidations
+CollateralVault (Shared) ← individual user USDC collateral positions
+    ↓ tracks collateral
+SyntheticCoin<T> → BalanceManager ← holds user funds across protocols
+    ↓ synthetic tokens     ↓ executes trades
+PriceOracle Integration ← consumes Pyth price feeds on-chain
+```
+
+**OFF-CHAIN SERVICES (CLI/Server):**
+```
+RiskMonitor Service → LiquidationBot ← automated liquidation execution
+    ↓ monitors health       ↓ triggers on-chain liquidations
+CollateralHealthService → AlertSystem ← user notifications
+    ↓ tracks ratios         ↓ warns users of risks
+DeepBookIndexer → TradingAnalytics ← market data processing
+    ↓ provides real-time data ↓ user trading insights
 ```
 
 #### **Complete User Journey Flows**
 
 **1. MINTING FLOW (Creating Synthetic Assets)**
 ```
-User → deposit USDC → SyntheticsVault checks collateral ratio → 
-calls RiskManager validation → PriceOracle gets current prices → 
-mint synthetic tokens → update UserPosition → 
-create/update DeepBook pool liquidity
+[ON-CHAIN] User → deposit USDC → CollateralVault receives deposit → 
+[ON-CHAIN] PriceOracle validates collateral ratio → 
+[ON-CHAIN] mint SyntheticCoin<T> tokens → update vault state → 
+[OFF-CHAIN] RiskMonitor begins tracking new position
 ```
 
 **2. TRADING FLOW (Synthetic Asset Exchange)**
 ```
-User → submit order to DeepBook → BalanceManager validates funds → 
-order matching engine processes → trade executes → 
-fees collected → UNXV fee discounts applied → 
-position updates → real-time price discovery
+[ON-CHAIN] User → submit order to DeepBook → BalanceManager validates funds → 
+[ON-CHAIN] order matching engine processes → trade executes → 
+[ON-CHAIN] fees collected → UNXV fee discounts applied → 
+[OFF-CHAIN] TradingAnalytics updates market data
 ```
 
 **3. LIQUIDATION FLOW (Risk Management)**
 ```
-RiskManager monitors positions → detects under-collateralized vault → 
-LiquidationEngine calculates liquidation amount → 
-flash loan from DeepBook → liquidate position → 
-repay debt + penalty → distribute remaining collateral → 
-update all affected positions
+[OFF-CHAIN] RiskMonitor detects under-collateralized vault → 
+[OFF-CHAIN] LiquidationBot calculates liquidation parameters → 
+[ON-CHAIN] Bot triggers liquidation function with flash loan → 
+[ON-CHAIN] liquidate position → repay debt + penalty → 
+[ON-CHAIN] distribute remaining collateral to vault owner
 ```
 
 #### **Key System Interactions**
 
-- **SynthRegistry**: Acts as the central configuration hub, managing all synthetic asset definitions, oracle mappings, and global risk parameters
-- **SyntheticsVault<T>**: Individual user vaults that hold USDC collateral and track minted synthetic positions, with built-in risk monitoring
-- **DeepBook Integration**: Provides order book trading infrastructure, flash loans for liquidations, and real-time price discovery
-- **PriceOracle**: Aggregates Pyth Network feeds to provide accurate, manipulation-resistant pricing for all synthetic assets
-- **RiskManager**: Continuously monitors collateral ratios, triggers liquidations, and enforces risk parameters across all positions
-- **LiquidationEngine**: Handles the complex liquidation process using flash loans and atomic transactions
-- **BalanceManager**: Sui's native fund management system that holds user assets across all DeepBook operations
+**ON-CHAIN COMPONENTS:**
+- **SynthRegistry**: Central configuration hub managing synthetic asset definitions, oracle mappings, and global risk parameters
+- **CollateralVault**: Individual user vaults holding USDC collateral and tracking minted synthetic positions
+- **SyntheticCoin<T>**: Fungible tokens representing synthetic assets (sBTC, sETH, etc.) with standard Coin interface
+- **PriceOracle Integration**: On-chain consumption of Pyth Network feeds for real-time price validation
+- **DeepBook Integration**: Direct integration for order book trading and flash loan access
+- **BalanceManager**: Sui's native fund management system holding user assets across all operations
+
+**OFF-CHAIN SERVICES:**
+- **RiskMonitor**: Continuously monitors collateral ratios and health factors across all user positions
+- **LiquidationBot**: Automated service that triggers on-chain liquidations when positions become under-collateralized
+- **CollateralHealthService**: Real-time health tracking with user alerting for margin calls
+- **TradingAnalytics**: Market data processing and user trading insights using DeepBook indexer
 
 #### **Critical Design Patterns**
 
@@ -176,16 +191,24 @@ struct SyntheticCoin<phantom T> has key, store {
 }
 ```
 
-#### 5. LiquidationBot (Service Object)
-```move
-struct LiquidationBot has key {
-    id: UID,                                // Unique identifier for this liquidation bot
-    operator: address,                      // Address authorized to operate this bot
-    min_profit_threshold: u64,              // Minimum profit required before executing liquidation (gas optimization)
-    max_liquidation_amount: u64,            // Maximum debt amount this bot will liquidate per transaction
-    whitelisted_assets: VecSet<String>,     // Synthetic asset types this bot is configured to liquidate
-}
-```
+### Off-Chain Services (CLI/Server Components)
+
+#### 1. RiskMonitor Service
+- **Continuous Health Monitoring**: Tracks collateral ratios across all vaults in real-time
+- **Liquidation Detection**: Identifies vaults that fall below liquidation threshold
+- **User Alerting**: Sends notifications to users approaching liquidation
+- **Analytics**: Provides health metrics and risk analytics
+
+#### 2. LiquidationBot Service
+- **Automated Liquidations**: Triggers on-chain liquidation functions when profitable
+- **Gas Optimization**: Batches liquidations and optimizes for gas efficiency
+- **Profit Calculation**: Determines optimal liquidation amounts and timing
+- **Flash Loan Integration**: Utilizes DeepBook flash loans for capital-efficient liquidations
+
+#### 3. Market Creation Service
+- **DeepBook Pool Creation**: Automatically creates pools for new synthetic assets
+- **Liquidity Management**: Manages initial liquidity for new synthetic markets
+- **Pool Monitoring**: Tracks pool health and trading activity
 
 ### Events
 

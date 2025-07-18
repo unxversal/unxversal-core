@@ -8,70 +8,80 @@ The UnXversal AutoSwap protocol serves as the critical circulatory system of the
 
 #### **Core Object Hierarchy & Relationships**
 
+**ON-CHAIN OBJECTS:**
 ```
-AutoSwapRegistry (Shared) ← Central conversion hub & routing logic
-    ↓ coordinates all swaps
-RouteOptimizer (Service) → PathCalculation ← cross-protocol routing
-    ↓ optimizes execution     ↓ analyzes liquidity
-ConversionEngine (Service) ← handles conversions
-    ↓ processes swaps
-DeepBook Pools (Multiple) ← liquidity sources
-    ↓ provides best rates     ↓ executes swaps
+AutoSwapRegistry (Shared) ← Central conversion configuration & supported assets
+    ↓ manages swaps
+SimpleSwap (Owned) → DeepBook Pools ← liquidity sources for conversions
+    ↓ immediate execution    ↓ provides best rates & executes swaps
 BalanceManager ← manages cross-protocol balances
     ↓ validates operations
-FeeCollector (Service) → UNXV Burn Mechanism ← deflationary pressure
-    ↓ aggregates fees         ↓ burns tokens
+UNXV Burn Mechanism ← deflationary token burning
+    ↓ burns tokens permanently
 Cross-Protocol Integration ← all UnXversal protocols
+```
+
+**OFF-CHAIN SERVICES (CLI/Server):**
+```
+RouteOptimizer → PathCalculation ← cross-protocol routing analysis
+    ↓ optimizes execution    ↓ analyzes liquidity depth & costs
+ConversionEngine → FeeProcessor ← handles automatic fee conversions
+    ↓ processes swaps        ↓ aggregates protocol fees
+BurnScheduler → Analytics ← manages UNXV burn timing & amounts
+    ↓ schedules burns        ↓ tracks burn metrics & economics
 ```
 
 #### **Complete User Journey Flows**
 
 **1. AUTOMATIC FEE PROCESSING FLOW (Cross-Protocol)**
 ```
-Protocol collects fees (any asset) → sends to AutoSwap → 
-RouteOptimizer finds best path to UNXV → 
-execute conversion via optimal route → 
-aggregate UNXV from all protocols → 
-automatic UNXV burn → deflationary pressure → 
-fee statistics updated
+[ON-CHAIN] Protocol collects fees (any asset) → sends to AutoSwap → 
+[OFF-CHAIN] ConversionEngine aggregates fees → RouteOptimizer finds best path to UNXV → 
+[ON-CHAIN] execute SimpleSwap conversions via optimal route → 
+[ON-CHAIN] aggregate UNXV from all protocols → automatic UNXV burn → 
+[OFF-CHAIN] fee statistics updated
 ```
 
 **2. USER-INITIATED CONVERSION FLOW (Asset Swapping)**
 ```
-User → requests asset conversion (A→B) → 
-RouteOptimizer calculates best route → 
-check multiple liquidity sources → validate slippage limits → 
-execute optimal route → collect minimal fees → 
-UNXV discount applied → settle final assets
+[OFF-CHAIN] User requests asset conversion (A→B) via CLI → RouteOptimizer calculates best route → 
+[OFF-CHAIN] validate slippage limits and route viability → 
+[ON-CHAIN] execute SimpleSwap with calculated parameters → 
+[ON-CHAIN] UNXV discount applied → settle final assets
 ```
 
 **3. CROSS-PROTOCOL LIQUIDITY FLOW (Ecosystem Integration)**
 ```
-Protocol needs asset conversion → calls AutoSwap service → 
-ConversionEngine analyzes requirements → 
-RouteOptimizer finds most efficient path → 
-execute atomic conversion → 
-seamless protocol integration → update liquidity metrics
+[OFF-CHAIN] Protocol needs asset conversion → ConversionEngine analyzes requirements → 
+[OFF-CHAIN] RouteOptimizer finds most efficient path → 
+[ON-CHAIN] execute atomic SimpleSwap conversion → 
+[ON-CHAIN] seamless protocol integration → update balances
 ```
 
 **4. UNXV BURN MECHANISM FLOW (Tokenomics)**
 ```
-Accumulated fees from all protocols → 
-periodic burn trigger → calculate burn amount → 
-execute UNXV market purchase if needed → 
-burn UNXV tokens permanently → 
-update total supply → deflationary event logged
+[OFF-CHAIN] BurnScheduler monitors accumulated fees → calculates optimal burn timing → 
+[OFF-CHAIN] prepare burn transaction parameters → 
+[ON-CHAIN] execute UNXV market purchase if needed → burn UNXV tokens permanently → 
+[ON-CHAIN] update total supply → deflationary event logged
 ```
 
 #### **Key System Interactions**
 
-- **AutoSwapRegistry**: Central coordination hub that manages all conversion routes, fee structures, slippage parameters, and cross-protocol integration settings
-- **RouteOptimizer**: Intelligent routing engine that analyzes liquidity across multiple sources to find the most cost-effective conversion paths
-- **ConversionEngine**: High-performance conversion processor that handles atomic swaps, batch processing, and cross-protocol asset management
-- **FeeCollector**: Automated fee aggregation system that collects fees from all protocols and triggers UNXV burn mechanisms
-- **DeepBook Integration**: Primary liquidity source leveraging DeepBook pools for efficient asset conversions
-- **Cross-Protocol Balances**: Sophisticated balance management ensuring seamless asset flow between all UnXversal protocols
-- **UNXV Burn Mechanism**: Automated deflationary system that permanently removes UNXV from circulation
+**ON-CHAIN COMPONENTS:**
+- **AutoSwapRegistry**: Central configuration hub managing supported assets, basic conversion routes, and fee structures
+- **SimpleSwap**: Individual swap orders for immediate execution between two assets via DeepBook pools
+- **UNXV Burn Mechanism**: On-chain deflationary system that permanently removes UNXV from circulation
+- **DeepBook Integration**: Direct integration with DeepBook pools for asset conversion execution
+- **Cross-Protocol Integration**: Native integration enabling all UnXversal protocols to trigger conversions
+
+**OFF-CHAIN SERVICES:**
+- **RouteOptimizer**: Intelligent routing engine analyzing liquidity across sources to find optimal conversion paths
+- **ConversionEngine**: Automated processor handling fee aggregation, conversion scheduling, and batch processing
+- **BurnScheduler**: Service managing optimal timing and amounts for UNXV burning to maximize deflationary impact
+- **FeeProcessor**: Automated system collecting fees from all protocols and preparing conversion transactions
+- **PathCalculation**: Real-time analysis of conversion routes considering fees, slippage, and liquidity depth
+- **Analytics**: Comprehensive tracking of conversion volumes, burn statistics, and protocol economics
 
 #### **Critical Design Patterns**
 
@@ -155,198 +165,73 @@ UnXversal Autoswap Contracts provide critical infrastructure for the entire UnXv
 struct AutoSwapRegistry has key {
     id: UID,
     
-    // Supported assets and routes
+    // Supported assets and basic configuration
     supported_assets: VecSet<String>,           // All swappable assets
-    asset_routes: Table<String, RouteConfig>,   // Asset -> optimal route config
-    
-    // DeepBook integration
     deepbook_pools: Table<String, ID>,          // Asset pair -> pool ID
-    pool_priorities: Table<String, vector<String>>, // Routing priority order
     
     // Fee structure
     swap_fee: u64,                              // Base swap fee (10 basis points)
     unxv_discount: u64,                         // 50% discount for UNXV holders
-    slippage_tolerance: u64,                    // Maximum acceptable slippage
     
-    // Protocol integration
-    protocol_fees: Table<String, ProtocolFeeConfig>, // Per-protocol fee handling
-    burn_schedule: BurnSchedule,                // UNXV burn timing and amounts
-    
-    // Performance tracking
-    total_volume: Table<String, u64>,           // Volume per asset
-    total_fees_collected: u64,                  // Total fees in USDC terms
+    // Basic tracking
     total_unxv_burned: u64,                     // Cumulative UNXV burned
     
     // Emergency controls
     emergency_pause: bool,
     admin_cap: Option<AdminCap>,
 }
-
-struct RouteConfig has store {
-    target_asset: String,                       // "UNXV" or "USDC"
-    route_path: vector<String>,                 // ["ASSET", "USDC", "UNXV"]
-    pool_ids: vector<ID>,                       // Corresponding DeepBook pool IDs
-    gas_estimate: u64,                          // Estimated gas cost
-    min_amount: u64,                            // Minimum swap amount
-    max_slippage: u64,                          // Route-specific slippage limit
-    is_active: bool,
-}
-
-struct ProtocolFeeConfig has store {
-    protocol_name: String,
-    fee_collector: address,                     // Protocol fee collector address
-    unxv_allocation: u64,                       // % of fees to convert to UNXV (70%)
-    usdc_allocation: u64,                       // % of fees to keep as USDC (20%)
-    protocol_treasury: u64,                     // % for protocol treasury (10%)
-    auto_burn_enabled: bool,                    // Auto-burn UNXV portion
-    burn_frequency: u64,                        // How often to burn (daily)
-}
-
-struct BurnSchedule has store {
-    daily_burn_target: u64,                     // Target UNXV to burn daily
-    burn_buffer: u64,                           // Accumulated UNXV for burning
-    last_burn_timestamp: u64,                   // Last burn execution
-    burn_frequency: u64,                        // 24 hours in milliseconds
-    min_burn_amount: u64,                       // Minimum amount to execute burn
 }
 ```
 
-#### 2. AutoSwapUNXV (Shared Object)
+#### 2. SimpleSwap (Owned Object)
 ```move
-struct AutoSwapUNXV has key {
+struct SimpleSwap has key {
     id: UID,
-    
-    // Conversion tracking
-    total_conversions: u64,                     // Number of swaps executed
-    daily_volume: Table<String, u64>,           // Daily volume per asset
-    conversion_rates: Table<String, u64>,       // Last conversion rates
-    
-    // Slippage protection
-    max_slippage: u64,                          // 200 basis points (2%)
-    slippage_buffer: u64,                       // Additional buffer for large swaps
-    
-    // Route optimization
-    preferred_intermediary: String,             // "USDC" for most routes
-    route_cache: Table<String, CachedRoute>,    // Pre-computed optimal routes
-    cache_expiry: u64,                          // Route cache validity period
-    
-    // Performance metrics
-    success_rate: u64,                          // Successful swap percentage
-    average_slippage: u64,                      // Average realized slippage
-    gas_efficiency: u64,                        // Gas per swap efficiency metric
-    
-    // Integration pools
-    deepbook_registry_id: ID,                   // Reference to DeepBook registry
-    balance_manager_id: ID,                     // Shared balance manager for swaps
-}
-
-struct CachedRoute has store {
-    input_asset: String,
-    output_asset: String,
-    route_path: vector<String>,
-    pool_ids: vector<ID>,
-    estimated_output: u64,                      // For 1 unit of input
-    confidence_score: u64,                      // Route reliability (0-100)
-    last_updated: u64,
-    expires_at: u64,
+    user: address,
+    input_asset: String,                        // Asset being swapped from
+    output_asset: String,                       // Asset being swapped to
+    input_amount: u64,                          // Amount of input asset
+    min_output_amount: u64,                     // Minimum acceptable output (slippage protection)
+    fee_payment_asset: String,                  // Asset used for fee payment
+    created_at: u64,                            // Swap creation timestamp
 }
 ```
 
-#### 3. AutoSwapUSDC (Shared Object)
+#### 3. UNXVBurnVault (Shared Object)
 ```move
-struct AutoSwapUSDC has key {
+struct UNXVBurnVault has key {
     id: UID,
-    
-    // Similar structure to AutoSwapUNXV but optimized for USDC conversion
-    total_conversions: u64,
-    daily_volume: Table<String, u64>,
-    conversion_rates: Table<String, u64>,
-    
-    // USDC-specific optimizations
-    usdc_reserve: Balance<USDC>,                // Emergency USDC reserve
-    reserve_threshold: u64,                     // Minimum reserve level
-    reserve_replenish_rate: u64,                // Auto-replenish from fees
-    
-    // Stablecoin routing
-    stablecoin_pairs: VecSet<String>,          // USDT, USDC, DAI, etc.
-    stablecoin_slippage: u64,                  // Lower slippage for stablecoins
-    
-    // Large order handling
-    large_order_threshold: u64,                 // $10,000 USD equivalent
-    large_order_routes: Table<String, vector<String>>, // Special routes for large orders
-    
-    // Integration
-    deepbook_registry_id: ID,
-    balance_manager_id: ID,
+    accumulated_unxv: Balance<UNXV>,            // UNXV tokens awaiting burn
+    total_burned: u64,                          // Cumulative UNXV burned
+    last_burn_timestamp: u64,                   // Last burn execution time
 }
 ```
 
-#### 4. FeeProcessor (Service Object)
-```move
-struct FeeProcessor has key {
-    id: UID,
-    operator: address,
-    
-    // Fee accumulation
-    pending_fees: Table<String, Balance>,       // Asset -> accumulated fees
-    fee_thresholds: Table<String, u64>,         // Minimum amounts before processing
-    processing_schedule: Table<String, u64>,    // Next processing time per asset
-    
-    // Processing configuration
-    batch_size: u64,                            // Max fees to process per batch
-    processing_frequency: u64,                   // How often to process (4 hours)
-    gas_limit_per_batch: u64,                   // Gas limit for batch processing
-    
-    // UNXV burn mechanism
-    unxv_burn_vault: Balance<UNXV>,             // Accumulated UNXV for burning
-    burn_amount_daily: u64,                     // Target daily burn amount
-    burn_execution_time: u64,                   // Daily burn execution time (UTC)
-    
-    // Performance tracking
-    total_processed: Table<String, u64>,        // Total fees processed per asset
-    processing_success_rate: u64,               // Successful processing percentage
-    average_processing_time: u64,               // Average time per batch
-    
-    // Integration with protocols
-    protocol_collectors: Table<String, address>, // Protocol fee collector addresses
-    collection_schedules: Table<String, u64>,   // Collection frequency per protocol
-}
-```
+### Off-Chain Services (CLI/Server Components)
 
-#### 5. SlippageProtector (Service Object)
-```move
-struct SlippageProtector has key {
-    id: UID,
-    operator: address,
-    
-    // Slippage monitoring
-    real_time_rates: Table<String, u64>,        // Current market rates
-    rate_update_frequency: u64,                 // Rate update interval (30 seconds)
-    volatility_index: Table<String, u64>,       // Asset volatility tracking
-    
-    // Protection mechanisms
-    max_slippage_global: u64,                   // 300 basis points (3%)
-    max_slippage_per_asset: Table<String, u64>, // Asset-specific limits
-    slippage_alerts: VecSet<String>,            // Assets with high slippage
-    
-    // Circuit breakers
-    daily_volume_limits: Table<String, u64>,    // Daily swap limits per asset
-    current_daily_volume: Table<String, u64>,   // Current daily volume
-    circuit_breaker_triggered: VecSet<String>,  // Assets with triggered breakers
-    
-    // MEV protection
-    mev_protection_enabled: bool,
-    front_run_detection: FrontRunDetection,
-    batch_processing: bool,                     // Batch swaps for MEV protection
-}
+#### 1. RouteOptimizer Service
+- **Path Calculation**: Analyzes all possible routes between any two assets
+- **Liquidity Analysis**: Real-time assessment of DeepBook pool depths and costs
+- **Route Validation**: Ensures calculated routes are viable before execution
+- **Cost Optimization**: Finds routes that minimize total costs including fees and slippage
 
-struct FrontRunDetection has store {
-    detection_enabled: bool,
-    price_impact_threshold: u64,               // 100 basis points
-    time_window: u64,                          // 10 seconds
-    suspicious_activity_count: u64,
-    last_suspicious_timestamp: u64,
-}
+#### 2. ConversionEngine Service
+- **Fee Aggregation**: Collects fees from all protocols and prepares conversion batches
+- **Batch Processing**: Groups compatible conversions for gas efficiency
+- **Conversion Scheduling**: Manages timing of fee conversions and burns
+- **Protocol Integration**: Handles cross-protocol fee collection and processing
+
+#### 3. BurnScheduler Service
+- **Burn Timing**: Calculates optimal timing for UNXV burns to maximize impact
+- **Burn Amount Calculation**: Determines appropriate burn amounts based on accumulated fees
+- **Market Impact Analysis**: Monitors market conditions to optimize burn execution
+- **Deflationary Analytics**: Tracks burn effectiveness and economic impact
+
+#### 4. FeeProcessor Service
+- **Protocol Fee Collection**: Automated collection of fees from all UnXversal protocols
+- **Conversion Preparation**: Prepares fee conversion transactions with optimal routing
+- **Threshold Management**: Monitors fee accumulation and triggers conversions at optimal thresholds
+- **Analytics**: Comprehensive tracking of fee volumes and conversion efficiency
 ```
 
 ### Events

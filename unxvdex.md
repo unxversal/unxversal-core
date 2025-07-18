@@ -8,68 +8,81 @@ The UnXversal Spot DEX operates as an intelligent aggregation layer that orchest
 
 #### **Core Object Hierarchy & Relationships**
 
+**ON-CHAIN OBJECTS:**
 ```
-DEXRegistry (Shared) ← Central trading configuration & routing logic
-    ↓ manages routing
-CrossAssetRouter (Service) → RouteCalculation ← path optimization
-    ↓ executes routes          ↓ analyzes paths
-OrderManager (Service) ← TradeProof validation
-    ↓ processes orders
-DeepBook Pools (Multiple) ← individual asset pairs
-    ↓ provides liquidity      ↓ executes trades
+DEXRegistry (Shared) ← Central trading configuration & supported pools
+    ↓ manages pools
+SimpleTradeOrder (Owned) → DeepBook Pools ← individual asset pairs
+    ↓ immediate execution      ↓ provides liquidity & executes trades
 BalanceManager ← holds user funds across all pools
-    ↓ validates
-MEVProtection (Service) → OrderExecution ← batch processing
-    ↓ shields from MEV        ↓ optimizes execution
-FeeOptimizer → AutoSwap ← UNXV conversions & burns
+    ↓ validates funds
+CrossAssetExecution ← atomic multi-hop trade execution
+    ↓ processes routes
+AutoSwap Integration ← UNXV fee conversions & burns
+```
+
+**OFF-CHAIN SERVICES (CLI/Server):**
+```
+CrossAssetRouter → RouteCalculation ← path optimization & analysis
+    ↓ calculates optimal routes ↓ analyzes liquidity depth
+AdvancedOrderManager → OrderMonitoring ← stop-loss, TWAP, conditional orders
+    ↓ manages order lifecycle  ↓ triggers execution
+MEVProtectionService → BatchProcessor ← sandwich attack prevention
+    ↓ protects user trades     ↓ optimizes execution timing
+TradingAnalytics → MarketDataProcessor ← real-time insights & metrics
 ```
 
 #### **Complete User Journey Flows**
 
 **1. SIMPLE TRADING FLOW (Single Asset Pair)**
 ```
-User → submit trade order → OrderManager validates → 
-check DeepBook pool liquidity → apply MEV protection → 
-execute trade on DeepBook → collect fees → 
-UNXV discount applied → AutoSwap fee processing → 
-update user balances
+[ON-CHAIN] User → submit SimpleTradeOrder → BalanceManager validates funds → 
+[ON-CHAIN] execute trade on DeepBook pool → collect fees → 
+[ON-CHAIN] UNXV discount applied → AutoSwap fee processing
 ```
 
 **2. CROSS-ASSET ROUTING FLOW (Multi-Hop Trading)**
 ```
-User → request trade (A→C) → CrossAssetRouter calculates paths → 
-find optimal route (A→B→C) → validate each hop → 
-execute atomic multi-hop trade → 
-Path: DeepBook Pool A/B → DeepBook Pool B/C → 
-aggregate slippage → collect fees from each hop → 
-final settlement
+[OFF-CHAIN] User requests trade (A→C) → CrossAssetRouter calculates optimal path → 
+[OFF-CHAIN] validate route viability → prepare atomic execution parameters → 
+[ON-CHAIN] execute CrossAssetExecution with calculated route → 
+[ON-CHAIN] DeepBook Pool A/B → DeepBook Pool B/C atomic sequence → 
+[ON-CHAIN] aggregate slippage and settle final trade
 ```
 
 **3. ADVANCED ORDER FLOW (Stop-Loss, TWAP, etc.)**
 ```
-User → submit advanced order → OrderManager stores order → 
-continuous monitoring → trigger condition met → 
-convert to market order → execute via standard flow → 
-notify user of execution → update order history
+[OFF-CHAIN] User submits advanced order via CLI → AdvancedOrderManager stores order → 
+[OFF-CHAIN] OrderMonitoring continuously checks trigger conditions → 
+[OFF-CHAIN] trigger condition met → convert to SimpleTradeOrder → 
+[ON-CHAIN] execute immediate trade → notify user of execution
 ```
 
 **4. MEV PROTECTION FLOW (Sandwich Attack Prevention)**
 ```
-User → enable MEV protection → OrderManager batches orders → 
-time delay or private mempool → execute in batches → 
-prevent front-running → validate execution fairness → 
-complete trades
+[OFF-CHAIN] User enables MEV protection → MEVProtectionService analyzes order → 
+[OFF-CHAIN] BatchProcessor groups compatible orders → apply time delays → 
+[ON-CHAIN] execute batched trades to prevent front-running → 
+[OFF-CHAIN] validate execution fairness and report results
 ```
 
 #### **Key System Interactions**
 
-- **DEXRegistry**: Central hub that maintains all supported trading pairs, cross-asset routing paths, fee structures, and system-wide trading parameters
-- **CrossAssetRouter**: Intelligent routing engine that calculates optimal paths for trades between any two assets, even if no direct pool exists
-- **OrderManager**: Sophisticated order lifecycle management supporting complex order types, order books, and execution strategies
-- **MEVProtection**: Advanced protection mechanisms including batch processing, time delays, and private mempools to shield users from MEV attacks
-- **DeepBook Integration**: Direct integration with DeepBook's order matching engine, utilizing multiple pools for cross-asset routing
+**ON-CHAIN COMPONENTS:**
+- **DEXRegistry**: Central configuration hub maintaining supported trading pairs, fee structures, and basic system parameters
+- **SimpleTradeOrder**: Individual trade orders for immediate execution on single DeepBook pools
+- **CrossAssetExecution**: On-chain atomic execution of pre-calculated multi-hop routes
+- **DeepBook Integration**: Direct integration with DeepBook's order matching engine for trade execution
 - **BalanceManager**: Sui's native balance management ensuring atomic operations across multiple pool interactions
-- **FeeOptimizer**: Intelligent fee payment optimization automatically selecting the most cost-effective fee payment method
+- **AutoSwap Integration**: Fee collection and UNXV conversion processing
+
+**OFF-CHAIN SERVICES:**
+- **CrossAssetRouter**: Intelligent routing engine calculating optimal paths for trades between any two assets
+- **AdvancedOrderManager**: Sophisticated order lifecycle management for complex order types (stop-loss, TWAP, etc.)
+- **MEVProtectionService**: Advanced protection mechanisms including batch processing and timing optimization
+- **OrderMonitoring**: Continuous monitoring service for trigger-based order execution
+- **TradingAnalytics**: Real-time market data processing and user trading insights
+- **BatchProcessor**: MEV protection through intelligent order batching and execution timing
 
 #### **Critical Design Patterns**
 
@@ -139,102 +152,78 @@ The Spot DEX acts as an intelligent trading layer on top of DeepBook:
 struct DEXRegistry has key {
     id: UID,
     supported_pools: Table<String, PoolInfo>,     // "ASSET1_ASSET2" -> pool info
-    cross_asset_paths: Table<String, vector<String>>, // Pre-computed cross-asset paths
-    order_types: VecSet<String>,                  // Supported advanced order types
-    fee_structure: FeeStructure,
-    global_settings: GlobalSettings,
-    admin_cap: Option<AdminCap>,
+    fee_structure: FeeStructure,                  // Basic fee configuration
+    admin_cap: Option<AdminCap>,                  // Admin controls for setup
 }
 
 struct PoolInfo has store {
-    pool_id: ID,
-    base_asset: String,
-    quote_asset: String,
-    deepbook_pool_id: ID,
-    tick_size: u64,
-    lot_size: u64,
-    is_active: bool,
-    total_volume_24h: u64,
+    base_asset: String,           // Base asset symbol
+    quote_asset: String,          // Quote asset symbol
+    deepbook_pool_id: ID,         // DeepBook pool ID for this pair
+    is_active: bool,              // Whether trading is enabled
 }
 
 struct FeeStructure has store {
     base_trading_fee: u64,        // 30 basis points (0.3%)
     unxv_discount: u64,           // 20% discount for UNXV payments
     routing_fee: u64,             // Additional fee for cross-asset routing
-    maker_rebate: u64,            // Rebate for providing liquidity
-}
-
-struct GlobalSettings has store {
-    max_hops: u8,                 // Maximum routing hops (default: 3)
-    slippage_tolerance: u64,      // Default slippage protection
-    order_expiry_max: u64,        // Maximum order expiry time
-    mev_protection_enabled: bool,
-    emergency_pause: bool,
 }
 ```
 
-#### 2. AdvancedOrder (Owned Object)
+#### 2. SimpleTradeOrder (Owned Object)
 ```move
-struct AdvancedOrder has key {
-    id: UID,
-    owner: address,
-    order_type: String,           // "STOP_LOSS", "TAKE_PROFIT", "TRAILING", "TWAP", "ICEBERG"
-    status: String,               // "PENDING", "ACTIVE", "FILLED", "CANCELLED", "EXPIRED"
-    
-    // Basic order parameters
-    base_asset: String,
-    quote_asset: String,
-    side: String,                 // "BUY" or "SELL"
-    quantity: u64,
-    filled_quantity: u64,
-    
-    // Advanced parameters (optional based on order type)
-    trigger_price: Option<u64>,
-    limit_price: Option<u64>,
-    trailing_amount: Option<u64>,
-    time_in_force: String,        // "GTC", "IOC", "FOK", "GTT"
-    
-    // Execution parameters
-    created_at: u64,
-    expires_at: Option<u64>,
-    last_executed: u64,
-    execution_count: u64,
-    
-    // Routing and fees
-    routing_path: vector<String>,
-    fee_payment_asset: String,
-    estimated_fees: u64,
-}
-```
-
-#### 3. TradingSession (Owned Object)
-```move
-struct TradingSession has key {
+struct SimpleTradeOrder has key {
     id: UID,
     trader: address,
-    balance_manager_id: ID,
-    active_orders: VecSet<ID>,
-    session_stats: SessionStats,
-    risk_limits: RiskLimits,
-    created_at: u64,
-    last_activity: u64,
-}
-
-struct SessionStats has store {
-    total_volume: u64,
-    total_fees_paid: u64,
-    orders_executed: u64,
-    pnl_realized: i64,
-    win_rate: u64,                // Percentage of profitable trades
-}
-
-struct RiskLimits has store {
-    max_order_size: u64,
-    max_daily_volume: u64,
-    max_open_orders: u64,
-    stop_loss_required: bool,
+    input_asset: String,          // Asset being sold
+    output_asset: String,         // Asset being bought
+    input_amount: u64,            // Amount of input asset
+    min_output_amount: u64,       // Minimum acceptable output (slippage protection)
+    fee_payment_asset: String,    // Asset used for fee payment (UNXV, USDC, or input asset)
+    created_at: u64,              // Order creation timestamp
 }
 ```
+
+#### 3. CrossAssetExecution (Shared Object)
+```move
+struct CrossAssetExecution has key {
+    id: UID,
+    trader: address,
+    route_hops: vector<RouteHop>, // Pre-calculated route from off-chain router
+    total_input: u64,             // Total input amount
+    min_final_output: u64,        // Minimum acceptable final output
+    fee_payment_asset: String,    // Asset used for fee payment
+    created_at: u64,              // Execution timestamp
+}
+
+struct RouteHop has store {
+    from_asset: String,           // Source asset for this hop
+    to_asset: String,             // Destination asset for this hop
+    deepbook_pool_id: ID,         // DeepBook pool for this hop
+    expected_input: u64,          // Expected input amount for this hop
+    min_output: u64,              // Minimum output for this hop
+}
+```
+
+### Off-Chain Services (CLI/Server Components)
+
+#### 1. CrossAssetRouter Service
+- **Route Calculation**: Analyzes all possible paths between any two assets
+- **Liquidity Analysis**: Real-time assessment of DeepBook pool liquidity depth
+- **Path Optimization**: Finds routes that minimize fees and slippage
+- **Route Validation**: Ensures route viability before execution
+
+#### 2. AdvancedOrderManager Service
+- **Order Storage**: Maintains advanced orders (stop-loss, TWAP, etc.) in off-chain database
+- **Trigger Monitoring**: Continuously monitors price and market conditions
+- **Order Execution**: Converts triggered advanced orders to SimpleTradeOrder for on-chain execution
+- **Order Analytics**: Provides order performance tracking and insights
+
+#### 3. MEVProtectionService
+- **Batch Processing**: Groups compatible orders to reduce MEV opportunities
+- **Timing Optimization**: Strategic delays and execution timing to avoid MEV
+- **Sandwich Attack Prevention**: Detects and prevents sandwich attacks
+- **Fair Execution**: Ensures users get fair prices despite MEV activities
 
 #### 4. CrossAssetRouter (Service Object)
 ```move
