@@ -1,5 +1,72 @@
 # UnXversal Dated Futures Protocol Design
 
+## System Architecture & User Flow Overview
+
+### How All Components Work Together
+
+The UnXversal Dated Futures protocol provides traditional futures contracts with fixed expiration dates, enabling sophisticated term structure trading, calendar spreads, and automated settlement through comprehensive cross-protocol integration:
+
+#### **Core Object Hierarchy & Relationships**
+
+```
+DatedFuturesRegistry (Shared) ← Central futures configuration & expiration cycles
+    ↓ manages contracts
+FuturesContract<T> (Shared) → ExpirationManager ← handles settlement & rollover
+    ↓ tracks positions           ↓ automates expiration
+FuturesPosition (individual) ← user contracts & P&L
+    ↓ validates margin
+MarginManager (Service) → PriceOracle ← TWAP/VWAP pricing
+    ↓ monitors health           ↓ provides settlement prices
+SettlementEngine ← processes contract expiration
+    ↓ executes via
+DeepBook Integration → AutoSwap ← asset delivery & cash settlement
+    ↓ provides liquidity       ↓ handles conversions
+UNXV Integration → fee discounts & premium features
+```
+
+#### **Complete User Journey Flows**
+
+**1. FUTURES TRADING FLOW (Opening Contracts)**
+```
+User → select futures contract & expiration → choose position size → 
+MarginManager validates collateral → open futures position → 
+track time decay & convergence → monitor margin requirements → 
+settle at expiration or roll forward
+```
+
+**2. CALENDAR SPREAD FLOW (Term Structure Trading)**
+```
+User → identify calendar spread opportunity → 
+simultaneously long near-term & short far-term (or vice versa) → 
+atomic execution of spread → monitor time decay differential → 
+profit from term structure changes → close or roll positions
+```
+
+**3. CONTRACT SETTLEMENT FLOW (Expiration)**
+```
+Contract approaches expiration → SettlementEngine calculates TWAP/VWAP → 
+determine final settlement price → cash settlement processing → 
+AutoSwap handles asset conversions → settle all positions → 
+release margin + profits → update contract statistics
+```
+
+**4. AUTO-ROLL FLOW (Position Continuation)**
+```
+User enables auto-roll → contract nears expiration → 
+system identifies next contract → calculate roll cost → 
+atomic close expiring & open new contract → 
+maintain position continuity → update margin requirements
+```
+
+#### **Key System Interactions**
+
+- **DatedFuturesRegistry**: Central hub managing all futures contracts, expiration schedules, margin requirements, and settlement parameters
+- **FuturesContract<T>**: Individual futures contracts for each asset and expiration date handling trading and settlement
+- **ExpirationManager**: Automated system managing contract lifecycles, settlement procedures, and rollover mechanisms
+- **MarginManager**: Sophisticated margin system with daily mark-to-market and variation margin calls
+- **SettlementEngine**: Automated settlement using TWAP/VWAP calculations with dispute resolution mechanisms
+- **PriceOracle**: Time-weighted pricing for accurate and manipulation-resistant settlement prices
+
 ## Overview
 
 UnXversal Dated Futures provides traditional futures contracts with fixed expiration dates on synthetic assets, enabling sophisticated hedging strategies, speculation, and arbitrage opportunities. Unlike perpetual futures, these contracts have defined settlement dates and use cash settlement based on underlying synthetic asset prices, offering traders precise risk management tools and institutional-grade derivatives functionality.

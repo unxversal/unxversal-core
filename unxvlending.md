@@ -1,5 +1,128 @@
 # UnXversal Lending Protocol Design
 
+## System Architecture & User Flow Overview
+
+### How All Components Work Together
+
+The UnXversal Lending protocol creates a sophisticated credit system that seamlessly integrates with the entire ecosystem, enabling efficient capital allocation, leveraged trading, and yield generation through intelligent asset management:
+
+#### **Core Object Hierarchy & Relationships**
+
+```
+LendingRegistry (Shared) ← Central lending configuration & risk parameters
+    ↓ manages pools
+LendingPool<T> (Shared) → InterestRateModel ← dynamic rate calculation
+    ↓ tracks liquidity         ↓ calculates APR/APY
+UserPosition (individual) ← collateral & debt tracking
+    ↓ validates safety
+CollateralManager (Service) → PriceOracle ← real-time valuations
+    ↓ monitors health          ↓ provides pricing
+LiquidationEngine ← processes liquidations
+    ↓ executes via
+DeepBook Flash Loans → AutoSwap ← asset conversions
+    ↓ enables atomic liquidation
+UNXV Integration → fee discounts & yield bonuses
+```
+
+#### **Complete User Journey Flows**
+
+**1. LENDING FLOW (Supply Assets for Yield)**
+```
+User → deposit assets → LendingPool receives deposit → 
+mint LP tokens (receipt) → calculate new interest rates → 
+start earning yield → AutoSwap converts fees to UNXV → 
+UNXV stakers receive yield bonuses → compound interest
+```
+
+**2. BORROWING FLOW (Leverage & Credit)**
+```
+User → deposit collateral → CollateralManager validates → 
+PriceOracle confirms valuations → calculate borrowing capacity → 
+user requests loan → validate collateralization ratio → 
+execute loan → update interest accrual → 
+monitor position health continuously
+```
+
+**3. LEVERAGED TRADING FLOW (DEX Integration)**
+```
+User → deposits collateral → borrows trading asset → 
+automatic DEX integration → execute leveraged trade → 
+maintain collateral monitoring → manage margin requirements → 
+AutoSwap handles cross-asset operations → settle trades
+```
+
+**4. LIQUIDATION FLOW (Risk Management)**
+```
+CollateralManager detects under-collateralization → 
+LiquidationEngine calculates liquidation amount → 
+DeepBook flash loan for liquidation capital → 
+repay user debt + penalty → liquidate collateral via DEX → 
+repay flash loan → distribute liquidation bonus → 
+update all affected positions
+```
+
+#### **Key System Interactions**
+
+- **LendingRegistry**: Central command center managing all lending pools, risk parameters, supported assets, and system-wide configurations
+- **LendingPool<T>**: Individual asset pools that handle deposits, withdrawals, interest accrual, and liquidity management for each supported asset
+- **CollateralManager**: Sophisticated risk management system that monitors collateral health, calculates borrowing capacity, and triggers liquidations
+- **InterestRateModel**: Dynamic interest rate calculation engine that adjusts rates based on supply/demand, utilization, and market conditions
+- **LiquidationEngine**: Automated liquidation system using DeepBook flash loans for capital-efficient liquidations
+- **PriceOracle**: Real-time price feeds ensuring accurate collateral valuation and liquidation triggers
+- **UNXV Integration**: Comprehensive tokenomics integration providing fee discounts, yield bonuses, and protocol value accrual
+
+#### **Critical Design Patterns**
+
+1. **Isolated Pool Architecture**: Each asset has its own lending pool, preventing cross-asset contagion while enabling precise risk management
+2. **Flash Loan Liquidations**: Zero-capital liquidations using DeepBook flash loans ensure system solvency without requiring liquidator capital
+3. **Dynamic Interest Rates**: Interest rates automatically adjust based on supply/demand to maintain optimal utilization
+4. **Cross-Protocol Collateral**: Synthetic assets and staked assets can be used as collateral, maximizing capital efficiency
+5. **Automated Risk Management**: Continuous monitoring and automated liquidations prevent protocol insolvency
+6. **Yield Optimization**: UNXV stakers receive additional yield bonuses, creating sustainable tokenomics
+
+#### **Data Flow & State Management**
+
+- **Interest Accrual**: Continuous interest calculation → position updates → rate adjustments → yield distribution
+- **Collateral Monitoring**: Real-time price feeds → health factor calculation → liquidation triggers → automated responses
+- **Liquidity Management**: Deposit/withdrawal tracking → utilization calculation → rate model updates → optimal allocation
+- **Risk Assessment**: Collateral valuation → borrowing capacity → safety margins → liquidation thresholds
+- **Fee Processing**: Protocol fees → AutoSwap conversion → UNXV burning → yield bonus distribution
+
+#### **Advanced Features & Mechanisms**
+
+- **Variable Interest Rates**: Dynamic rate adjustment based on utilization curves and market conditions
+- **Collateral Factor Management**: Sophisticated LTV ratios based on asset volatility and liquidity
+- **Flash Loan Integration**: Native flash loan support for arbitrage, liquidations, and strategy execution
+- **Cross-Asset Borrowing**: Borrow any supported asset against any approved collateral
+- **Liquidation Protection**: Multiple safety mechanisms including grace periods and partial liquidations
+- **Yield Farming Integration**: Automatic yield farming opportunities for deposited assets
+
+#### **Integration Points with UnXversal Ecosystem**
+
+- **Synthetics**: Synthetic assets serve as both collateral and borrowable assets with specialized risk parameters
+- **DEX**: Seamless integration for leveraged trading, liquidation execution, and cross-asset operations
+- **AutoSwap**: All fees converted to UNXV, liquidated assets routed optimally, cross-protocol asset management
+- **Options**: Options can be written against borrowed assets, premium used to repay loans
+- **Perpetuals**: Borrowed assets used for perpetual trading with automatic margin management
+- **Liquid Staking**: stSUI accepted as collateral with dynamic LTV based on staking rewards
+
+#### **Risk Management & Safety Mechanisms**
+
+- **Real-Time Monitoring**: Continuous position health monitoring with automatic liquidation triggers
+- **Liquidation Cascades**: Protection against liquidation cascades through sophisticated risk models
+- **Oracle Security**: Multiple oracle sources with deviation protection and circuit breakers
+- **Interest Rate Caps**: Maximum interest rate limits to prevent extreme borrowing costs
+- **Emergency Procedures**: Protocol pause capabilities and emergency asset recovery
+- **Insurance Fund**: Protocol-owned insurance fund for covering potential bad debt
+
+#### **Economic Mechanisms & Incentives**
+
+- **Supply APY**: Competitive yields for asset suppliers based on borrowing demand
+- **Borrow APR**: Dynamic borrowing rates that adjust to market conditions
+- **UNXV Benefits**: Staking UNXV provides borrowing rate discounts and yield bonuses
+- **Liquidation Bonuses**: Incentivize liquidators to maintain protocol health
+- **Fee Distribution**: Protocol fees benefit UNXV holders through burning and yield bonuses
+
 ## Overview
 
 UnXversal Lending is a robust permissionless lending protocol that enables users to supply assets to earn yield and borrow assets against collateral. It seamlessly integrates with the UnXversal ecosystem, supporting synthetic assets from the synthetics protocol, leveraged trading through the spot DEX, and UNXV tokenomics with fee discounts and yield optimization.

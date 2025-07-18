@@ -1,5 +1,72 @@
 # UnXversal Liquid Staking Protocol Design
 
+## System Architecture & User Flow Overview
+
+### How All Components Work Together
+
+The UnXversal Liquid Staking protocol creates an intelligent staking infrastructure that combines AI-powered validator selection, automated governance participation, and cross-protocol utility to maximize staking rewards while maintaining full liquidity:
+
+#### **Core Object Hierarchy & Relationships**
+
+```
+LiquidStakingRegistry (Shared) ← Central staking configuration & validator management
+    ↓ coordinates staking
+ValidatorManager (Service) → AI Validator Selection ← performance optimization
+    ↓ selects validators        ↓ analyzes efficiency
+LiquidStakingPool (Shared) ← user SUI deposits & stSUI minting
+    ↓ manages liquidity
+GovernanceManager (Service) → ML Proposal Analysis ← automated voting
+    ↓ participates in governance ↓ optimizes decisions
+RewardsDistributor ← processes staking rewards
+    ↓ distributes via
+CrossProtocolUtility → AutoSwap ← stSUI ecosystem integration
+    ↓ enables usage            ↓ handles conversions
+UNXV Integration → enhanced staking features & benefits
+```
+
+#### **Complete User Journey Flows**
+
+**1. LIQUID STAKING FLOW (SUI → stSUI)**
+```
+User → deposits SUI → LiquidStakingPool receives deposit → 
+AI Validator Selection chooses optimal validators → 
+stake SUI across selected validators → mint stSUI tokens → 
+user receives liquid staking receipt → start earning rewards
+```
+
+**2. GOVERNANCE PARTICIPATION FLOW (Automated Voting)**
+```
+Governance proposal appears → ML Proposal Analysis evaluates → 
+analyze proposal impact & alignment → GovernanceManager votes → 
+maximize staking rewards through optimal governance → 
+users benefit from intelligent participation
+```
+
+**3. CROSS-PROTOCOL UTILITY FLOW (stSUI Usage)**
+```
+User holds stSUI → uses in other protocols (lending/DEX/etc.) → 
+maintain staking rewards while using liquidity → 
+CrossProtocolUtility enables seamless integration → 
+maximize capital efficiency across ecosystem
+```
+
+**4. REWARDS DISTRIBUTION FLOW (Yield Processing)**
+```
+Validators generate staking rewards → RewardsDistributor collects → 
+compound rewards or distribute to users → 
+AutoSwap optimizes reward processing → 
+UNXV stakers receive bonus yields → continuous yield optimization
+```
+
+#### **Key System Interactions**
+
+- **LiquidStakingRegistry**: Central hub managing validator relationships, staking parameters, and cross-protocol integrations
+- **AI Validator Selection**: Machine learning system continuously optimizing validator selection based on performance metrics
+- **GovernanceManager**: Automated governance participation system using ML to make optimal voting decisions
+- **LiquidStakingPool**: Main staking pool handling SUI deposits, stSUI minting, and liquidity management
+- **RewardsDistributor**: Sophisticated reward processing system maximizing yield through compound strategies
+- **CrossProtocolUtility**: Integration layer enabling stSUI usage across all UnXversal protocols
+
 ## Overview
 
 UnXversal Liquid Staking provides comprehensive liquid staking infrastructure for the Sui ecosystem, enabling users to stake SUI while maintaining liquidity through transferable staking tokens. The protocol features intelligent validator selection, governance mechanisms, yield optimization strategies, and seamless integration with the entire UnXversal ecosystem to maximize staking rewards and capital efficiency.

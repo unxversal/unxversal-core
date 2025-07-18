@@ -1,5 +1,88 @@
 # UnXversal Synthetics Protocol Design
 
+## System Architecture & User Flow Overview
+
+### How All Components Work Together
+
+The UnXversal Synthetics protocol creates a sophisticated ecosystem where multiple on-chain objects, functions, and external integrations work in harmony to enable synthetic asset creation, trading, and management:
+
+#### **Core Object Hierarchy & Relationships**
+
+```
+SynthRegistry (Shared) ← Central authority & configuration
+    ↓ manages
+SyntheticAsset configs → DeepBook Pools ← trading venues
+    ↓ references            ↓ provides liquidity
+SyntheticsVault<T> (Shared) ← user positions
+    ↓ tracks
+UserPosition (individual) → BalanceManager ← holds funds
+    ↓ validates              ↓ executes
+RiskManager (Service) → PriceOracle ← Pyth feeds
+    ↓ monitors              ↓ provides pricing
+LiquidationEngine ← processes liquidations
+```
+
+#### **Complete User Journey Flows**
+
+**1. MINTING FLOW (Creating Synthetic Assets)**
+```
+User → deposit USDC → SyntheticsVault checks collateral ratio → 
+calls RiskManager validation → PriceOracle gets current prices → 
+mint synthetic tokens → update UserPosition → 
+create/update DeepBook pool liquidity
+```
+
+**2. TRADING FLOW (Synthetic Asset Exchange)**
+```
+User → submit order to DeepBook → BalanceManager validates funds → 
+order matching engine processes → trade executes → 
+fees collected → UNXV fee discounts applied → 
+position updates → real-time price discovery
+```
+
+**3. LIQUIDATION FLOW (Risk Management)**
+```
+RiskManager monitors positions → detects under-collateralized vault → 
+LiquidationEngine calculates liquidation amount → 
+flash loan from DeepBook → liquidate position → 
+repay debt + penalty → distribute remaining collateral → 
+update all affected positions
+```
+
+#### **Key System Interactions**
+
+- **SynthRegistry**: Acts as the central configuration hub, managing all synthetic asset definitions, oracle mappings, and global risk parameters
+- **SyntheticsVault<T>**: Individual user vaults that hold USDC collateral and track minted synthetic positions, with built-in risk monitoring
+- **DeepBook Integration**: Provides order book trading infrastructure, flash loans for liquidations, and real-time price discovery
+- **PriceOracle**: Aggregates Pyth Network feeds to provide accurate, manipulation-resistant pricing for all synthetic assets
+- **RiskManager**: Continuously monitors collateral ratios, triggers liquidations, and enforces risk parameters across all positions
+- **LiquidationEngine**: Handles the complex liquidation process using flash loans and atomic transactions
+- **BalanceManager**: Sui's native fund management system that holds user assets across all DeepBook operations
+
+#### **Critical Design Patterns**
+
+1. **Atomic Operations**: All minting, trading, and liquidation operations are atomic - they either complete fully or revert entirely
+2. **Flash Loan Integration**: Liquidations use DeepBook flash loans to ensure zero-capital liquidations with immediate debt repayment
+3. **Oracle Integration**: Real-time price feeds from Pyth Network ensure accurate collateral valuation and liquidation triggers
+4. **Risk Isolation**: Each user's position is isolated in their own vault, preventing contagion between users
+5. **Fee Integration**: Seamless integration with UNXV tokenomics for fee discounts and protocol value accrual
+
+#### **Data Flow & State Management**
+
+- **Price Data**: Pyth → PriceOracle → RiskManager → liquidation decisions
+- **User Positions**: SyntheticsVault → UserPosition updates → risk calculations
+- **Trading Data**: DeepBook trades → fee collection → UNXV conversions → burns
+- **Risk Monitoring**: Continuous monitoring of collateral ratios with real-time liquidation triggers
+- **Global State**: SynthRegistry maintains system-wide parameters and configurations that all other components reference
+
+#### **Integration Points with UnXversal Ecosystem**
+
+- **AutoSwap**: Automatic fee processing and UNXV burning from all trading fees
+- **DEX**: Synthetic assets become tradeable on the main DEX with cross-asset routing
+- **Lending**: Synthetic assets can be used as collateral in the lending protocol
+- **Options/Perpetuals**: Synthetic assets serve as underlying assets for derivatives
+- **Liquid Staking**: stSUI can be accepted as collateral in future versions
+
 ## Overview
 
 UnXversal Synthetics enables permissionless creation and trading of synthetic assets backed by USDC collateral, built on top of DeepBook's order book infrastructure. Users can mint synthetic assets by depositing USDC and trade them on DeepBook pools with automatic price feeds from Pyth Network.

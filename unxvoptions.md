@@ -1,5 +1,137 @@
 # UnXversal Options Protocol Design
 
+## System Architecture & User Flow Overview
+
+### How All Components Work Together
+
+The UnXversal Options protocol creates a sophisticated derivatives ecosystem that seamlessly integrates options trading with the broader DeFi infrastructure, enabling complex strategies through automated risk management and cross-protocol coordination:
+
+#### **Core Object Hierarchy & Relationships**
+
+```
+OptionsRegistry (Shared) ← Central options configuration & supported assets
+    ↓ manages markets
+OptionsMarket<T> (Shared) → GreeksCalculator ← real-time risk metrics
+    ↓ tracks positions         ↓ calculates delta/gamma/theta
+OptionPosition (individual) ← user holdings & strategies
+    ↓ validates strategies
+CollateralManager (Service) → PriceOracle ← Pyth price feeds
+    ↓ monitors margins         ↓ provides pricing
+SettlementEngine ← handles expiration & exercise
+    ↓ executes via
+DEX Integration → AutoSwap ← asset conversions
+    ↓ enables hedging         ↓ handles settlements
+UNXV Integration → fee discounts & premium features
+```
+
+#### **Complete User Journey Flows**
+
+**1. OPTION BUYING FLOW (Long Positions)**
+```
+User → select option contract → calculate premium → 
+validate account balance → purchase option → 
+OptionPosition created → Greeks calculated → 
+real-time P&L tracking → exercise or sell decision → 
+settlement via DEX/AutoSwap
+```
+
+**2. OPTION WRITING FLOW (Short Positions)**
+```
+User → choose option to write → CollateralManager validates margin → 
+lock collateral → write option → collect premium → 
+monitor position risk → Greeks-based risk management → 
+assignment or expiration → collateral release
+```
+
+**3. COMPLEX STRATEGY FLOW (Multi-Leg)**
+```
+User → design strategy (straddle/spread/etc.) → 
+validate each leg → calculate net premium → 
+atomic execution of all legs → 
+strategy position tracking → combined Greeks → 
+risk monitoring → coordinated settlement
+```
+
+**4. DELTA HEDGING FLOW (Risk Management)**
+```
+GreeksCalculator detects delta imbalance → 
+calculate hedge requirements → DEX integration → 
+execute spot trades → rebalance delta → 
+continuous monitoring → adjust hedges → 
+maintain delta neutrality
+```
+
+#### **Key System Interactions**
+
+- **OptionsRegistry**: Central hub managing all option markets, supported underlying assets, expiration cycles, and global trading parameters
+- **OptionsMarket<T>**: Individual markets for each underlying asset handling option creation, trading, pricing, and settlement
+- **GreeksCalculator**: Real-time calculation of option Greeks (delta, gamma, theta, vega, rho) for risk management and pricing
+- **CollateralManager**: Sophisticated margin system managing collateral requirements for option writers and complex strategies
+- **SettlementEngine**: Automated settlement system handling option exercise, assignment, and expiration processes
+- **PriceOracle**: Real-time price feeds from Pyth Network ensuring accurate underlying asset pricing for options
+- **DEX Integration**: Seamless integration with spot DEX for delta hedging, physical settlement, and arbitrage
+
+#### **Critical Design Patterns**
+
+1. **Atomic Multi-Leg Execution**: Complex options strategies execute atomically - all legs succeed or the entire strategy fails
+2. **Real-Time Greeks**: Continuous calculation of option Greeks enables sophisticated risk management and automated hedging
+3. **Cross-Protocol Collateral**: Users can use synthetic assets, staked assets, and borrowed assets as collateral
+4. **Automated Settlement**: Options automatically settle at expiration with minimal user intervention
+5. **Delta Hedging Automation**: Optional automated delta hedging through DEX integration
+6. **Strategy Templates**: Pre-built strategy templates for common options strategies (spreads, straddles, etc.)
+
+#### **Data Flow & State Management**
+
+- **Price Discovery**: Pyth oracles → options pricing models → premium calculation → market quotes
+- **Risk Management**: Position monitoring → Greeks calculation → margin requirements → automated actions
+- **Settlement Processing**: Expiration detection → exercise decisions → asset transfers → collateral release
+- **Strategy Coordination**: Multi-leg validation → atomic execution → combined risk tracking → coordinated settlement
+- **Fee Processing**: Premium collection → trading fees → AutoSwap conversion → UNXV burning
+
+#### **Advanced Features & Mechanisms**
+
+- **American vs European Options**: Support for both American (early exercise) and European (expiration only) options
+- **Physical vs Cash Settlement**: Options can settle physically (deliver underlying) or cash (pay difference)
+- **Implied Volatility**: Real-time implied volatility calculation and surface modeling
+- **Greeks-Based Risk**: Sophisticated risk management using full Greeks calculation
+- **Strategy Builder**: Visual interface for building complex multi-leg options strategies
+- **Automated Exercise**: Intelligent exercise decisions for in-the-money options at expiration
+
+#### **Integration Points with UnXversal Ecosystem**
+
+- **Synthetics**: All synthetic assets available as option underlyings with specialized pricing models
+- **Lending**: Borrowed assets can be used for options trading and collateral management
+- **DEX**: Automatic delta hedging, physical settlement, and arbitrage opportunities
+- **AutoSwap**: Seamless asset conversion for premium payments and settlement
+- **Perpetuals**: Cross-hedging between options and perpetual positions
+- **Liquid Staking**: stSUI can be used as collateral with dynamic margin requirements
+
+#### **Options Strategies & Instruments**
+
+- **Basic Strategies**: Calls, puts, covered calls, protective puts
+- **Spread Strategies**: Bull/bear spreads, butterfly spreads, iron condors
+- **Volatility Strategies**: Straddles, strangles, volatility trading
+- **Income Strategies**: Covered calls, cash-secured puts, iron butterflies
+- **Arbitrage Strategies**: Put-call parity, conversion/reversal arbitrage
+- **Exotic Options**: Barrier options, Asian options, lookback options (via Exotic Derivatives protocol)
+
+#### **Risk Management & Safety Mechanisms**
+
+- **Margin Requirements**: Dynamic margin calculation based on position risk and market volatility
+- **Portfolio Margining**: Cross-margining across correlated positions to reduce capital requirements
+- **Risk Limits**: User-defined and protocol-wide risk limits to prevent excessive exposure
+- **Liquidation Protection**: Graduated liquidation process with grace periods and partial liquidations
+- **Circuit Breakers**: Automatic trading halts during extreme market conditions
+- **Oracle Protection**: Multiple price feed validation and deviation protection
+
+#### **Economic Mechanisms & Tokenomics**
+
+- **Premium Collection**: Option writers collect premiums upfront with automatic fee processing
+- **UNXV Benefits**: Fee discounts, enhanced margins, and access to premium strategies
+- **Liquidity Mining**: Rewards for providing options liquidity and maintaining tight spreads
+- **Fee Structure**: Competitive fees with automatic UNXV conversion and burning
+- **Yield Generation**: Multiple yield opportunities through writing options and liquidity provision
+
 ## Overview
 
 UnXversal Options is a comprehensive decentralized options trading protocol that enables users to create, trade, and exercise options on synthetic assets, native cryptocurrencies, and other supported assets. Built on top of the UnXversal ecosystem, it leverages synthetic assets from the synthetics protocol, collateral management from the lending protocol, and trading infrastructure from the spot DEX.

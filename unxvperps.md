@@ -1,5 +1,138 @@
 # UnXversal Perpetuals Protocol Design
 
+## System Architecture & User Flow Overview
+
+### How All Components Work Together
+
+The UnXversal Perpetuals protocol creates a sophisticated leverage trading ecosystem that provides perpetual futures exposure with advanced risk management, funding mechanisms, and seamless cross-protocol integration:
+
+#### **Core Object Hierarchy & Relationships**
+
+```
+PerpetualsRegistry (Shared) ← Central configuration & supported assets
+    ↓ manages markets
+PerpetualMarket<T> (Shared) → FundingRateEngine ← dynamic rate calculation
+    ↓ tracks positions          ↓ maintains price convergence
+PerpetualPosition (individual) ← user leverage & P&L
+    ↓ validates margin
+MarginManager (Service) → PriceOracle ← real-time pricing
+    ↓ monitors health           ↓ provides mark prices
+LiquidationEngine ← processes liquidations
+    ↓ executes via
+DeepBook Integration → AutoSwap ← asset conversions
+    ↓ provides liquidity       ↓ handles settlements
+UNXV Integration → fee discounts & enhanced leverage
+```
+
+#### **Complete User Journey Flows**
+
+**1. PERPETUAL TRADING FLOW (Opening Positions)**
+```
+User → select perpetual market → choose leverage & direction → 
+MarginManager validates collateral → calculate required margin → 
+open position → FundingRateEngine applies rates → 
+real-time P&L tracking → monitor margin health → 
+close position or get liquidated
+```
+
+**2. FUNDING RATE FLOW (Price Convergence)**
+```
+PriceOracle compares spot vs perp prices → 
+FundingRateEngine calculates funding rate → 
+longs pay shorts (or vice versa) → 
+funding payments processed → 
+price convergence maintained → 
+rates updated for next period
+```
+
+**3. LIQUIDATION FLOW (Risk Management)**
+```
+MarginManager detects under-margined position → 
+LiquidationEngine calculates liquidation size → 
+DeepBook provides liquidation liquidity → 
+close position at market → repay debt + penalty → 
+distribute liquidation bonus → update insurance fund
+```
+
+**4. CROSS-MARGIN FLOW (Portfolio Management)**
+```
+User → multiple perpetual positions → 
+MarginManager calculates portfolio margin → 
+cross-margining reduces requirements → 
+rebalance margin across positions → 
+optimize capital efficiency → risk monitoring
+```
+
+#### **Key System Interactions**
+
+- **PerpetualsRegistry**: Central command center managing all perpetual markets, leverage limits, funding parameters, and global risk settings
+- **PerpetualMarket<T>**: Individual markets for each synthetic asset handling position management, funding rates, and trade execution
+- **FundingRateEngine**: Sophisticated funding mechanism that maintains price convergence between perpetual and spot prices
+- **MarginManager**: Advanced margin system supporting isolated and cross-margin modes with real-time health monitoring
+- **LiquidationEngine**: Automated liquidation system with partial liquidations and insurance fund protection
+- **PriceOracle**: Real-time price feeds ensuring accurate mark-to-market and funding rate calculation
+- **DeepBook Integration**: Deep liquidity integration for optimal trade execution and liquidation processing
+
+#### **Critical Design Patterns**
+
+1. **Perpetual Futures Model**: Futures contracts without expiration maintained through funding rate mechanisms
+2. **Dynamic Funding Rates**: Automatic rate adjustments based on price divergence between perpetual and spot markets
+3. **Cross-Margin Efficiency**: Portfolio margining across all positions reduces capital requirements
+4. **Partial Liquidations**: Graduated liquidation process to minimize impact and preserve positions when possible
+5. **Insurance Fund Protection**: Protocol-owned insurance fund provides additional safety layer
+6. **Leverage Tiers**: Variable leverage limits based on position size and market volatility
+
+#### **Data Flow & State Management**
+
+- **Price Discovery**: Spot prices → funding rate calculation → perpetual mark prices → position valuations
+- **Margin Calculation**: Position sizes → portfolio risk → margin requirements → health factors → liquidation triggers
+- **Funding Payments**: Price divergence → funding rates → payment calculations → automated transfers
+- **Position Management**: Trade execution → position updates → P&L tracking → margin adjustments
+- **Risk Monitoring**: Continuous health monitoring → liquidation triggers → automated responses
+
+#### **Advanced Features & Mechanisms**
+
+- **Up to 75x Leverage**: High leverage trading with sophisticated risk management
+- **Isolated vs Cross Margin**: Users can choose between isolated positions or cross-margin portfolio
+- **Advanced Order Types**: Stop-loss, take-profit, trailing stops, reduce-only orders
+- **Funding Rate Optimization**: Intelligent funding rate calculation to minimize arbitrage opportunities
+- **Position Size Limits**: Dynamic position limits based on market liquidity and volatility
+- **Insurance Fund**: Automated insurance fund management for systemic risk protection
+
+#### **Integration Points with UnXversal Ecosystem**
+
+- **Synthetics**: All synthetic assets available as perpetual underlyings with native price feeds
+- **Lending**: Cross-collateralization with lending positions and borrowed margin
+- **DEX**: Arbitrage opportunities and cross-market trading strategies
+- **AutoSwap**: Seamless collateral conversion and funding payment processing
+- **Options**: Portfolio strategies combining perpetuals and options for advanced hedging
+- **Liquid Staking**: stSUI collateral with enhanced margin efficiency
+
+#### **Funding Rate & Economic Mechanisms**
+
+- **Funding Rate Calculation**: Based on price divergence, interest rates, and market conditions
+- **Funding Periods**: Regular funding payments (typically every 8 hours) to maintain price convergence
+- **Long/Short Imbalance**: Funding flows from over-represented side to under-represented side
+- **UNXV Benefits**: Reduced funding costs and enhanced margin efficiency for UNXV stakers
+- **Fee Structure**: Competitive maker/taker fees with automatic UNXV conversion and burning
+
+#### **Risk Management & Safety Mechanisms**
+
+- **Real-Time Margin Monitoring**: Continuous position health monitoring with automatic liquidation triggers
+- **Partial Liquidation System**: Graduated liquidation to reduce positions while preserving remaining capital
+- **Insurance Fund**: Protocol-owned fund to cover potential shortfalls and maintain system solvency
+- **Position Limits**: Dynamic limits based on market conditions and user risk profile
+- **Circuit Breakers**: Automatic trading halts during extreme market conditions
+- **Oracle Protection**: Multiple price feed validation and deviation protection
+
+#### **Leverage & Margin System**
+
+- **Variable Leverage**: Different leverage tiers based on position size and market volatility
+- **Margin Requirements**: Dynamic initial and maintenance margin based on risk parameters
+- **Cross-Margin Benefits**: Portfolio margining reduces overall capital requirements
+- **Margin Calls**: Automated margin call system with grace periods and top-up options
+- **Liquidation Protection**: Multiple safety mechanisms to prevent unnecessary liquidations
+
 ## Overview
 
 UnXversal Perpetuals provides sophisticated perpetual futures trading on synthetic assets, enabling traders to gain leveraged exposure to sBTC, sETH, and other synthetic assets without expiration dates. The protocol features dynamic funding rates, advanced risk management, liquidation mechanisms, and seamless integration with the entire UnXversal ecosystem through DeepBook infrastructure.

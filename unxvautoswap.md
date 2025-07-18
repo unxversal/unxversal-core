@@ -1,5 +1,130 @@
 # UnXversal Autoswap Contracts Design
 
+## System Architecture & User Flow Overview
+
+### How All Components Work Together
+
+The UnXversal AutoSwap protocol serves as the critical circulatory system of the entire ecosystem, automatically processing fees and maintaining tokenomics across all protocols through intelligent asset conversion and routing:
+
+#### **Core Object Hierarchy & Relationships**
+
+```
+AutoSwapRegistry (Shared) ← Central conversion hub & routing logic
+    ↓ coordinates all swaps
+RouteOptimizer (Service) → PathCalculation ← cross-protocol routing
+    ↓ optimizes execution     ↓ analyzes liquidity
+ConversionEngine (Service) ← handles conversions
+    ↓ processes swaps
+DeepBook Pools (Multiple) ← liquidity sources
+    ↓ provides best rates     ↓ executes swaps
+BalanceManager ← manages cross-protocol balances
+    ↓ validates operations
+FeeCollector (Service) → UNXV Burn Mechanism ← deflationary pressure
+    ↓ aggregates fees         ↓ burns tokens
+Cross-Protocol Integration ← all UnXversal protocols
+```
+
+#### **Complete User Journey Flows**
+
+**1. AUTOMATIC FEE PROCESSING FLOW (Cross-Protocol)**
+```
+Protocol collects fees (any asset) → sends to AutoSwap → 
+RouteOptimizer finds best path to UNXV → 
+execute conversion via optimal route → 
+aggregate UNXV from all protocols → 
+automatic UNXV burn → deflationary pressure → 
+fee statistics updated
+```
+
+**2. USER-INITIATED CONVERSION FLOW (Asset Swapping)**
+```
+User → requests asset conversion (A→B) → 
+RouteOptimizer calculates best route → 
+check multiple liquidity sources → validate slippage limits → 
+execute optimal route → collect minimal fees → 
+UNXV discount applied → settle final assets
+```
+
+**3. CROSS-PROTOCOL LIQUIDITY FLOW (Ecosystem Integration)**
+```
+Protocol needs asset conversion → calls AutoSwap service → 
+ConversionEngine analyzes requirements → 
+RouteOptimizer finds most efficient path → 
+execute atomic conversion → 
+seamless protocol integration → update liquidity metrics
+```
+
+**4. UNXV BURN MECHANISM FLOW (Tokenomics)**
+```
+Accumulated fees from all protocols → 
+periodic burn trigger → calculate burn amount → 
+execute UNXV market purchase if needed → 
+burn UNXV tokens permanently → 
+update total supply → deflationary event logged
+```
+
+#### **Key System Interactions**
+
+- **AutoSwapRegistry**: Central coordination hub that manages all conversion routes, fee structures, slippage parameters, and cross-protocol integration settings
+- **RouteOptimizer**: Intelligent routing engine that analyzes liquidity across multiple sources to find the most cost-effective conversion paths
+- **ConversionEngine**: High-performance conversion processor that handles atomic swaps, batch processing, and cross-protocol asset management
+- **FeeCollector**: Automated fee aggregation system that collects fees from all protocols and triggers UNXV burn mechanisms
+- **DeepBook Integration**: Primary liquidity source leveraging DeepBook pools for efficient asset conversions
+- **Cross-Protocol Balances**: Sophisticated balance management ensuring seamless asset flow between all UnXversal protocols
+- **UNXV Burn Mechanism**: Automated deflationary system that permanently removes UNXV from circulation
+
+#### **Critical Design Patterns**
+
+1. **Universal Asset Conversion**: Any supported asset can be converted to any other supported asset through optimal routing
+2. **Atomic Cross-Protocol Operations**: All conversions are atomic across multiple protocols and liquidity sources
+3. **Intelligent Route Discovery**: Real-time analysis of multiple liquidity sources to minimize costs and slippage
+4. **Automated Fee Processing**: Background processing of fees from all protocols without user intervention
+5. **Deflationary Tokenomics**: Systematic UNXV burning creates deflationary pressure benefiting all token holders
+6. **Slippage Optimization**: Advanced algorithms to minimize slippage costs across complex multi-hop routes
+
+#### **Data Flow & State Management**
+
+- **Fee Aggregation**: All protocols → FeeCollector → batch processing → conversion optimization → UNXV burning
+- **Route Calculation**: Real-time liquidity monitoring → path optimization → cost analysis → optimal route selection
+- **Conversion Execution**: User request → route validation → atomic execution → settlement → fee collection
+- **Burn Mechanics**: Fee accumulation → burn triggers → market operations → token burning → supply updates
+- **Cross-Protocol Coordination**: Protocol requests → conversion processing → asset delivery → integration completion
+
+#### **Advanced Features & Mechanisms**
+
+- **Multi-Source Liquidity**: Aggregates liquidity from DeepBook, internal pools, and future external sources
+- **Gas Optimization**: Intelligent batching and route consolidation to minimize transaction costs
+- **MEV Protection**: Protection mechanisms to prevent MEV extraction during large conversions
+- **Slippage Protection**: Dynamic slippage limits based on market conditions and conversion size
+- **Conversion History**: Complete audit trail of all conversions for analytics and compliance
+- **Emergency Controls**: Circuit breakers and emergency stops for system protection
+
+#### **Integration Points with UnXversal Ecosystem**
+
+- **All Protocols**: Every UnXversal protocol integrates with AutoSwap for fee processing and asset conversion
+- **Synthetics**: Converts stability fees and minting fees to UNXV for burning
+- **DEX**: Processes all trading fees and converts to UNXV for deflationary pressure
+- **Lending**: Handles interest payments and liquidation fees conversion
+- **Options**: Converts premium and settlement fees to UNXV
+- **Perpetuals**: Processes funding fees and liquidation penalties
+- **Derivatives**: Handles all derivative trading fees and conversions
+
+#### **Tokenomics & Economic Mechanisms**
+
+- **Deflationary Pressure**: Systematic UNXV burning reduces total supply over time
+- **Fee Optimization**: UNXV holders receive discounts on conversion fees across all protocols
+- **Liquidity Incentives**: Efficient routing creates better prices for all ecosystem participants
+- **Value Accrual**: All protocol fees ultimately drive UNXV demand and burning
+- **Economic Flywheel**: More protocol usage → more fees → more UNXV burning → increased UNXV value
+
+#### **Risk Management & Safety**
+
+- **Slippage Controls**: Comprehensive slippage protection preventing unfavorable conversions
+- **Route Validation**: Multiple validation layers ensuring conversion safety and accuracy
+- **Emergency Procedures**: Immediate shutdown capabilities for system protection
+- **Audit Trail**: Complete transaction history for compliance and analysis
+- **Circuit Breakers**: Automatic halts during extreme market conditions
+
 ## Overview
 
 UnXversal Autoswap Contracts provide critical infrastructure for the entire UnXversal ecosystem, enabling automatic conversion of any supported asset to UNXV or USDC. These contracts serve as the backbone for fee processing, UNXV burn mechanisms, and cross-protocol asset conversion, ensuring seamless user experience and consistent tokenomics across all protocols.

@@ -1,5 +1,119 @@
 # UnXversal Spot DEX Protocol Design
 
+## System Architecture & User Flow Overview
+
+### How All Components Work Together
+
+The UnXversal Spot DEX operates as an intelligent aggregation layer that orchestrates complex trading operations across multiple systems, creating a seamless and sophisticated trading experience:
+
+#### **Core Object Hierarchy & Relationships**
+
+```
+DEXRegistry (Shared) ← Central trading configuration & routing logic
+    ↓ manages routing
+CrossAssetRouter (Service) → RouteCalculation ← path optimization
+    ↓ executes routes          ↓ analyzes paths
+OrderManager (Service) ← TradeProof validation
+    ↓ processes orders
+DeepBook Pools (Multiple) ← individual asset pairs
+    ↓ provides liquidity      ↓ executes trades
+BalanceManager ← holds user funds across all pools
+    ↓ validates
+MEVProtection (Service) → OrderExecution ← batch processing
+    ↓ shields from MEV        ↓ optimizes execution
+FeeOptimizer → AutoSwap ← UNXV conversions & burns
+```
+
+#### **Complete User Journey Flows**
+
+**1. SIMPLE TRADING FLOW (Single Asset Pair)**
+```
+User → submit trade order → OrderManager validates → 
+check DeepBook pool liquidity → apply MEV protection → 
+execute trade on DeepBook → collect fees → 
+UNXV discount applied → AutoSwap fee processing → 
+update user balances
+```
+
+**2. CROSS-ASSET ROUTING FLOW (Multi-Hop Trading)**
+```
+User → request trade (A→C) → CrossAssetRouter calculates paths → 
+find optimal route (A→B→C) → validate each hop → 
+execute atomic multi-hop trade → 
+Path: DeepBook Pool A/B → DeepBook Pool B/C → 
+aggregate slippage → collect fees from each hop → 
+final settlement
+```
+
+**3. ADVANCED ORDER FLOW (Stop-Loss, TWAP, etc.)**
+```
+User → submit advanced order → OrderManager stores order → 
+continuous monitoring → trigger condition met → 
+convert to market order → execute via standard flow → 
+notify user of execution → update order history
+```
+
+**4. MEV PROTECTION FLOW (Sandwich Attack Prevention)**
+```
+User → enable MEV protection → OrderManager batches orders → 
+time delay or private mempool → execute in batches → 
+prevent front-running → validate execution fairness → 
+complete trades
+```
+
+#### **Key System Interactions**
+
+- **DEXRegistry**: Central hub that maintains all supported trading pairs, cross-asset routing paths, fee structures, and system-wide trading parameters
+- **CrossAssetRouter**: Intelligent routing engine that calculates optimal paths for trades between any two assets, even if no direct pool exists
+- **OrderManager**: Sophisticated order lifecycle management supporting complex order types, order books, and execution strategies
+- **MEVProtection**: Advanced protection mechanisms including batch processing, time delays, and private mempools to shield users from MEV attacks
+- **DeepBook Integration**: Direct integration with DeepBook's order matching engine, utilizing multiple pools for cross-asset routing
+- **BalanceManager**: Sui's native balance management ensuring atomic operations across multiple pool interactions
+- **FeeOptimizer**: Intelligent fee payment optimization automatically selecting the most cost-effective fee payment method
+
+#### **Critical Design Patterns**
+
+1. **Multi-Pool Orchestration**: Coordinates trades across multiple DeepBook pools to enable any-to-any asset trading
+2. **Atomic Multi-Hop**: All cross-asset trades are atomic - either the entire route succeeds or everything reverts
+3. **Intelligent Route Discovery**: Pre-computed and dynamically calculated routing paths with real-time liquidity analysis
+4. **MEV Protection Layers**: Multiple protection mechanisms working together to prevent various forms of MEV extraction
+5. **Order Type Abstraction**: Complex order types implemented as state machines on top of DeepBook's simple order matching
+6. **Fee Optimization**: Dynamic fee payment selection based on user holdings, market conditions, and cost analysis
+
+#### **Data Flow & State Management**
+
+- **Route Calculation**: Real-time liquidity analysis → path optimization → execution cost estimation → route selection
+- **Order Management**: Order submission → validation → storage → monitoring → execution → settlement → history
+- **MEV Protection**: Order analysis → risk assessment → protection application → batch processing → fair execution
+- **Fee Processing**: Trade execution → fee calculation → UNXV discount application → AutoSwap processing → burning
+- **Cross-Asset Execution**: Route planning → pool sequencing → atomic execution → slippage aggregation → final settlement
+
+#### **Advanced Features & Mechanisms**
+
+- **Slippage Protection**: Intelligent slippage calculation across multi-hop routes with user-defined tolerance levels
+- **Liquidity Aggregation**: Real-time analysis of liquidity across all relevant pools for optimal execution
+- **Gas Optimization**: Batch processing and transaction optimization to minimize gas costs for complex trades
+- **Time-Weighted Average Price (TWAP)**: Large orders broken into smaller chunks executed over time to minimize market impact
+- **Copy Trading**: Users can copy successful traders' strategies with automatic trade replication
+- **Smart Order Routing**: AI-powered routing that considers fees, slippage, timing, and market conditions
+
+#### **Integration Points with UnXversal Ecosystem**
+
+- **Synthetics**: All synthetic assets are tradeable with automatic routing to/from USDC collateral
+- **AutoSwap**: All trading fees automatically processed and UNXV burned for deflationary pressure
+- **Options**: Option exercise can trigger automatic DEX trades for underlying asset delivery
+- **Perpetuals**: Funding rate arbitrage and position adjustment via automated DEX trades
+- **Lending**: Liquidated collateral automatically routed through DEX for debt repayment
+- **Liquid Staking**: stSUI tokens seamlessly tradeable against all other assets
+
+#### **Risk Management & Safety**
+
+- **Circuit Breakers**: Automatic trading halts during extreme market conditions or system anomalies
+- **Position Limits**: User-defined and system-wide position limits to prevent excessive exposure
+- **Oracle Integration**: Real-time price validation to prevent trades at manipulated prices
+- **Audit Trail**: Complete transaction history and trade attribution for compliance and analysis
+- **Emergency Controls**: Multi-signature emergency controls for system protection
+
 ## Overview
 
 UnXversal Spot DEX is an advanced trading aggregation layer built on top of DeepBook, providing sophisticated order types, cross-asset routing, MEV protection, and seamless integration with the broader UnXversal ecosystem. It serves as the foundational trading infrastructure for all other UnXversal protocols.

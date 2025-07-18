@@ -1,8 +1,77 @@
-# UnXversal Liquidity Provisioning Pools Protocol Design
+# UnXversal Automated Liquidity Provisioning Pools Protocol Design
 
 ## Overview
 
-UnXversal Liquidity Provisioning Pools represents the culmination of sophisticated DeFi infrastructure, providing automated market making, intelligent liquidity optimization, and comprehensive LP strategies across the entire UnXversal ecosystem. The protocol features impermanent loss protection, yield maximization strategies, cross-protocol liquidity routing, and institutional-grade portfolio management for liquidity providers.
+UnXversal Automated Liquidity Provisioning Pools represents the culmination of sophisticated DeFi infrastructure, providing **fully automated** market making, AI-powered liquidity optimization, and comprehensive automated LP strategies across the entire UnXversal ecosystem. The protocol features impermanent loss protection, yield maximization strategies, cross-protocol liquidity routing, and institutional-grade portfolio management for liquidity providers.
+
+**Protocol Distinction**: This is the **automated AI-powered** liquidity provisioning protocol. For manual user-controlled liquidity management that fulfills the DeepBook Grant RFP requirements, see **UnXversal Manual Liquidity Management**. For trader-managed vaults with profit sharing, see **UnXversal Trader Vaults**.
+
+## System Architecture & User Flow Overview
+
+### How All Components Work Together
+
+The UnXversal Automated Liquidity Provisioning Pools protocol creates an intelligent, fully-automated LP ecosystem that optimizes liquidity provision across multiple protocols using AI-powered strategies, sophisticated risk management, and cross-protocol yield optimization:
+
+#### **Core Object Hierarchy & Relationships**
+
+```
+LiquidityProvisioningRegistry (Shared) ← Central AI configuration & optimization
+    ↓ manages automated pools
+LiquidityPool<T> (Shared) → AI Strategy Engine ← automated optimization
+    ↓ tracks pooled liquidity     ↓ continuously optimizes
+UserLPPosition (individual) ← user deposits & yields
+    ↓ validates participation
+ILProtectionEngine (Service) → YieldOptimizer ← cross-protocol farming
+    ↓ mitigates impermanent loss  ↓ maximizes returns
+RiskManager ← automated risk monitoring
+    ↓ enforces AI-driven controls
+Cross-Protocol Router → AutoSwap ← intelligent asset management
+    ↓ enables multi-protocol LP   ↓ handles rebalancing
+UNXV Integration → automated LP benefits & institutional access
+```
+
+#### **Complete User Journey Flows**
+
+**1. AUTOMATED LP DEPOSIT FLOW (AI-Optimized Entry)**
+```
+User → deposits assets → AI Strategy Engine analyzes best deployment → 
+automatically optimizes across protocols → deploys to optimal pools → 
+starts earning optimized yields → continuous AI rebalancing → 
+impermanent loss protection activated
+```
+
+**2. AI OPTIMIZATION FLOW (Continuous Strategy Adjustment)**
+```
+AI Strategy Engine → monitors all protocol yields → 
+analyzes market conditions → calculates optimal allocation → 
+automatically rebalances positions → 
+optimizes for risk-adjusted returns → no user intervention required
+```
+
+**3. IL PROTECTION FLOW (Automated Risk Mitigation)**
+```
+ILProtectionEngine → monitors price movements → 
+detects impermanent loss risk → automatically hedges positions → 
+deploys protection strategies → maintains yield optimization → 
+protects user capital automatically
+```
+
+**4. CROSS-PROTOCOL YIELD FLOW (Multi-Protocol Optimization)**
+```
+YieldOptimizer → scans all UnXversal protocols → 
+identifies best yield opportunities → automatically migrates liquidity → 
+compounds yields across protocols → 
+maximizes total return automatically → continuous optimization
+```
+
+#### **Key System Interactions**
+
+- **AI Strategy Engine**: Sophisticated machine learning system continuously optimizing liquidity deployment across all available protocols and markets
+- **ILProtectionEngine**: Advanced impermanent loss protection using hedging strategies and insurance mechanisms
+- **YieldOptimizer**: Cross-protocol yield farming system automatically finding and capturing the best yield opportunities
+- **Cross-Protocol Router**: Intelligent routing system managing liquidity across all UnXversal protocols seamlessly
+- **RiskManager**: AI-powered risk management system monitoring and mitigating risks automatically
+- **LiquidityProvisioningRegistry**: Central coordination hub managing all automated LP strategies and optimizations
 
 ## Core Purpose and Features
 

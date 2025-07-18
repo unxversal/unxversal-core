@@ -1,5 +1,73 @@
 # UnXversal Gas Futures Protocol Design
 
+## System Architecture & User Flow Overview
+
+### How All Components Work Together
+
+The UnXversal Gas Futures protocol creates the world's first blockchain gas price derivatives market, enabling sophisticated hedging of operational costs and speculative trading on Sui network gas prices through innovative ML-powered prediction and settlement mechanisms:
+
+#### **Core Object Hierarchy & Relationships**
+
+```
+GasFuturesRegistry (Shared) ← Central gas market configuration & prediction models
+    ↓ manages contracts
+GasFuturesContract (Shared) → GasPriceOracle ← real-time gas price feeds
+    ↓ tracks positions           ↓ provides pricing data
+GasPosition (individual) ← user hedging & speculation
+    ↓ validates requirements
+ProtocolHedgeManager (Service) → ML Prediction Engine ← gas price forecasting
+    ↓ manages protocol hedging    ↓ analyzes patterns
+SettlementEngine ← processes gas-based settlement
+    ↓ executes via
+Shared Gas Pools → AutoSwap ← gas cost optimization
+    ↓ provides efficiency       ↓ handles conversions
+UNXV Integration → enhanced gas features & discounts
+```
+
+#### **Complete User Journey Flows**
+
+**1. GAS HEDGING FLOW (Protocol Operational Costs)**
+```
+Protocol → analyzes gas cost exposure → 
+ML Prediction Engine forecasts gas prices → 
+ProtocolHedgeManager calculates hedge ratio → 
+purchase gas futures contracts → 
+lock in future gas costs → reduce operational uncertainty
+```
+
+**2. GAS SPECULATION FLOW (Trading Gas Volatility)**
+```
+Trader → analyzes gas price trends → ML predictions provide insights → 
+select gas futures contracts → place directional bets → 
+monitor gas price movements → settle contracts → 
+profit from gas price predictions
+```
+
+**3. SHARED GAS POOL FLOW (Cross-Protocol Optimization)**
+```
+Multiple protocols → contribute to shared gas pool → 
+pool manager optimizes gas usage → batch transactions → 
+distribute gas savings → reduce individual protocol costs → 
+improve overall ecosystem efficiency
+```
+
+**4. GAS SETTLEMENT FLOW (Contract Expiration)**
+```
+Contract approaches expiration → GasPriceOracle calculates average gas → 
+determine settlement gas price → cash settlement based on difference → 
+AutoSwap processes payments → update gas market statistics → 
+ML engine learns from outcomes
+```
+
+#### **Key System Interactions**
+
+- **GasFuturesRegistry**: Central market infrastructure managing gas futures contracts, prediction models, and settlement mechanisms
+- **GasPriceOracle**: Real-time gas price monitoring and historical data collection for accurate settlement pricing
+- **ML Prediction Engine**: Advanced machine learning system analyzing gas price patterns and providing forecasting insights
+- **ProtocolHedgeManager**: Automated hedging system for protocols to manage operational gas cost exposure
+- **Shared Gas Pools**: Cross-protocol gas optimization enabling collective gas efficiency and cost savings
+- **SettlementEngine**: Automated settlement system processing gas futures based on actual Sui network gas prices
+
 ## Overview
 
 UnXversal Gas Futures introduces a revolutionary derivatives product for hedging Sui blockchain gas price risk, enabling protocols, institutions, and power users to manage computational cost uncertainty. This innovative protocol creates the first comprehensive gas price derivatives market, providing price discovery, hedging mechanisms, and sophisticated risk management tools for blockchain operational costs.

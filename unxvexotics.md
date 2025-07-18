@@ -1,5 +1,75 @@
 # UnXversal Exotic Derivatives Protocol Design
 
+## System Architecture & User Flow Overview
+
+### How All Components Work Together
+
+The UnXversal Exotic Derivatives protocol creates sophisticated financial instruments with custom payoff structures, enabling advanced trading strategies through barrier options, power perpetuals, range accruals, and bespoke derivative products:
+
+#### **Core Object Hierarchy & Relationships**
+
+```
+ExoticOptionsRegistry (Shared) ← Central exotic derivatives configuration
+    ↓ manages exotic instruments
+ExoticOptionsMarket<T> (Shared) → CustomPayoffEngine ← programmable payoffs
+    ↓ tracks exotic positions      ↓ calculates complex payoffs
+ExoticPosition (individual) ← user exotic holdings & strategies
+    ↓ validates complex structures
+MLPricingEngine (Service) → AdvancedGreeksCalculator ← exotic risk metrics
+    ↓ prices complex instruments   ↓ calculates exotic Greeks
+BarrierMonitor ← tracks barrier events & knockouts
+    ↓ monitors conditions
+StructuredProductBuilder → AutoSwap ← exotic settlements
+    ↓ creates bespoke products     ↓ handles complex payouts
+UNXV Integration → institutional exotic access & benefits
+```
+
+#### **Complete User Journey Flows**
+
+**1. BARRIER OPTION FLOW (Knockout/Knockin)**
+```
+User → selects barrier option (KO_CALL/KI_PUT) → 
+defines barrier level & payoff → validate parameters → 
+BarrierMonitor tracks barrier events → 
+option activates/deactivates based on barriers → 
+exotic settlement at expiration → complex payoff calculation
+```
+
+**2. POWER PERPETUAL FLOW (Leveraged Exposure)**
+```
+User → chooses power perpetual (PWR_PERP_n) → 
+selects power coefficient (n=2,3,etc.) → 
+MLPricingEngine calculates funding → 
+position tracks S^n exposure → 
+funding adjustments for convexity → variance trading strategy
+```
+
+**3. RANGE ACCRUAL FLOW (Sideways Market Strategy)**
+```
+User → sets up range accrual (RANGE_ACC) → 
+defines upper/lower bounds → chooses coupon rate → 
+monitor underlying price → earn coupon while in range → 
+accumulate yield from sideways markets → settlement based on time in range
+```
+
+**4. STRUCTURED PRODUCT FLOW (Bespoke Instruments)**
+```
+Institutional user → requests custom payoff → 
+StructuredProductBuilder designs instrument → 
+CustomPayoffEngine implements logic → 
+validate complex payoff structure → 
+deploy bespoke derivative → institutional settlement
+```
+
+#### **Key System Interactions**
+
+- **ExoticOptionsRegistry**: Central management system for all exotic derivative types, payoff structures, and institutional configurations
+- **CustomPayoffEngine**: Programmable payoff calculation system enabling arbitrary mathematical payoff structures
+- **MLPricingEngine**: Advanced machine learning pricing models for complex derivatives with path-dependent features
+- **BarrierMonitor**: Real-time monitoring system tracking barrier events, knockouts, and path-dependent triggers
+- **StructuredProductBuilder**: Institutional-grade system for creating bespoke derivative products with custom terms
+- **AdvancedGreeksCalculator**: Sophisticated risk calculation system handling exotic Greeks and higher-order risk metrics
+
 ## Overview
 
 UnXversal Exotic Derivatives represents the pinnacle of sophisticated DeFi infrastructure, providing advanced structured products, custom payoff mechanisms, and exotic derivatives that enable institutional-grade risk management and speculation strategies. This protocol completes the UnXversal ecosystem with cutting-edge derivatives featuring barrier options, power perpetuals, range accrual notes, and bespoke structured products.
