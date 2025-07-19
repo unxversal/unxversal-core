@@ -1,0 +1,26 @@
+[package]
+name = "unxv_lending"
+edition = "2024.beta"
+license = "MIT"
+authors = ["UnXversal Team"]
+
+[dependencies]
+# Pyth Network - Oracle price feeds
+Pyth = { git = "https://github.com/pyth-network/pyth-crosschain.git", subdir = "target_chains/sui/contracts", rev = "sui-contract-testnet" }
+
+# Wormhole - Required by Pyth
+Wormhole = { git = "https://github.com/wormhole-foundation/wormhole.git", subdir = "sui/wormhole", rev = "sui/testnet" }
+
+# DeepBook - DEX and flash loan infrastructure  
+deepbook = { git = "https://github.com/MystenLabs/deepbookv3.git", subdir = "packages/deepbook", rev = "main" }
+
+[addresses]
+unxv_lending = "0x0"
+
+# Named addresses for cross-protocol integration
+[dev-dependencies]
+# Additional test dependencies can be added here
+
+[dev-addresses]
+# Development addresses for testing
+
