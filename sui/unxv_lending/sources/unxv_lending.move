@@ -208,6 +208,7 @@ module unxv_lending::unxv_lending {
         total_rewards_distributed: u64,
         last_reward_timestamp: u64,
         reward_debt: Table<address, u64>,
+        vault_balance: Balance<UNXV>, // Store staked UNXV tokens
     }
     
     /// UNXV staking position
@@ -456,6 +457,7 @@ module unxv_lending::unxv_lending {
             total_rewards_distributed: 0,
             last_reward_timestamp: 0, // Set to 0 for initialization
             reward_debt: table::new(ctx),
+            vault_balance: balance::zero<UNXV>(),
         };
         
         // Initialize stake tier multipliers
@@ -607,6 +609,19 @@ module unxv_lending::unxv_lending {
         balance::join(&mut pool.cash, coin::into_balance(supply_amount));
         pool.total_supply = pool.total_supply + amount;
         
+        // Update utilization rate and interest rates to reflect new supply
+        pool.utilization_rate = if (pool.total_supply == 0) {
+            0
+        } else {
+            (pool.total_borrows * BASIS_POINTS) / pool.total_supply
+        };
+        
+        // Update current rates based on new utilization
+        let rate_model = table::borrow(&registry.interest_rate_models, pool.asset_name);
+        let (supply_rate, borrow_rate) = calculate_interest_rates_internal(pool.utilization_rate, rate_model);
+        pool.current_supply_rate = supply_rate;
+        pool.current_borrow_rate = borrow_rate;
+        
         // Update user position
         if (table::contains(&account.supply_balances, pool.asset_name)) {
             let position = table::borrow_mut(&mut account.supply_balances, pool.asset_name);
@@ -695,6 +710,19 @@ module unxv_lending::unxv_lending {
         pool.total_supply = pool.total_supply - withdraw_amount;
         let withdrawn_balance = balance::split(&mut pool.cash, withdraw_amount);
         
+        // Update utilization rate and interest rates to reflect reduced supply
+        pool.utilization_rate = if (pool.total_supply == 0) {
+            0
+        } else {
+            (pool.total_borrows * BASIS_POINTS) / pool.total_supply
+        };
+        
+        // Update current rates based on new utilization
+        let rate_model = table::borrow(&registry.interest_rate_models, pool.asset_name);
+        let (supply_rate, borrow_rate) = calculate_interest_rates_internal(pool.utilization_rate, rate_model);
+        pool.current_supply_rate = supply_rate;
+        pool.current_borrow_rate = borrow_rate;
+        
         // Update account health and check if withdrawal is safe
         update_account_health(account, registry, price_feeds, clock);
         
@@ -761,6 +789,19 @@ module unxv_lending::unxv_lending {
         pool.total_borrows = pool.total_borrows + borrow_amount;
         let borrowed_balance = balance::split(&mut pool.cash, borrow_amount);
         
+        // Update utilization rate and interest rates to reflect new borrow amount
+        pool.utilization_rate = if (pool.total_supply == 0) {
+            0
+        } else {
+            (pool.total_borrows * BASIS_POINTS) / pool.total_supply
+        };
+        
+        // Update current rates based on new utilization
+        let rate_model = table::borrow(&registry.interest_rate_models, pool.asset_name);
+        let (supply_rate, borrow_rate) = calculate_interest_rates_internal(pool.utilization_rate, rate_model);
+        pool.current_supply_rate = supply_rate;
+        pool.current_borrow_rate = borrow_rate;
+        
         // Update and check account health
         update_account_health(account, registry, price_feeds, clock);
         assert!(account.health_factor >= MIN_HEALTH_FACTOR, E_HEALTH_FACTOR_TOO_LOW);
@@ -814,6 +855,19 @@ module unxv_lending::unxv_lending {
         // Update pool
         pool.total_borrows = pool.total_borrows - actual_repay;
         balance::join(&mut pool.cash, coin::into_balance(repay_amount));
+        
+        // Update utilization rate and interest rates to reflect reduced borrows
+        pool.utilization_rate = if (pool.total_supply == 0) {
+            0
+        } else {
+            (pool.total_borrows * BASIS_POINTS) / pool.total_supply
+        };
+        
+        // Update current rates based on new utilization
+        let rate_model = table::borrow(&registry.interest_rate_models, pool.asset_name);
+        let (supply_rate, borrow_rate) = calculate_interest_rates_internal(pool.utilization_rate, rate_model);
+        pool.current_supply_rate = supply_rate;
+        pool.current_borrow_rate = borrow_rate;
         
         // Update account health
         let old_health = account.health_factor;
@@ -1015,8 +1069,8 @@ module unxv_lending::unxv_lending {
             table::add(&mut vault.staked_unxv, account.owner, stake_position);
         };
         
-        // Burn the staked UNXV (or store in vault)
-        balance::destroy_zero(coin::into_balance(stake_amount));
+        // Store the staked UNXV in vault
+        balance::join(&mut vault.vault_balance, coin::into_balance(stake_amount));
         
         let benefits = calculate_tier_benefits(new_tier);
         
