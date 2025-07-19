@@ -8,87 +8,163 @@ The UnXversal Gas Futures protocol creates the world's first blockchain gas pric
 
 #### **Core Object Hierarchy & Relationships**
 
+**ON-CHAIN OBJECTS:**
 ```
-GasFuturesRegistry (Shared) ← Central gas market configuration & prediction models
+GasFuturesRegistry (Shared) ← Central gas market configuration for sponsored transaction era
     ↓ manages contracts
-GasFuturesContract (Shared) → GasPriceOracle ← real-time gas price feeds
-    ↓ tracks positions           ↓ provides pricing data
-GasPosition (individual) ← user hedging & speculation
-    ↓ validates requirements
-ProtocolHedgeManager (Service) → ML Prediction Engine ← gas price forecasting
-    ↓ manages protocol hedging    ↓ analyzes patterns
-SettlementEngine ← processes gas-based settlement
-    ↓ executes via
-Shared Gas Pools → AutoSwap ← gas cost optimization
-    ↓ provides efficiency       ↓ handles conversions
-UNXV Integration → enhanced gas features & discounts
+GasFuturesContract (Shared) → GasPosition (individual) ← gas station & sponsor hedging
+    ↓ tracks contract terms     ↓ tracks hedging exposure
+SettlementEngine ← processes gas-based settlement using TWAP
+    ↓ executes settlement
+AutoSwap Integration ← handles settlement payments & UNXV conversions
+```
+
+**OFF-CHAIN SERVICES (CLI/Server):**
+```
+GasPriceOracle → GasStationAnalytics ← sponsored transaction volume tracking
+    ↓ monitors Sui gas prices   ↓ analyzes gas station costs
+ML Prediction Engine → SponsorRiskProfiler ← risk assessment for sponsorship models
+    ↓ forecasts gas trends      ↓ calculates optimal hedging
+EnterpriseHedgingService → ContractCreationBot ← automated market creation
+    ↓ manages corporate hedging ↓ creates gas futures contracts
 ```
 
 #### **Complete User Journey Flows**
 
-**1. GAS HEDGING FLOW (Protocol Operational Costs)**
+**1. GAS STATION HEDGING FLOW (Sponsored Transaction Provider)**
 ```
-Protocol → analyzes gas cost exposure → 
-ML Prediction Engine forecasts gas prices → 
-ProtocolHedgeManager calculates hedge ratio → 
-purchase gas futures contracts → 
-lock in future gas costs → reduce operational uncertainty
-```
-
-**2. GAS SPECULATION FLOW (Trading Gas Volatility)**
-```
-Trader → analyzes gas price trends → ML predictions provide insights → 
-select gas futures contracts → place directional bets → 
-monitor gas price movements → settle contracts → 
-profit from gas price predictions
+[OFF-CHAIN] Gas Station analyzes sponsored transaction volume → 
+[OFF-CHAIN] ML Prediction Engine forecasts gas costs → 
+[OFF-CHAIN] calculate optimal hedge ratio for expected sponsorship load → 
+[ON-CHAIN] purchase gas futures contracts → 
+[ON-CHAIN] lock in predictable gas costs → reduce sponsored transaction risk
 ```
 
-**3. SHARED GAS POOL FLOW (Cross-Protocol Optimization)**
+**2. SPONSOR BUDGET PROTECTION FLOW (App-Specific Sponsorship)**
 ```
-Multiple protocols → contribute to shared gas pool → 
-pool manager optimizes gas usage → batch transactions → 
-distribute gas savings → reduce individual protocol costs → 
-improve overall ecosystem efficiency
+[OFF-CHAIN] Web3 Company plans user acquisition campaign → 
+[OFF-CHAIN] estimate sponsored transaction volume and gas exposure → 
+[OFF-CHAIN] GasStationAnalytics provides cost projections → 
+[ON-CHAIN] purchase targeted gas futures for campaign period → 
+[ON-CHAIN] achieve predictable user acquisition costs
 ```
 
-**4. GAS SETTLEMENT FLOW (Contract Expiration)**
+**3. WILDCARD SPONSORSHIP HEDGING FLOW (Unrestricted Sponsorship)**
 ```
-Contract approaches expiration → GasPriceOracle calculates average gas → 
-determine settlement gas price → cash settlement based on difference → 
-AutoSwap processes payments → update gas market statistics → 
-ML engine learns from outcomes
+[OFF-CHAIN] Protocol offers wildcard gas payments to users → 
+[OFF-CHAIN] monitor gas usage patterns and volatility → 
+[OFF-CHAIN] dynamic hedge adjustment based on usage → 
+[ON-CHAIN] continuous gas futures positions → 
+[ON-CHAIN] risk-managed unlimited sponsorship offering
+```
+
+**4. ENTERPRISE GAS MANAGEMENT FLOW (Corporate Sponsored Transactions)**
+```
+[OFF-CHAIN] Enterprise analyzes employee/customer transaction patterns → 
+[OFF-CHAIN] SponsorRiskProfiler calculates optimal hedging strategy → 
+[OFF-CHAIN] seasonal and usage-based forecasting → 
+[ON-CHAIN] enterprise-grade gas futures portfolio → 
+[ON-CHAIN] predictable operational gas budgets
 ```
 
 #### **Key System Interactions**
 
-- **GasFuturesRegistry**: Central market infrastructure managing gas futures contracts, prediction models, and settlement mechanisms
-- **GasPriceOracle**: Real-time gas price monitoring and historical data collection for accurate settlement pricing
-- **ML Prediction Engine**: Advanced machine learning system analyzing gas price patterns and providing forecasting insights
-- **ProtocolHedgeManager**: Automated hedging system for protocols to manage operational gas cost exposure
-- **Shared Gas Pools**: Cross-protocol gas optimization enabling collective gas efficiency and cost savings
+**ON-CHAIN COMPONENTS:**
+- **GasFuturesRegistry**: Central market infrastructure managing gas futures contracts and settlement mechanisms
+- **GasFuturesContract**: Individual futures contracts with fixed settlement parameters
+- **GasPosition**: User positions tracking sponsored transaction hedging exposure
 - **SettlementEngine**: Automated settlement system processing gas futures based on actual Sui network gas prices
+
+**OFF-CHAIN SERVICES:**
+- **GasPriceOracle**: Real-time Sui network gas price monitoring with sponsored transaction volume tracking
+- **ML Prediction Engine**: Advanced forecasting system analyzing sponsored transaction patterns and gas price dynamics
+- **GasStationAnalytics**: Specialized analytics for gas station operators and sponsored transaction providers
+- **SponsorRiskProfiler**: Risk assessment system for different sponsorship models and usage patterns
+- **EnterpriseHedgingService**: Corporate-grade hedging strategies for large-scale sponsored transaction programs
 
 ## Overview
 
-UnXversal Gas Futures introduces a revolutionary derivatives product for hedging Sui blockchain gas price risk, enabling protocols, institutions, and power users to manage computational cost uncertainty. This innovative protocol creates the first comprehensive gas price derivatives market, providing price discovery, hedging mechanisms, and sophisticated risk management tools for blockchain operational costs.
+UnXversal Gas Futures introduces a revolutionary derivatives product for hedging Sui blockchain gas price risk, with **special focus on sponsored transaction providers** and institutional gas cost management. This innovative protocol addresses the new risk profile created by Sui's sponsored transactions, where gas stations and sponsors assume concentrated gas cost exposure on behalf of users.
 
 ## Core Purpose and Innovation
 
 ### Primary Functions
-- **Gas Price Futures**: Fixed-price gas contracts for future execution periods
-- **Gas Cost Hedging**: Protect against gas price volatility for protocols and institutions
-- **Gas Price Discovery**: Transparent forward-looking gas price expectations
-- **Computational Budget Planning**: Predictable gas costs for large-scale operations
-- **Cross-Protocol Gas Optimization**: Shared gas cost management across UnXversal ecosystem
-- **Institutional Gas Management**: Enterprise-grade gas cost planning and hedging
+- **Sponsored Transaction Hedging**: Specialized hedging for gas stations and transaction sponsors
+- **Gas Station Risk Management**: Protect gas stations from volatile operational costs
+- **Sponsor Budget Protection**: Enable sponsors to budget predictable gas costs for user acquisition
+- **App-Specific Sponsorship Futures**: Targeted hedging for protocol-specific sponsored transactions
+- **Wildcard Sponsorship Insurance**: Risk management for unrestricted transaction sponsorship
+- **Enterprise Gas Management**: Large-scale gas cost planning for Web3 companies offering free experiences
 
-### Revolutionary Features
-- **World's First Gas Futures**: Pioneer gas price derivatives on blockchain
-- **Real-time Gas Analytics**: Comprehensive gas usage and price forecasting
-- **Protocol Integration**: Built-in gas hedging for all UnXversal protocols
-- **Institutional Solutions**: Large-scale gas cost management for enterprises
-- **Seasonal Patterns**: Capture and trade seasonal gas price variations
-- **Network Congestion Hedging**: Protect against network congestion spikes
+### Revolutionary Features for Sponsored Transaction Era
+- **World's First Gas Futures**: Pioneer gas price derivatives adapted for sponsored transaction ecosystem
+- **Gas Station Analytics**: Specialized analytics for sponsored transaction volume and costs
+- **Sponsor Risk Profiles**: Tailored risk management for different sponsorship models
+- **Protocol Integration**: Built-in gas hedging for all UnXversal protocols offering sponsored transactions
+- **User Acquisition Hedging**: Predictable costs for Web3 onboarding and user acquisition campaigns
+- **Network Congestion Protection**: Specialized protection against gas spikes during high-sponsored-volume periods
+
+### Sponsored Transaction Use Cases
+- **Gaming Studios**: Hedge gas costs for free-to-play blockchain gaming experiences
+- **DeFi Protocols**: Budget gas costs for user onboarding and gasless experiences
+- **Social Platforms**: Predictable gas costs for social interaction sponsorship
+- **Educational Platforms**: Stable gas budgets for learning and tutorial transactions
+- **Enterprise Applications**: Corporate gas cost management for employee and customer transactions
+
+## Sponsored Transaction Integration
+
+### Why Sponsored Transactions Change Everything
+
+Sui's sponsored transactions create a **fundamental shift in gas cost risk distribution**. Instead of individual users bearing gas costs, **gas stations and sponsors now assume concentrated gas price exposure**. This creates new categories of market participants who desperately need gas price hedging:
+
+#### **New Risk Profiles Created by Sponsored Transactions:**
+
+1. **Gas Station Operators**
+   - **High Volume, Concentrated Risk**: Process thousands of sponsored transactions daily
+   - **Unpredictable Cost Structure**: Gas prices can spike unexpectedly during network congestion
+   - **Thin Margins**: Must balance competitive sponsorship fees with volatile operational costs
+   - **Capital Requirements**: Need significant gas reserves to maintain service availability
+
+2. **Protocol Sponsors (App-Specific)**
+   - **User Acquisition Costs**: Gas expenses directly impact marketing budgets and user acquisition ROI
+   - **Seasonal Volatility**: Gaming protocols face higher gas costs during peak usage
+   - **Budget Planning**: Need predictable gas costs for annual planning and investor reporting
+   - **Competitive Pressure**: Must maintain gasless experiences while managing costs
+
+3. **Enterprise Wildcard Sponsors**
+   - **Unlimited Exposure**: Offer unrestricted gas payments to users
+   - **Abuse Risk**: Vulnerable to gas cost attacks and unexpected usage spikes
+   - **Compliance Requirements**: Need predictable costs for corporate budgeting and SOX compliance
+   - **Scale Economics**: Large enterprises need sophisticated hedging for operational efficiency
+
+#### **Sponsored Transaction Gas Futures Products:**
+
+1. **Gas Station Hedging Contracts**
+   - Specialized futures designed for gas station operational hedging
+   - Volume-weighted pricing based on sponsored transaction throughput
+   - Automatic adjustment for gas station operational patterns
+
+2. **App-Specific Sponsorship Futures**
+   - Targeted hedging for protocol-specific sponsored transactions
+   - Seasonal adjustment for gaming, social, and educational use cases
+   - User acquisition campaign protection
+
+3. **Enterprise Wildcard Insurance**
+   - Comprehensive hedging for unrestricted sponsored transaction programs
+   - Abuse protection and usage spike coverage
+   - Corporate-grade risk management and reporting
+
+4. **Gas Station Liquidity Futures**
+   - Hedge against gas reserve requirements and capital costs
+   - Protect against network congestion requiring increased reserves
+   - Maintain service availability during market stress
+
+#### **Sponsored Transaction Risk Mitigation:**
+
+- **Client Equivocation Protection**: Hedge against gas costs from malicious users equivocating gas station transactions
+- **Censorship Risk Management**: Alternative gas cost management when gas stations face potential censorship
+- **Network Congestion Hedging**: Specialized protection during high sponsored transaction volume periods
+- **Abuse Pattern Hedging**: Protection against coordinated attacks on sponsored transaction systems
 
 ## Core Architecture
 
@@ -100,83 +176,88 @@ struct GasFuturesRegistry has key {
     id: UID,
     
     // Contract management
-    active_gas_contracts: Table<String, GasContract>,    // Contract symbol -> contract
-    contract_maturities: Table<u64, vector<String>>,     // Timestamp -> contracts expiring
-    gas_settlement_schedule: SettlementSchedule,         // Settlement timing
+    active_gas_contracts: Table<String, GasFuturesContract>, // Contract symbol -> contract
     
-    // Gas price tracking
-    historical_gas_prices: vector<GasPricePoint>,        // Historical gas price data
-    gas_price_feeds: Table<String, ID>,                  // Gas price oracle feeds
-    network_metrics: NetworkMetrics,                     // Network performance data
+    // Sponsored transaction focus
+    gas_station_contracts: Table<address, vector<ID>>,   // Gas station -> their hedging contracts
+    sponsor_contracts: Table<address, vector<ID>>,       // Sponsors -> their hedging contracts
+    contract_types: VecSet<String>,                      // "GAS_STATION", "APP_SPONSOR", "WILDCARD", "ENTERPRISE"
     
-    // Market structure
-    contract_specifications: Table<String, GasContractSpec>, // Contract specifications
-    trading_sessions: Table<String, TradingSession>,     // Trading hours and rules
-    settlement_procedures: SettlementProcedures,        // How contracts settle
-    
-    // Risk management
-    position_limits: Table<String, GasPositionLimits>,  // Position size limits
-    margin_requirements: Table<String, GasMarginConfig>, // Margin for gas futures
-    circuit_breakers: Table<String, GasCircuitBreaker>, // Trading halts
-    
-    // Protocol integration
-    protocol_gas_usage: Table<String, ProtocolGasUsage>, // Protocol gas consumption
-    bulk_gas_accounts: Table<address, BulkGasAccount>,   // Large users
-    gas_subsidy_programs: Table<String, GasSubsidy>,     // Gas subsidies
-    
-    // Fee structure
-    trading_fees: GasTradingFees,                        // Trading fee structure
-    settlement_fees: GasSettlementFees,                  // Settlement fees
-    
-    // UNXV integration
-    unxv_gas_benefits: Table<u64, GasTierBenefits>,     // UNXV tier benefits
-    fee_collection: FeeCollectionConfig,                 // Fee processing
+    // Basic fee structure
+    trading_fee: u64,                                    // Base trading fee
+    unxv_discount: u64,                                  // UNXV holder discount
     
     // Emergency controls
     emergency_settlement: bool,                          // Emergency early settlement
-    network_emergency_mode: bool,                        // Network congestion emergency
     admin_cap: Option<AdminCap>,
 }
 
-struct GasContract has store {
-    contract_symbol: String,                             // "GAS-Q4-2024", "GAS-DEC-2024"
-    contract_type: String,                               // "MONTHLY", "QUARTERLY", "WEEKLY"
+#### 2. GasFuturesContract (Shared Object)
+```move
+struct GasFuturesContract has key {
+    id: UID,
+    contract_symbol: String,                             // "GAS-STATION-DEC-2024", "APP-SPONSOR-Q1-2025"
+    contract_type: String,                               // "GAS_STATION", "APP_SPONSOR", "WILDCARD", "ENTERPRISE"
     
     // Contract specifications
+    expiry_timestamp: u64,                               // Contract expiration
     settlement_period_start: u64,                        // Settlement period start
     settlement_period_end: u64,                          // Settlement period end
-    last_trading_day: u64,                              // Last day to trade
-    contract_size: u64,                                 // Gas units per contract (1M gas)
-    tick_size: u64,                                     // Minimum price increment
     
-    // Gas metrics
-    reference_gas_price: u64,                           // Reference price in MIST per gas
-    settlement_method: String,                          // "TWAP", "VWAP", "AVERAGE"
-    settlement_calculation_period: u64,                 // Settlement averaging period
-    
-    // Market data
-    current_price: u64,                                 // Current futures price
-    daily_high: u64,                                    // Daily high price
-    daily_low: u64,                                     // Daily low price
-    volume_24h: u64,                                    // 24-hour volume
-    open_interest: u64,                                 // Total open interest
+    // Settlement
+    settlement_gas_price: Option<u64>,                   // Final settlement price (TWAP)
+    is_settled: bool,                                    // Settlement completed
     
     // Contract status
-    is_active: bool,                                    // Currently tradeable
-    is_in_settlement: bool,                             // In settlement period
-    is_settled: bool,                                   // Settlement completed
-    final_settlement_price: Option<u64>,               // Final settlement price
-    
-    // Integration
-    deepbook_pool_id: ID,                              // DeepBook pool
-    balance_manager_id: ID,                            // Balance manager
-    gas_oracle_id: ID,                                 // Gas price oracle
+    is_active: bool,                                     // Currently tradeable
 }
+```
 
-struct NetworkMetrics has store {
-    current_gas_price: u64,                            // Current network gas price
-    network_congestion: u64,                           // Congestion level (0-100)
-    transaction_throughput: u64,                       // TPS
+#### 3. GasPosition (Owned Object)
+```move
+struct GasPosition has key {
+    id: UID,
+    owner: address,
+    contract_id: ID,                                     // Gas futures contract
+    position_type: String,                               // "GAS_STATION_HEDGE", "SPONSOR_HEDGE", "SPECULATION"
+    position_size: i64,                                  // Positive for long, negative for short
+    entry_price: u64,                                    // Average entry price
+    margin_deposited: u64,                               // Collateral for position
+    created_at: u64,                                     // Position opening time
+}
+```
+
+### Off-Chain Services (CLI/Server Components)
+
+#### 1. GasPriceOracle Service
+- **Real-Time Gas Monitoring**: Continuous monitoring of Sui network gas prices
+- **Sponsored Transaction Volume Tracking**: Specialized tracking of gas station and sponsor transaction volumes
+- **Network Congestion Analysis**: Analysis of network congestion patterns affecting sponsored transactions
+- **TWAP Calculation**: Time-weighted average price calculation for contract settlement
+
+#### 2. GasStationAnalytics Service
+- **Gas Station Cost Analysis**: Detailed cost analysis for gas station operators
+- **Sponsored Transaction Pattern Recognition**: ML analysis of sponsored transaction patterns and costs
+- **Volume Forecasting**: Predictive analytics for sponsored transaction volume
+- **Operational Efficiency Metrics**: Performance metrics for gas station operations
+
+#### 3. SponsorRiskProfiler Service
+- **Risk Assessment**: Comprehensive risk profiling for different sponsorship models
+- **Hedging Strategy Optimization**: Optimal hedging strategies based on sponsor usage patterns
+- **Campaign Cost Forecasting**: Gas cost forecasting for user acquisition campaigns
+- **Abuse Pattern Detection**: Detection of potential abuse patterns affecting gas costs
+
+#### 4. EnterpriseHedgingService Service
+- **Corporate Gas Management**: Enterprise-grade gas cost management and hedging
+- **Compliance Reporting**: Corporate reporting and compliance for gas cost management
+- **Budget Planning**: Annual gas budget planning and forecasting
+- **Multi-Protocol Coordination**: Coordination of hedging across multiple protocols and applications
+
+#### 5. ML Prediction Engine Service
+- **Gas Price Forecasting**: Advanced machine learning models for gas price prediction
+- **Sponsored Transaction Impact Analysis**: Analysis of how sponsored transactions affect gas price dynamics
+- **Seasonal Pattern Recognition**: Recognition of seasonal patterns in gas usage and pricing
+- **Market Microstructure Analysis**: Deep analysis of gas market dynamics and sponsored transaction effects
     average_block_time: u64,                           // Average block time
     gas_price_volatility: u64,                         // Recent volatility
     seasonal_patterns: Table<u64, u64>,               // Hour/day -> typical gas price
