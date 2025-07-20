@@ -822,7 +822,7 @@ module unxv_liquidity::unxv_liquidity_tests {
         test_scenario::end(scenario);
     }
 
-    #[test]
+#[test]
     fun test_insurance_reserves_management() {
         let mut scenario = test_scenario::begin(ADMIN);
         

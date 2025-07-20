@@ -773,7 +773,7 @@ module unxv_vaults::unxv_vaults_tests {
         test_scenario::end(scenario);
     }
 
-    #[test]
+#[test]
     fun test_protocol_fees_update() {
         let mut scenario = test_scenario::begin(ADMIN);
         

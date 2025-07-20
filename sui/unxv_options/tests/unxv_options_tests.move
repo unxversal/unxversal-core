@@ -460,8 +460,8 @@ module unxv_options::unxv_options_tests {
         
         test::end(scenario);
     }
-    
-    #[test]
+
+#[test]
     fun test_multiple_option_types() {
         let mut scenario = test::begin(ADMIN);
         
