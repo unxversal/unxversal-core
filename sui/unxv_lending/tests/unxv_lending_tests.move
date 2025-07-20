@@ -633,8 +633,8 @@ module unxv_lending::unxv_lending_tests {
         clock.destroy_for_testing();
         test_scenario::end(scenario);
     }
-    
-    #[test]
+
+#[test]
     #[expected_failure]
     fun test_borrow_insufficient_collateral() {
         let mut scenario = setup_test_scenario();
