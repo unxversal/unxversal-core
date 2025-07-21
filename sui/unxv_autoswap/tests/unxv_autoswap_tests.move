@@ -375,7 +375,7 @@ module unxv_autoswap::unxv_autoswap_tests {
         clock::destroy_for_testing(clock);
     }
     
-    #[test]
+    #[test] 
     fun test_unxv_burn_execution() {
         let mut scenario = setup_test_scenario();
         let clock = create_test_clock(&mut scenario);
@@ -474,10 +474,10 @@ module unxv_autoswap::unxv_autoswap_tests {
         // Test fee calculation logic
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
-            let amount = 1000000; // 1M units
-            let fee_rate = 10; // 0.1%
-            let basis_points = 10000;
-            
+        let amount = 1000000; // 1M units
+        let fee_rate = 10; // 0.1%
+        let basis_points = 10000;
+        
             // Test base fee calculation
             let base_fee = amount * fee_rate / basis_points;
             assert!(base_fee == 1000, 0); // 0.1% of 1M = 1000

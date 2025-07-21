@@ -1,17 +1,9 @@
 #[test_only]
 module unxv_options::unxv_options_tests {
-    use std::string::{Self, String};
-    use std::option::{Self, Option};
+    use std::string;
     
-    use sui::balance::{Self, Balance};
-    use sui::coin::{Self, Coin};
-    use sui::object::{Self, UID, ID};
+    use sui::clock;
     use sui::transfer;
-    use sui::tx_context::{Self, TxContext};
-    use sui::event;
-    use sui::clock::{Self, Clock};
-    use sui::table::{Self, Table};
-    use sui::vec_set::{Self, VecSet};
     use sui::test_scenario::{Self as test, Scenario, next_tx, ctx};
     
     use unxv_options::unxv_options::{
@@ -20,10 +12,7 @@ module unxv_options::unxv_options_tests {
         OptionMarket,
         OptionPosition,
         OptionsPricingEngine,
-        AdminCap,
-        SignedInt,
-        Greeks,
-        ExerciseResult
+        AdminCap
     };
     
     // Test coin type
@@ -31,7 +20,6 @@ module unxv_options::unxv_options_tests {
     
     const USER: address = @0x123;
     const ADMIN: address = @0x456;
-    const ANOTHER_USER: address = @0x789;
     
     const STRIKE_PRICE_50K: u64 = 50000000000; // $50,000 with 6 decimals
     const STRIKE_PRICE_60K: u64 = 60000000000; // $60,000 with 6 decimals
@@ -150,7 +138,7 @@ module unxv_options::unxv_options_tests {
         let mut scenario = test::begin(ADMIN);
         
         setup_protocol_and_underlying(&mut scenario);
-        let market_id = create_btc_call_market(&mut scenario);
+        let _market_id = create_btc_call_market(&mut scenario);
         
         next_tx(&mut scenario, ADMIN);
         {

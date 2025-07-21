@@ -2,10 +2,8 @@
 /// UnXversal Options Protocol - Comprehensive decentralized options trading platform
 /// Enables creation, trading, and exercise of options on synthetic assets, native cryptocurrencies, and other supported assets
 /// Integrates with Pyth Network for pricing, DeepBook for liquidity, and other UnXversal protocols
-#[allow(duplicate_alias, unused_use, unused_const, unused_variable, unused_function)]
 module unxv_options::unxv_options {
     use std::string::{Self, String};
-    use std::option::{Self, Option};
     
     use sui::balance::{Self, Balance};
     use sui::coin::{Self, Coin};
@@ -16,11 +14,10 @@ module unxv_options::unxv_options {
     use sui::clock::{Self, Clock};
     use sui::table::{Self, Table};
     use sui::vec_set::{Self, VecSet};
-    use sui::vec_map::{Self, VecMap};
+
     
     // Pyth Network integration for price feeds
-    use pyth::price_info::{Self, PriceInfoObject};
-    use pyth::price::{Self, Price};
+    use pyth::price_info::{PriceInfoObject};
     
     // DeepBook integration for options trading
     use deepbook::balance_manager::{BalanceManager, TradeProof};
@@ -32,21 +29,15 @@ module unxv_options::unxv_options {
     
     // ========== Error Constants ==========
     
-    const E_NOT_ADMIN: u64 = 1;
     const E_OPTION_NOT_FOUND: u64 = 2;
-    const E_OPTION_EXPIRED: u64 = 3;
     const E_INSUFFICIENT_COLLATERAL: u64 = 4;
     const E_INVALID_STRIKE_PRICE: u64 = 5;
     const E_INVALID_EXPIRY: u64 = 6;
     const E_POSITION_NOT_FOUND: u64 = 7;
-    const E_INSUFFICIENT_MARGIN: u64 = 8;
     const E_OPTION_NOT_EXERCISABLE: u64 = 9;
-    const E_SETTLEMENT_WINDOW_CLOSED: u64 = 10;
     const E_INVALID_OPTION_TYPE: u64 = 11;
     const E_MARKET_NOT_ACTIVE: u64 = 12;
     const E_INSUFFICIENT_BALANCE: u64 = 13;
-    const E_INVALID_PRICING_MODEL: u64 = 14;
-    const E_ORACLE_PRICE_STALE: u64 = 15;
     
     // ========== Constants ==========
     
@@ -73,8 +64,7 @@ module unxv_options::unxv_options {
     const UNXV_TIER_5: u64 = 500000000000; // 500,000 UNXV
     
     // Pricing model constants
-    const SQRT_2PI: u64 = 2506628; // sqrt(2*pi) * 1e6
-    const VOLATILITY_SCALING: u64 = 1000000; // 1e6 for volatility calculations
+    // Future: Add advanced mathematical constants as needed
     
     // ========== Custom Types ==========
     
@@ -179,7 +169,7 @@ module unxv_options::unxv_options {
     }
     
     /// Individual option market
-    public struct OptionMarket<T: store> has key {
+    public struct OptionMarket<phantom T> has key {
         id: UID,
         
         // Market specification
@@ -601,8 +591,8 @@ module unxv_options::unxv_options {
     
     /// Test helper to create test coins
     #[test_only]
-    public fun create_test_coin<T>(amount: u64, ctx: &mut TxContext): Coin<T> {
-        coin::from_balance(balance::create_for_testing<T>(amount), ctx)
+    public fun create_test_coin<T>(_amount: u64, ctx: &mut TxContext): Coin<T> {
+        coin::from_balance(balance::create_for_testing<T>(_amount), ctx)
     }
     
     // ========== Admin Functions ==========
@@ -780,7 +770,7 @@ module unxv_options::unxv_options {
     public fun buy_option<T: store>(
         market: &mut OptionMarket<T>,
         registry: &OptionsRegistry,
-        pricing_engine: &OptionsPricingEngine,
+        _pricing_engine: &OptionsPricingEngine,
         quantity: u64,
         max_premium: u64,
         balance_manager: &mut BalanceManager,
@@ -796,7 +786,7 @@ module unxv_options::unxv_options {
         // Get current pricing
         let underlying_price = get_underlying_price(price_feeds, market.underlying_asset);
         let time_to_expiry = market.expiry_timestamp - clock::timestamp_ms(clock);
-        let volatility = get_implied_volatility(pricing_engine, market.underlying_asset);
+        let volatility = get_implied_volatility(_pricing_engine, market.underlying_asset);
         
         // Calculate option price using Black-Scholes
         let option_price = black_scholes_price(
@@ -903,7 +893,7 @@ module unxv_options::unxv_options {
     public fun sell_option<T: store>(
         market: &mut OptionMarket<T>,
         registry: &OptionsRegistry,
-        pricing_engine: &OptionsPricingEngine,
+        _pricing_engine: &OptionsPricingEngine,
         quantity: u64,
         min_premium: u64,
         collateral_amount: u64,
@@ -920,7 +910,7 @@ module unxv_options::unxv_options {
         // Get current pricing
         let underlying_price = get_underlying_price(price_feeds, market.underlying_asset);
         let time_to_expiry = market.expiry_timestamp - clock::timestamp_ms(clock);
-        let volatility = get_implied_volatility(pricing_engine, market.underlying_asset);
+        let volatility = get_implied_volatility(_pricing_engine, market.underlying_asset);
         
         // Calculate option price
         let option_price = black_scholes_price(
@@ -1118,7 +1108,7 @@ module unxv_options::unxv_options {
         registry: &OptionsRegistry,
         settlement_price: u64,
         clock: &Clock,
-        ctx: &mut TxContext,
+        _ctx: &mut TxContext,
     ): vector<ExerciseResult> {
         assert!(!registry.is_paused, E_MARKET_NOT_ACTIVE);
         assert!(clock::timestamp_ms(clock) >= market.expiry_timestamp, E_INVALID_EXPIRY);
@@ -1205,7 +1195,7 @@ module unxv_options::unxv_options {
         spot_price: u64,
         strike_price: u64,
         time_to_expiry: u64,
-        risk_free_rate: u64,
+        _risk_free_rate: u64,
         volatility: u64,
         option_type: String,
     ): u64 {
@@ -1213,7 +1203,7 @@ module unxv_options::unxv_options {
         // In production, this would use proper mathematical functions
         
         if (time_to_expiry == 0) {
-            return calculate_intrinsic_value(option_type, strike_price, spot_price);
+            return calculate_intrinsic_value(option_type, strike_price, spot_price)
         };
         
         // Convert time to years (simplified) - ensure minimum of 1 to avoid division by zero
@@ -1314,7 +1304,7 @@ module unxv_options::unxv_options {
     // ========== Helper Functions ==========
     
     /// Get underlying price from Pyth feeds (simplified)
-    fun get_underlying_price(mut price_feeds: vector<PriceInfoObject>, _asset: String): u64 {
+    fun get_underlying_price(price_feeds: vector<PriceInfoObject>, _asset: String): u64 {
         // Simplified price fetching - in production would validate feed IDs
         vector::destroy_empty(price_feeds);
         50000000000 // Return $50,000 as placeholder
@@ -1398,7 +1388,7 @@ module unxv_options::unxv_options {
     }
     
     /// Get UNXV discount for stake amount
-    public fun get_unxv_discount(registry: &OptionsRegistry, stake_amount: u64): u64 {
+    public fun get_unxv_discount(_registry: &OptionsRegistry, stake_amount: u64): u64 {
         if (stake_amount >= UNXV_TIER_5) {
             2500 // 25%
         } else if (stake_amount >= UNXV_TIER_4) {
@@ -1429,7 +1419,7 @@ module unxv_options::unxv_options {
     public fun test_buy_option<T: store>(
         market: &mut OptionMarket<T>,
         registry: &OptionsRegistry,
-        pricing_engine: &OptionsPricingEngine,
+        _pricing_engine: &OptionsPricingEngine,
         quantity: u64,
         max_premium: u64,
         clock: &Clock,
@@ -1507,7 +1497,7 @@ module unxv_options::unxv_options {
     public fun test_sell_option<T: store>(
         market: &mut OptionMarket<T>,
         registry: &OptionsRegistry,
-        pricing_engine: &OptionsPricingEngine,
+        _pricing_engine: &OptionsPricingEngine,
         quantity: u64,
         min_premium: u64,
         collateral_amount: u64,
