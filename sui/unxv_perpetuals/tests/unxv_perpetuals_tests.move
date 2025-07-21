@@ -305,6 +305,87 @@ module unxv_perpetuals::unxv_perpetuals_tests {
         test::end(scenario);
     }
     
+    #[test]
+    public fun test_signed_integer_math() {
+        // Test positive signed integer creation
+        let pos_100 = unxv_perpetuals::signed_int_from(100);
+        assert!(unxv_perpetuals::is_positive(&pos_100), 1);
+        assert!(unxv_perpetuals::abs(&pos_100) == 100, 2);
+        assert!(unxv_perpetuals::to_u64_positive(&pos_100) == 100, 3);
+        
+        // Test negative signed integer creation
+        let neg_50 = unxv_perpetuals::signed_int_negative(50);
+        assert!(unxv_perpetuals::is_negative(&neg_50), 4);
+        assert!(unxv_perpetuals::abs(&neg_50) == 50, 5);
+        assert!(unxv_perpetuals::to_u64_positive(&neg_50) == 0, 6);
+        
+        // Test addition: 100 + (-50) = 50
+        let result = unxv_perpetuals::signed_add(pos_100, neg_50);
+        assert!(unxv_perpetuals::is_positive(&result), 7);
+        assert!(unxv_perpetuals::abs(&result) == 50, 8);
+        
+        // Test subtraction: 100 - 50 = 50
+        let pos_50 = unxv_perpetuals::signed_int_from(50);
+        let result2 = unxv_perpetuals::signed_sub(pos_100, pos_50);
+        assert!(unxv_perpetuals::is_positive(&result2), 9);
+        assert!(unxv_perpetuals::abs(&result2) == 50, 10);
+        
+        // Test multiplication
+        let result3 = unxv_perpetuals::signed_mul_u64(pos_50, 3);
+        assert!(unxv_perpetuals::abs(&result3) == 150, 11);
+        
+        // Test division
+        let result4 = unxv_perpetuals::signed_div_u64(result3, 3);
+        assert!(unxv_perpetuals::abs(&result4) == 50, 12);
+    }
+    
+    #[test]
+    public fun test_pnl_calculations() {
+        // Test LONG position P&L calculations
+        
+        // Profitable LONG: entry 1000, exit 1100 = +10% = profit
+        let long_profit = unxv_perpetuals::calculate_realized_pnl_test(
+            string::utf8(b"LONG"),
+            1000000000, // Entry: 1000 USDC
+            1100000000, // Exit: 1100 USDC  
+            1000000000  // Size: 1000 USDC worth
+        );
+        assert!(unxv_perpetuals::is_positive(&long_profit), 1);
+        assert!(unxv_perpetuals::abs(&long_profit) == 100000000, 2); // Should be 100 USDC profit
+        
+        // Loss-making LONG: entry 1000, exit 900 = -10% = loss
+        let long_loss = unxv_perpetuals::calculate_realized_pnl_test(
+            string::utf8(b"LONG"),
+            1000000000, // Entry: 1000 USDC
+            900000000,  // Exit: 900 USDC
+            1000000000  // Size: 1000 USDC worth
+        );
+        assert!(unxv_perpetuals::is_negative(&long_loss), 3);
+        assert!(unxv_perpetuals::abs(&long_loss) == 100000000, 4); // Should be 100 USDC loss
+        
+        // Test SHORT position P&L calculations
+        
+        // Profitable SHORT: entry 1000, exit 900 = profit when price goes down
+        let short_profit = unxv_perpetuals::calculate_realized_pnl_test(
+            string::utf8(b"SHORT"),
+            1000000000, // Entry: 1000 USDC
+            900000000,  // Exit: 900 USDC
+            1000000000  // Size: 1000 USDC worth
+        );
+        assert!(unxv_perpetuals::is_positive(&short_profit), 5);
+        assert!(unxv_perpetuals::abs(&short_profit) == 100000000, 6); // Should be 100 USDC profit
+        
+        // Loss-making SHORT: entry 1000, exit 1100 = loss when price goes up
+        let short_loss = unxv_perpetuals::calculate_realized_pnl_test(
+            string::utf8(b"SHORT"),
+            1000000000, // Entry: 1000 USDC
+            1100000000, // Exit: 1100 USDC
+            1000000000  // Size: 1000 USDC worth
+        );
+        assert!(unxv_perpetuals::is_negative(&short_loss), 7);
+        assert!(unxv_perpetuals::abs(&short_loss) == 100000000, 8); // Should be 100 USDC loss
+    }
+    
     // ========== Helper Functions ==========
     
     fun setup_protocol_and_market(scenario: &mut Scenario) {

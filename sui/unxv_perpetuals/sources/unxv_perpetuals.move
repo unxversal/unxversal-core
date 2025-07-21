@@ -28,6 +28,69 @@ module unxv_perpetuals::unxv_perpetuals {
         is_positive: bool,
     }
     
+    // ========== Signed Integer Math Functions ==========
+    
+    /// Create a positive signed integer
+    public fun signed_int_from(value: u64): SignedInt {
+        SignedInt { value, is_positive: true }
+    }
+    
+    /// Create a negative signed integer
+    public fun signed_int_negative(value: u64): SignedInt {
+        SignedInt { value, is_positive: false }
+    }
+    
+    /// Add two signed integers
+    public fun signed_add(a: SignedInt, b: SignedInt): SignedInt {
+        if (a.is_positive == b.is_positive) {
+            // Same sign - add values
+            SignedInt { value: a.value + b.value, is_positive: a.is_positive }
+        } else {
+            // Different signs - subtract smaller from larger
+            if (a.value >= b.value) {
+                SignedInt { value: a.value - b.value, is_positive: a.is_positive }
+            } else {
+                SignedInt { value: b.value - a.value, is_positive: b.is_positive }
+            }
+        }
+    }
+    
+    /// Subtract two signed integers (a - b)
+    public fun signed_sub(a: SignedInt, b: SignedInt): SignedInt {
+        let negative_b = SignedInt { value: b.value, is_positive: !b.is_positive };
+        signed_add(a, negative_b)
+    }
+    
+    /// Multiply signed integer by unsigned integer
+    public fun signed_mul_u64(a: SignedInt, b: u64): SignedInt {
+        SignedInt { value: a.value * b, is_positive: a.is_positive }
+    }
+    
+    /// Divide signed integer by unsigned integer
+    public fun signed_div_u64(a: SignedInt, b: u64): SignedInt {
+        SignedInt { value: a.value / b, is_positive: a.is_positive }
+    }
+    
+    /// Compare if signed integer is greater than zero
+    public fun is_positive(a: &SignedInt): bool {
+        a.is_positive && a.value > 0
+    }
+    
+    /// Compare if signed integer is less than zero
+    public fun is_negative(a: &SignedInt): bool {
+        !a.is_positive && a.value > 0
+    }
+    
+    /// Get absolute value of signed integer
+    public fun abs(a: &SignedInt): u64 {
+        a.value
+    }
+    
+    /// Convert to u64 if positive, otherwise return 0
+    public fun to_u64_positive(a: &SignedInt): u64 {
+        if (a.is_positive) { a.value } else { 0 }
+    }
+    
     // Standard coin types
     public struct USDC has drop {}
     public struct SUI has drop {}
@@ -599,16 +662,6 @@ module unxv_perpetuals::unxv_perpetuals {
         timestamp: u64,
     }
     
-    // ========== Helper Functions for SignedInt ==========
-    
-    /// Create a SignedInt from a u64
-    public fun signed_int_from(value: u64): SignedInt {
-        SignedInt {
-            value,
-            is_positive: true,
-        }
-    }
-    
     // ========== Initialization ==========
     
     /// Initialize the Perpetuals protocol
@@ -1074,12 +1127,22 @@ module unxv_perpetuals::unxv_perpetuals {
         };
         
         // Adjust for P&L and fees
-        let pnl_amount = 0; // Simplified for now - would handle P&L calculation
-        
-        let net_margin_return = if (margin_to_return > pnl_amount + trading_fee) {
-            margin_to_return - pnl_amount - trading_fee
+        let net_margin_return = if (is_positive(&realized_pnl)) {
+            // Profit case - add P&L to margin return, subtract fees
+            let profit = to_u64_positive(&realized_pnl);
+            if (margin_to_return + profit > trading_fee) {
+                margin_to_return + profit - trading_fee
+            } else {
+                0
+            }
         } else {
-            0
+            // Loss case - subtract loss and fees from margin return
+            let loss = abs(&realized_pnl);
+            if (margin_to_return > loss + trading_fee) {
+                margin_to_return - loss - trading_fee
+            } else {
+                0
+            }
         };
         
         // Update market state
@@ -1171,7 +1234,7 @@ module unxv_perpetuals::unxv_perpetuals {
     
     // ========== Funding Rate System ==========
     
-    /// Calculate funding rate for a market
+    /// Calculate funding rate for a market based on price divergence and OI imbalance
     public fun calculate_funding_rate<T>(
         calculator: &mut FundingRateCalculator,
         market: &PerpetualsMarket<T>,
@@ -1181,25 +1244,59 @@ module unxv_perpetuals::unxv_perpetuals {
     ): FundingRateCalculation {
         let current_time = clock::timestamp_ms(clock);
         
-        // Get prices
-        let mark_price = get_mark_price(price_feeds, market.price_feed_id);
-        let index_price = mark_price; // Simplified - would get from spot price
+        // Get current mark and index prices
+        let mark_price = get_mark_price(vector::empty(), market.price_feed_id);
+        let index_price = get_index_price(&price_feeds, &market.price_feed_id);
+        vector::destroy_empty(price_feeds);
         
-        // Simplified funding rate calculation
-        let premium = signed_int_from(0);
-        let oi_imbalance = signed_int_from(0);
-        let funding_rate = signed_int_from(0);
+        // Calculate premium component: (mark_price - index_price) / index_price
+        let premium_component = if (mark_price >= index_price) {
+            let premium = ((mark_price - index_price) * BASIS_POINTS) / index_price;
+            signed_int_from(premium / 8) // Divide by 8 for hourly rate from daily
+        } else {
+            let premium = ((index_price - mark_price) * BASIS_POINTS) / index_price;
+            signed_int_negative(premium / 8)
+        };
+        
+        // Calculate OI imbalance component
+        let total_oi = market.total_long_oi + market.total_short_oi;
+        let oi_imbalance_component = if (total_oi > 0) {
+            if (market.total_long_oi > market.total_short_oi) {
+                // More longs than shorts - positive funding (longs pay shorts)
+                let imbalance = ((market.total_long_oi - market.total_short_oi) * BASIS_POINTS) / total_oi;
+                signed_int_from(imbalance / 100) // Scale down for stability
+            } else {
+                // More shorts than longs - negative funding (shorts pay longs)
+                let imbalance = ((market.total_short_oi - market.total_long_oi) * BASIS_POINTS) / total_oi;
+                signed_int_negative(imbalance / 100)
+            }
+        } else {
+            signed_int_from(0)
+        };
+        
+        // Calculate volatility adjustment based on recent price movements
+        let volatility_adjustment = calculate_volatility_adjustment(market);
+        
+        // Combine components to get funding rate
+        let base_funding = signed_int_from(100); // 0.01% base funding rate
+        let combined_funding = signed_add(
+            signed_add(base_funding, premium_component),
+            signed_add(oi_imbalance_component, volatility_adjustment)
+        );
         
         // Apply caps
-        let capped_funding_rate = cap_funding_rate(funding_rate, calculator.max_funding_rate);
+        let capped_funding_rate = cap_funding_rate(combined_funding, calculator.max_funding_rate);
+        
+        // Store calculation data for analytics
+        record_funding_calculation(calculator, market, premium_component, oi_imbalance_component, current_time);
         
         FundingRateCalculation {
             funding_rate: capped_funding_rate,
-            premium_component: premium,
-            oi_imbalance_component: oi_imbalance,
-            volatility_adjustment: signed_int_from(0),
+            premium_component,
+            oi_imbalance_component,
+            volatility_adjustment,
             time_decay_factor: 10000,
-            confidence_level: 9500,
+            confidence_level: calculate_confidence_level(total_oi, mark_price, index_price),
         }
     }
     
@@ -1264,10 +1361,38 @@ module unxv_perpetuals::unxv_perpetuals {
         let current_price = get_mark_price(price_feeds, market.price_feed_id);
         assert!(check_liquidation_eligibility(market, position, current_price), E_POSITION_NOT_LIQUIDATABLE);
         
-        let liquidate_size = if (option::is_some(&liquidation_size)) {
-            option::extract(&mut liquidation_size)
+        // Determine optimal liquidation size based on health factor
+        let health_factor = calculate_health_factor(position, current_price);
+        
+        let optimal_liquidate_size = if (health_factor <= 5000) { // Health factor <= 50%
+            position.size // Full liquidation for severely underwater positions
+        } else if (health_factor <= 8000) { // Health factor 50-80%
+            position.size * 75 / 100 // Liquidate 75%
         } else {
-            position.size
+            position.size / 2 // Partial liquidation for marginally underwater positions
+        };
+        
+        let liquidate_size = if (option::is_some(&liquidation_size)) {
+            // Use provided size but ensure it doesn't exceed optimal size
+            let requested_size = option::extract(&mut liquidation_size);
+            if (requested_size > optimal_liquidate_size) {
+                optimal_liquidate_size
+            } else {
+                requested_size
+            }
+        } else {
+            optimal_liquidate_size
+        };
+        
+        // Ensure minimum liquidation size
+        let liquidate_size = if (liquidate_size < MIN_POSITION_SIZE) {
+            if (position.size < MIN_POSITION_SIZE * 2) {
+                position.size // Full liquidation if position is too small
+            } else {
+                MIN_POSITION_SIZE
+            }
+        } else {
+            liquidate_size
         };
         
         // Calculate liquidation penalty and rewards
@@ -1331,6 +1456,83 @@ module unxv_perpetuals::unxv_perpetuals {
         coin::zero<USDC>(ctx)
     }
     
+    // ========== Margin Health & Risk Management ==========
+    
+    /// Calculate current health factor for a position
+    public fun calculate_health_factor(
+        position: &PerpetualPosition,
+        current_price: u64,
+    ): u64 {
+        // Health Factor = (Margin + Unrealized PnL) / Maintenance Margin Requirement
+        let unrealized_pnl = calculate_unrealized_pnl(
+            position.side,
+            position.entry_price,
+            current_price,
+            position.size
+        );
+        
+        let current_margin_value = if (is_positive(&unrealized_pnl)) {
+            position.margin + to_u64_positive(&unrealized_pnl)
+        } else {
+            let loss = abs(&unrealized_pnl);
+            if (position.margin > loss) {
+                position.margin - loss
+            } else {
+                0
+            }
+        };
+        
+        let maintenance_margin = calculate_maintenance_margin(position.leverage);
+        let required_maintenance = position.size * maintenance_margin / BASIS_POINTS / position.leverage;
+        
+        if (required_maintenance == 0) {
+            return 10000 // 100% if no maintenance margin required
+        };
+        
+        (current_margin_value * BASIS_POINTS) / required_maintenance
+    }
+    
+    /// Check if position is liquidatable
+    public fun is_position_liquidatable(
+        position: &PerpetualPosition,
+        current_price: u64,
+    ): bool {
+        let health_factor = calculate_health_factor(position, current_price);
+        health_factor < BASIS_POINTS // Less than 100% = liquidatable
+    }
+    
+    /// Update position with current market data
+    public fun update_position_metrics(
+        position: &mut PerpetualPosition,
+        current_price: u64,
+        funding_payment: SignedInt,
+        clock: &Clock,
+    ) {
+        // Update unrealized P&L
+        position.unrealized_pnl = calculate_unrealized_pnl(
+            position.side,
+            position.entry_price,
+            current_price,
+            position.size
+        );
+        
+        // Apply funding payment
+        position.funding_payments = signed_add(position.funding_payments, funding_payment);
+        
+        // Update margin ratio
+        let health_factor = calculate_health_factor(position, current_price);
+        position.margin_ratio = health_factor;
+        
+        // Update liquidation price
+        position.liquidation_price = calculate_liquidation_price(
+            position.side,
+            position.entry_price,
+            position.leverage
+        );
+        
+        position.last_update_timestamp = clock::timestamp_ms(clock);
+    }
+    
     // ========== Helper Functions ==========
     
     /// Calculate required margin for a position
@@ -1388,13 +1590,37 @@ module unxv_perpetuals::unxv_perpetuals {
         else 2500 // 25% for tier 5+
     }
     
-    /// Calculate realized P&L
+    /// Calculate realized P&L for a position
     fun calculate_realized_pnl(side: String, entry_price: u64, exit_price: u64, size: u64): SignedInt {
-        // Simplified P&L calculation - would implement proper signed arithmetic
-        signed_int_from(0)
+        // P&L = size * (exit_price - entry_price) for LONG
+        // P&L = size * (entry_price - exit_price) for SHORT
+        
+        if (side == string::utf8(b"LONG")) {
+            if (exit_price >= entry_price) {
+                // Profit for long when price goes up
+                // P&L = size * (exit_price - entry_price) / entry_price
+                let profit = size * (exit_price - entry_price) / entry_price;
+                signed_int_from(profit)
+            } else {
+                // Loss for long when price goes down
+                let loss = size * (entry_price - exit_price) / entry_price;
+                signed_int_negative(loss)
+            }
+        } else {
+            // SHORT position
+            if (entry_price >= exit_price) {
+                // Profit for short when price goes down
+                let profit = size * (entry_price - exit_price) / entry_price;
+                signed_int_from(profit)
+            } else {
+                // Loss for short when price goes up
+                let loss = size * (exit_price - entry_price) / entry_price;
+                signed_int_negative(loss)
+            }
+        }
     }
     
-    /// Calculate unrealized P&L
+    /// Calculate unrealized P&L for current position
     fun calculate_unrealized_pnl(side: String, entry_price: u64, current_price: u64, size: u64): SignedInt {
         calculate_realized_pnl(side, entry_price, current_price, size)
     }
@@ -1416,6 +1642,57 @@ module unxv_perpetuals::unxv_perpetuals {
         1000000000 // Return 1000 USDC as placeholder
     }
     
+    /// Get index price (spot price) from Pyth feeds
+    fun get_index_price(_price_feeds: &vector<PriceInfoObject>, _feed_id: &vector<u8>): u64 {
+        // In production, would extract spot price from Pyth feeds
+        // For now, return a price slightly different from mark price to simulate premium
+        999500000 // Return 999.5 USDC as placeholder (0.05% discount to mark)
+    }
+    
+    /// Calculate volatility adjustment based on recent price movements
+    fun calculate_volatility_adjustment<T>(market: &PerpetualsMarket<T>): SignedInt {
+        // In production, would analyze price history to calculate volatility
+        // Higher volatility -> higher funding rate variance
+        signed_int_from(0) // Simplified for now
+    }
+    
+    /// Record funding calculation for analytics
+    fun record_funding_calculation<T>(
+        _calculator: &mut FundingRateCalculator,
+        _market: &PerpetualsMarket<T>,
+        _premium: SignedInt,
+        _oi_imbalance: SignedInt,
+        _timestamp: u64,
+    ) {
+        // In production, would store historical data for analysis
+        // Simplified for now
+    }
+    
+    /// Calculate confidence level based on market conditions
+    fun calculate_confidence_level(total_oi: u64, mark_price: u64, index_price: u64): u64 {
+        // Higher OI and smaller price divergence = higher confidence
+        let price_divergence = if (mark_price >= index_price) {
+            ((mark_price - index_price) * BASIS_POINTS) / index_price
+        } else {
+            ((index_price - mark_price) * BASIS_POINTS) / index_price
+        };
+        
+        // Base confidence starts at 95%
+        let base_confidence = 9500;
+        
+        // Reduce confidence based on price divergence (max 20% reduction)
+        let divergence_penalty = if (price_divergence > 2000) { 2000 } else { price_divergence };
+        
+        // Reduce confidence if OI is too low (illiquid market)
+        let oi_penalty = if (total_oi < 100000000000) { // Less than 100k USDC
+            500
+        } else {
+            0
+        };
+        
+        base_confidence - divergence_penalty - oi_penalty
+    }
+    
     /// Validate price limit for orders
     fun validate_price_limit(side: String, current_price: u64, limit_price: u64) {
         if (side == string::utf8(b"LONG")) {
@@ -1427,8 +1704,19 @@ module unxv_perpetuals::unxv_perpetuals {
     
     /// Cap funding rate to maximum allowed
     fun cap_funding_rate(funding_rate: SignedInt, max_rate: u64): SignedInt {
-        // Simplified capping - would implement proper signed comparison
-        funding_rate
+        if (funding_rate.is_positive) {
+            if (funding_rate.value > max_rate) {
+                SignedInt { value: max_rate, is_positive: true }
+            } else {
+                funding_rate
+            }
+        } else {
+            if (funding_rate.value > max_rate) {
+                SignedInt { value: max_rate, is_positive: false }
+            } else {
+                funding_rate
+            }
+        }
     }
     
     // ========== Read-Only Functions ==========
@@ -1467,6 +1755,100 @@ module unxv_perpetuals::unxv_perpetuals {
             account.total_realized_pnl,
             vec_set::size(&account.active_positions)
         )
+    }
+    
+    // ========== Test Helper Functions ==========
+    
+    #[test_only]
+    public fun calculate_realized_pnl_test(side: String, entry_price: u64, exit_price: u64, size: u64): SignedInt {
+        calculate_realized_pnl(side, entry_price, exit_price, size)
+    }
+    
+    #[test_only]
+    public fun create_test_position(
+        user: address,
+        market: String,
+        side: String,
+        size: u64,
+        entry_price: u64,
+        margin: u64,
+        leverage: u64,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): PerpetualPosition {
+        let position_id = object::new(ctx);
+        let liquidation_price = calculate_liquidation_price(side, entry_price, leverage);
+        
+        PerpetualPosition {
+            id: position_id,
+            user,
+            market,
+            side,
+            size,
+            entry_price,
+            margin,
+            leverage,
+            unrealized_pnl: signed_int_from(0),
+            realized_pnl: signed_int_from(0),
+            funding_payments: signed_int_from(0),
+            liquidation_price,
+            maintenance_margin: calculate_required_margin(size, leverage),
+            margin_ratio: 10000, // 100%
+            created_timestamp: clock::timestamp_ms(clock),
+            last_update_timestamp: clock::timestamp_ms(clock),
+            auto_close_enabled: false,
+            stop_loss_price: option::none(),
+            take_profit_price: option::none(),
+            trailing_stop_distance: option::none(),
+        }
+    }
+    
+    #[test_only]
+    public fun create_test_market<T>(ctx: &mut TxContext): PerpetualsMarket<T> {
+        let market_id = object::new(ctx);
+        let empty_table_long = table::new<address, ID>(ctx);
+        let empty_table_short = table::new<address, ID>(ctx);
+        
+        PerpetualsMarket<T> {
+            id: market_id,
+            market_symbol: string::utf8(b"sBTC-PERP"),
+            underlying_type: string::utf8(b"TestCoin"),
+            long_positions: empty_table_long,
+            short_positions: empty_table_short,
+            position_count: 0,
+            mark_price: 1000000000, // 1000 USDC
+            index_price: 999500000, // 999.5 USDC
+            funding_rate: signed_int_from(0),
+            next_funding_time: 0,
+            total_long_oi: 0,
+            total_short_oi: 0,
+            average_long_price: 0,
+            average_short_price: 0,
+            total_volume_24h: 0,
+            price_history: vector::empty(),
+            funding_rate_history: vector::empty(),
+            liquidation_queue: vector::empty(),
+            insurance_fund: balance::zero<USDC>(),
+            auto_deleverage_queue: vector::empty(),
+            deepbook_pool_id: object::id_from_address(@0x0),
+            balance_manager_id: object::id_from_address(@0x0),
+            price_feed_id: vector::empty(),
+        }
+    }
+    
+    #[test_only]
+    public fun get_funding_rate_from_calc(calc: &FundingRateCalculation): SignedInt {
+        calc.funding_rate
+    }
+    
+    #[test_only]
+    public fun get_confidence_from_calc(calc: &FundingRateCalculation): u64 {
+        calc.confidence_level
+    }
+    
+    #[test_only]
+    public fun get_registry_total_markets(registry: &PerpetualsRegistry): u64 {
+        vec_set::size(&registry.active_markets)
     }
 }
 
