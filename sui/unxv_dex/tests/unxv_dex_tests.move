@@ -786,6 +786,15 @@ module unxv_dex::unxv_dex_tests {
                 scenario.ctx()
             );
             
+            // Add reverse pool for SUI/USDC trading
+            unxv_dex::add_supported_pool(
+                &mut registry,
+                string::utf8(b"SUI"),
+                string::utf8(b"USDC"),
+                create_mock_pool_id(),
+                scenario.ctx()
+            );
+            
             test_scenario::return_shared(registry);
         };
         
