@@ -414,8 +414,8 @@ module unxv_dex::unxv_dex {
             amount, 0, string::utf8(b"MARKET"), 0, fee_payment_asset, registry
         );
         
-        // Create order
-        let order = SimpleTradeOrder {
+                // Create order
+        let mut order = SimpleTradeOrder {
             id: object::new(ctx),
             trader: tx_context::sender(ctx),
             input_asset: base_asset,
@@ -434,7 +434,11 @@ module unxv_dex::unxv_dex {
         // Simulate trade execution (in production this would integrate with DeepBook)
         let output_amount = simulate_trade_execution(amount, min_output);
         assert!(output_amount >= min_output, E_INSUFFICIENT_OUTPUT);
-        
+
+        // Consume input coin properly
+        let _input_balance = coin::into_balance(input_coin);
+        // In production, this would be used in DeepBook trade
+
         // Update order status
         order.status = string::utf8(b"EXECUTED");
         

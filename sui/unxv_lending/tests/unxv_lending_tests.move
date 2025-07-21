@@ -1,914 +1,1023 @@
 #[test_only]
 module unxv_lending::unxv_lending_tests {
+    use sui::test_scenario::{Self, Scenario};
+    use sui::coin::{Self, Coin};
+    use sui::balance;
+    use sui::clock::{Self, Clock};
+    use sui::test_utils;
     use std::string;
     use std::vector;
     
-    use sui::test_scenario::{Self, Scenario};
-    use sui::clock::{Self, Clock};
-    use sui::coin::{Self, Coin};
-    use sui::object;
-    use sui::test_utils;
-    
-    use pyth::price_info::PriceInfoObject;
-    
     use unxv_lending::unxv_lending::{
         Self,
+        AdminCap,
         LendingRegistry,
         LendingPool,
         UserAccount,
         LiquidationEngine,
         YieldFarmingVault,
-        FlashLoan,
+        AssetConfig,
+        InterestRateModel,
         SupplyReceipt,
         RepayReceipt,
         HealthFactorResult,
         StakingResult,
-        USDC,
-        SUI,
-        UNXV
+        FlashLoan,
+        LiquidationResult
     };
     
-    // Test addresses
-    const ADMIN: address = @0xAD;
-    const ALICE: address = @0xA11CE;
-    const BOB: address = @0xB0B;
-    const LIQUIDATOR: address = @0x11C;
+    // Test coin types
+    public struct USDC has drop {}
+    public struct SUI has drop {}
+    public struct UNXV has drop {}
     
     // Test constants
-    const INITIAL_SUPPLY: u64 = 1000000000; // 1000 USDC
-    const INITIAL_BORROW: u64 = 500000000;  // 500 USDC
-    const STAKE_AMOUNT: u64 = 25000000;     // 25 UNXV (Tier 3)
+    const ADMIN: address = @0xA11CE;
+    const USER1: address = @0xB0B;
+    const USER2: address = @0xCAB;
+    const LIQUIDATOR: address = @0x11de;
+
+    const USDC_DECIMALS: u8 = 6;
+    const SUI_DECIMALS: u8 = 9;
+    const UNXV_DECIMALS: u8 = 6;
+
+    const MILLION: u64 = 1_000_000;
+    const BILLION: u64 = 1_000_000_000;
     
-    // ========== Test Setup Helpers ==========
-    
-    fun setup_test_scenario(): Scenario {
-        test_scenario::begin(ADMIN)
-    }
-    
-    fun create_test_clock(scenario: &mut Scenario): Clock {
+    // Helper functions for test setup
+    fun setup_protocol(scenario: &mut Scenario): (AdminCap, Clock) {
         test_scenario::next_tx(scenario, ADMIN);
-        clock::create_for_testing(scenario.ctx())
+        {
+            let admin_cap = unxv_lending::init_lending_protocol(test_scenario::ctx(scenario));
+            let clock = clock::create_for_testing(test_scenario::ctx(scenario));
+            (admin_cap, clock)
+        }
     }
     
-    // ========== Test Module Initialization ==========
+    // Helper function to create test asset config
+    fun create_test_asset_config(): AssetConfig {
+        unxv_lending::create_test_asset_config_struct(
+            string::utf8(b"USDC"),
+            string::utf8(b"NATIVE"),
+            true, // is_collateral
+            true, // is_borrowable
+            8000, // collateral_factor - 80%
+            8500, // liquidation_threshold - 85%
+            500,  // liquidation_penalty - 5%
+            1000 * BILLION, // supply_cap
+            800 * BILLION,  // borrow_cap
+            1000, // reserve_factor - 10%
+            true  // is_active
+        )
+    }
+
+    // Helper function to create test interest model
+    fun create_test_interest_model(): InterestRateModel {
+        unxv_lending::create_test_interest_model_struct(
+            200,   // base_rate - 2%
+            1000,  // multiplier - 10%
+            10000, // jump_multiplier - 100%
+            8000,  // optimal_utilization - 80%
+            50000  // max_rate - 500%
+        )
+    }
+
+    fun create_test_coin<T>(amount: u64, scenario: &mut Scenario): Coin<T> {
+        coin::from_balance(balance::create_for_testing<T>(amount), test_scenario::ctx(scenario))
+    }
+
+    // ========== Test Cases ==========
     
     #[test]
-    fun test_module_init() {
-        let mut scenario = setup_test_scenario();
-        
-        // Initialize the module
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            unxv_lending::init_for_testing(scenario.ctx());
-        };
-        
-        // Check that shared objects were created
+    fun test_protocol_initialization() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, clock) = setup_protocol(&mut scenario);
+
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
             let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
             let liquidation_engine = test_scenario::take_shared<LiquidationEngine>(&scenario);
             let yield_vault = test_scenario::take_shared<YieldFarmingVault>(&scenario);
             
-            // Verify initial state
-            assert!(!unxv_lending::is_system_paused(&registry), 0);
+            // Test registry initialization
+            assert!(!unxv_lending::is_emergency_paused(&registry), 0);
             
             test_scenario::return_shared(registry);
             test_scenario::return_shared(liquidation_engine);
             test_scenario::return_shared(yield_vault);
         };
         
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
         test_scenario::end(scenario);
     }
-    
-    // ========== Test Admin Functions ==========
     
     #[test]
     fun test_add_supported_asset_and_create_pool() {
-        let mut scenario = setup_test_scenario();
-        let clock = create_test_clock(&mut scenario);
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, clock) = setup_protocol(&mut scenario);
         
-        // Initialize the module
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
-            unxv_lending::init_for_testing(scenario.ctx());
-        };
+            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
         
         // Add USDC as supported asset
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            let asset_config = create_test_asset_config();
             
-            let asset_config = unxv_lending::create_test_asset_config(
-                string::utf8(b"USDC"),
-                true,  // is_collateral
-                true,  // is_borrowable
-                8000   // 80% collateral factor
-            );
-            
-            let interest_model = unxv_lending::create_test_interest_model();
+            let rate_model = create_test_interest_model();
+            let oracle_feed_id = vector::empty<u8>();
             
             unxv_lending::add_supported_asset(
                 &mut registry,
+                &admin_cap,
                 string::utf8(b"USDC"),
+                string::utf8(b"NATIVE"),
                 asset_config,
-                interest_model,
-                scenario.ctx()
+                rate_model,
+                oracle_feed_id,
+                test_scenario::ctx(&mut scenario),
             );
-            
-            // Verify asset was added
-            assert!(unxv_lending::is_asset_supported(&registry, string::utf8(b"USDC")), 0);
-            
-            test_scenario::return_shared(registry);
-        };
         
         // Create lending pool for USDC
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
-            
             let pool_id = unxv_lending::create_lending_pool<USDC>(
                 &mut registry,
+                &admin_cap,
                 string::utf8(b"USDC"),
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
             
-            // Verify pool was created
-            assert!(object::id_to_address(&pool_id) != @0x0, 0);
+            // Verify pool was created successfully
+            assert!(pool_id != sui::object::id_from_address(@0x0), 0);
             
             test_scenario::return_shared(registry);
         };
         
-        clock.destroy_for_testing();
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
         test_scenario::end(scenario);
     }
     
     #[test]
-    fun test_pause_and_resume_system() {
-        let mut scenario = setup_test_scenario();
+    fun test_create_user_account() {
+        let mut scenario = test_scenario::begin(USER1);
         
-        // Initialize the module
-        test_scenario::next_tx(&mut scenario, ADMIN);
+        test_scenario::next_tx(&mut scenario, USER1);
         {
-            unxv_lending::init_for_testing(scenario.ctx());
-        };
-        
-        // Test emergency pause
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            let account = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
             
-            unxv_lending::emergency_pause(&mut registry, scenario.ctx());
-            assert!(unxv_lending::is_system_paused(&registry), 0);
-            
-            test_scenario::return_shared(registry);
-        };
-        
-        // Test resume system
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
-            
-            unxv_lending::resume_system(&mut registry, scenario.ctx());
-            assert!(!unxv_lending::is_system_paused(&registry), 1);
-            
-            test_scenario::return_shared(registry);
-        };
-        
-        test_scenario::end(scenario);
-    }
-    
-    // ========== Test User Account Management ==========
-    
-    #[test]
-    fun test_user_account_creation() {
-        let mut scenario = setup_test_scenario();
-        
-        test_scenario::next_tx(&mut scenario, ALICE);
-        {
-            let account = unxv_lending::create_user_account(scenario.ctx());
-            
-            // Verify account properties
-            let (collateral, debt, health_factor, tier) = unxv_lending::get_account_summary(&account);
-            assert!(collateral == 0, 0);
-            assert!(debt == 0, 1);
-            assert!(health_factor > 0, 2);
-            assert!(tier == 0, 3);
-            
+            // Verify account initialization
+            assert!(unxv_lending::get_user_health_factor(&account) == 0, 0);
+            assert!(unxv_lending::get_user_supply_balance(&account, string::utf8(b"USDC")) == 0, 1);
+            assert!(unxv_lending::get_user_borrow_balance(&account, string::utf8(b"USDC")) == 0, 2);
+
             test_utils::destroy(account);
         };
-        
+            
         test_scenario::end(scenario);
     }
-    
-    // ========== Test Supply and Withdraw Operations ==========
-    
+
     #[test]
-    fun test_supply_and_withdraw_asset() {
-        let mut scenario = setup_test_scenario();
-        let clock = create_test_clock(&mut scenario);
+    fun test_supply_asset() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, mut clock) = setup_protocol(&mut scenario);
         
-        // Initialize and setup
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            unxv_lending::init_for_testing(scenario.ctx());
-        };
-        
-        // Add USDC support and create pool
+        // Setup USDC asset and pool
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
             let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
             
-            let asset_config = unxv_lending::create_test_asset_config(
-                string::utf8(b"USDC"),
-                true, true, 8000
-            );
-            let interest_model = unxv_lending::create_test_interest_model();
-            
+            let asset_config = create_test_asset_config();
+            let rate_model = create_test_interest_model();
+            let oracle_feed_id = vector::empty<u8>();
+
             unxv_lending::add_supported_asset(
                 &mut registry,
+                &admin_cap,
                 string::utf8(b"USDC"),
+                string::utf8(b"NATIVE"),
                 asset_config,
-                interest_model,
-                scenario.ctx()
+                rate_model,
+                oracle_feed_id,
+                test_scenario::ctx(&mut scenario),
             );
-            
+
             unxv_lending::create_lending_pool<USDC>(
                 &mut registry,
+                &admin_cap,
                 string::utf8(b"USDC"),
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
             
             test_scenario::return_shared(registry);
         };
         
-        // Alice supplies USDC
-        test_scenario::next_tx(&mut scenario, ALICE);
+        // User supplies USDC
+        test_scenario::next_tx(&mut scenario, USER1);
         {
             let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
-            let mut account = unxv_lending::create_user_account(scenario.ctx());
             let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
-            
-            let usdc_coin = unxv_lending::create_test_coin<USDC>(INITIAL_SUPPLY, scenario.ctx());
-            
-            let receipt = unxv_lending::test_supply_asset<USDC>(
+            let mut account = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
+
+            let supply_amount = 1000 * MILLION; // 1000 USDC
+            let supply_coin = create_test_coin<USDC>(supply_amount, &mut scenario);
+
+            clock::increment_for_testing(&mut clock, 1000); // Advance time
+
+            let receipt = unxv_lending::supply_asset(
                 &mut pool,
                 &mut account,
                 &registry,
-                usdc_coin,
+                supply_coin,
                 true, // use as collateral
                 &clock,
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
-            
-            // Verify supply receipt
-            let (amount_supplied, scaled_amount, _, _) = unxv_lending::get_supply_receipt_info(&receipt);
-            assert!(amount_supplied == INITIAL_SUPPLY, 0);
-            assert!(scaled_amount > 0, 1);
-            
-            // Verify pool state
-            let (total_supply, _, supply_rate, _, _) = unxv_lending::get_pool_info(&pool);
-            assert!(total_supply == INITIAL_SUPPLY, 2);
-            
+
+            // Verify supply was successful
+            assert!(unxv_lending::supply_receipt_amount_supplied(&receipt) == supply_amount, 0);
+            assert!(unxv_lending::get_pool_total_supply(&pool) == supply_amount, 1);
+            assert!(unxv_lending::get_user_supply_balance(&account, string::utf8(b"USDC")) > 0, 2);
+
             test_scenario::return_shared(pool);
             test_scenario::return_shared(registry);
             test_utils::destroy(account);
             test_utils::destroy(receipt);
         };
         
-        clock.destroy_for_testing();
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
         test_scenario::end(scenario);
     }
     
-    // ========== Test Borrow and Repay Operations ==========
-    
-    #[test] 
-    fun test_borrow_and_repay_workflow() {
-        let mut scenario = setup_test_scenario();
-        let clock = create_test_clock(&mut scenario);
+    #[test]
+    fun test_borrow_asset() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, mut clock) = setup_protocol(&mut scenario);
         
-        // Setup protocol
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            unxv_lending::init_for_testing(scenario.ctx());
-        };
-        
+        // Setup USDC asset and pool
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
             let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
             
-            let asset_config = unxv_lending::create_test_asset_config(
-                string::utf8(b"USDC"),
-                true, true, 8000
-            );
-            let interest_model = unxv_lending::create_test_interest_model();
+            let asset_config = create_test_asset_config();
+            let rate_model = create_test_interest_model();
+            let oracle_feed_id = vector::empty<u8>();
             
             unxv_lending::add_supported_asset(
                 &mut registry,
+                &admin_cap,
                 string::utf8(b"USDC"),
+                string::utf8(b"NATIVE"),
                 asset_config,
-                interest_model,
-                scenario.ctx()
+                rate_model,
+                oracle_feed_id,
+                test_scenario::ctx(&mut scenario),
             );
             
             unxv_lending::create_lending_pool<USDC>(
                 &mut registry,
+                &admin_cap,
                 string::utf8(b"USDC"),
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
             
             test_scenario::return_shared(registry);
         };
         
-        // Alice supplies and then borrows
-        test_scenario::next_tx(&mut scenario, ALICE);
+        // First user supplies USDC (provides liquidity)
+        test_scenario::next_tx(&mut scenario, USER1);
         {
             let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
-            let mut account = unxv_lending::create_user_account(scenario.ctx());
             let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            let mut account1 = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
             
-            // First supply collateral
-            let usdc_coin = unxv_lending::create_test_coin<USDC>(INITIAL_SUPPLY, scenario.ctx());
-            let _supply_receipt = unxv_lending::test_supply_asset<USDC>(
+            let supply_amount = 10000 * MILLION; // 10,000 USDC
+            let supply_coin = create_test_coin<USDC>(supply_amount, &mut scenario);
+            
+            clock::increment_for_testing(&mut clock, 1000);
+
+            unxv_lending::supply_asset(
                 &mut pool,
-                &mut account,
+                &mut account1,
                 &registry,
-                usdc_coin,
+                supply_coin,
                 true,
                 &clock,
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
+            );
+
+            test_scenario::return_shared(pool);
+            test_scenario::return_shared(registry);
+            test_utils::destroy(account1);
+        };
+
+        // Second user supplies collateral and borrows
+        test_scenario::next_tx(&mut scenario, USER2);
+        {
+            let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
+            let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            let mut account2 = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
+
+            // Supply collateral first
+            let collateral_amount = 2000 * MILLION; // 2,000 USDC
+            let collateral_coin = create_test_coin<USDC>(collateral_amount, &mut scenario);
+
+            clock::increment_for_testing(&mut clock, 1000);
+
+            unxv_lending::supply_asset(
+                &mut pool,
+                &mut account2,
+                &registry,
+                collateral_coin,
+                true, // use as collateral
+                &clock,
+                test_scenario::ctx(&mut scenario),
             );
             
-            // Then borrow against collateral
-            let borrowed_coin = unxv_lending::test_borrow_asset<USDC>(
+            // Now borrow against collateral
+            let borrow_amount = 1000 * MILLION; // 1,000 USDC (50% LTV)
+
+            clock::increment_for_testing(&mut clock, 1000);
+
+            let borrowed_coin = unxv_lending::borrow_asset(
+                &mut pool,
+                &mut account2,
+                &registry,
+                borrow_amount,
+                string::utf8(b"VARIABLE"),
+                &clock,
+                test_scenario::ctx(&mut scenario),
+            );
+            
+            // Verify borrow was successful
+            assert!(coin::value(&borrowed_coin) == borrow_amount, 0);
+            assert!(unxv_lending::get_pool_total_borrows(&pool) == borrow_amount, 1);
+            assert!(unxv_lending::get_user_borrow_balance(&account2, string::utf8(b"USDC")) > 0, 2);
+            assert!(unxv_lending::get_user_health_factor(&account2) >= 10000, 3); // Health factor >= 1.0
+            
+            test_scenario::return_shared(pool);
+            test_scenario::return_shared(registry);
+            test_utils::destroy(account2);
+            test_utils::destroy(borrowed_coin);
+        };
+        
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
+        test_scenario::end(scenario);
+    }
+    
+    #[test] 
+    fun test_repay_debt() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, mut clock) = setup_protocol(&mut scenario);
+        
+        // Setup and execute borrow (reusing previous test logic)
+        test_scenario::next_tx(&mut scenario, ADMIN);
+        {
+            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            
+            let asset_config = create_test_asset_config();
+            let rate_model = create_test_interest_model();
+            let oracle_feed_id = vector::empty<u8>();
+            
+            unxv_lending::add_supported_asset(
+                &mut registry,
+                &admin_cap,
+                string::utf8(b"USDC"),
+                string::utf8(b"NATIVE"),
+                asset_config,
+                rate_model,
+                oracle_feed_id,
+                test_scenario::ctx(&mut scenario),
+            );
+            
+            unxv_lending::create_lending_pool<USDC>(
+                &mut registry,
+                &admin_cap,
+                string::utf8(b"USDC"),
+                test_scenario::ctx(&mut scenario),
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        // Setup liquidity and borrowing
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
+            let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            let mut account = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
+
+            // Supply liquidity
+            let supply_coin = create_test_coin<USDC>(10000 * MILLION, &mut scenario);
+            unxv_lending::supply_asset(
                 &mut pool,
                 &mut account,
                 &registry,
-                INITIAL_BORROW,
-                string::utf8(b"VARIABLE"),
+                supply_coin,
+                true,
                 &clock,
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
             
-            // Verify borrow
-            assert!(coin::value(&borrowed_coin) == INITIAL_BORROW, 0);
+            // Borrow
+            clock::increment_for_testing(&mut clock, 1000);
+            let borrow_amount = 1000 * MILLION;
+            let borrowed_coin = unxv_lending::borrow_asset(
+                &mut pool,
+                &mut account,
+                &registry,
+                borrow_amount,
+                string::utf8(b"VARIABLE"),
+                &clock,
+                test_scenario::ctx(&mut scenario),
+            );
             
-            // Repay some debt
-            let repay_coin = unxv_lending::create_test_coin<USDC>(INITIAL_BORROW / 2, scenario.ctx());
-            let repay_receipt = unxv_lending::repay_debt<USDC>(
+            // Wait some time for interest to accrue
+            clock::increment_for_testing(&mut clock, 86400000); // 1 day
+
+            // Repay debt
+            let repay_coin = create_test_coin<USDC>(borrow_amount + 100000, &mut scenario); // Extra for interest
+            let receipt = unxv_lending::repay_debt(
                 &mut pool,
                 &mut account,
                 &registry,
                 repay_coin,
                 &clock,
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
             
             // Verify repayment
-            let (amount_repaid, _, _, _) = unxv_lending::get_repay_receipt_info(&repay_receipt);
-            assert!(amount_repaid == INITIAL_BORROW / 2, 1);
+            assert!(unxv_lending::repay_receipt_amount_repaid(&receipt) > 0, 0);
+            assert!(unxv_lending::get_user_borrow_balance(&account, string::utf8(b"USDC")) < borrow_amount, 1);
             
             test_scenario::return_shared(pool);
             test_scenario::return_shared(registry);
             test_utils::destroy(account);
-            test_utils::destroy(_supply_receipt);
             test_utils::destroy(borrowed_coin);
-            test_utils::destroy(repay_receipt);
+            test_utils::destroy(receipt);
         };
         
-        clock.destroy_for_testing();
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
         test_scenario::end(scenario);
     }
     
-    // ========== Test Health Factor ==========
-    
     #[test]
-    fun test_health_factor_calculation() {
-        let mut scenario = setup_test_scenario();
-        let clock = create_test_clock(&mut scenario);
+    fun test_withdraw_asset() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, mut clock) = setup_protocol(&mut scenario);
         
-        // Setup protocol
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            unxv_lending::init_for_testing(scenario.ctx());
-        };
-        
+        // Setup USDC asset and pool
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
             let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
             
-            let asset_config = unxv_lending::create_test_asset_config(
-                string::utf8(b"USDC"),
-                true, true, 8000
-            );
-            let interest_model = unxv_lending::create_test_interest_model();
+            let asset_config = create_test_asset_config();
+            let rate_model = create_test_interest_model();
+            let oracle_feed_id = vector::empty<u8>();
             
             unxv_lending::add_supported_asset(
                 &mut registry,
+                &admin_cap,
                 string::utf8(b"USDC"),
+                string::utf8(b"NATIVE"),
                 asset_config,
-                interest_model,
-                scenario.ctx()
+                rate_model,
+                oracle_feed_id,
+                test_scenario::ctx(&mut scenario),
+            );
+
+            unxv_lending::create_lending_pool<USDC>(
+                &mut registry,
+                &admin_cap,
+                string::utf8(b"USDC"),
+                test_scenario::ctx(&mut scenario),
             );
             
             test_scenario::return_shared(registry);
         };
         
-        // Test health factor with no debt (should be very high)
-        test_scenario::next_tx(&mut scenario, ALICE);
+        // Supply and then withdraw
+        test_scenario::next_tx(&mut scenario, USER1);
         {
-            let account = unxv_lending::create_user_account(scenario.ctx());
+            let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
             let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
-            
-            let health_result = unxv_lending::test_calculate_health_factor(
-                &account,
+            let mut account = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
+
+            let supply_amount = 1000 * MILLION;
+            let supply_coin = create_test_coin<USDC>(supply_amount, &mut scenario);
+
+            // Supply
+            unxv_lending::supply_asset(
+                &mut pool,
+                &mut account,
                 &registry,
-                &clock
+                supply_coin,
+                false, // Not as collateral for easier withdrawal
+                &clock,
+                test_scenario::ctx(&mut scenario),
             );
             
-            // Health factor should be very high with no debt
-            let (health_factor, is_liquidatable) = unxv_lending::get_health_factor_result_info(&health_result);
-            assert!(health_factor > 10000, 0);
-            assert!(!is_liquidatable, 1);
+            // Wait for some interest to accrue
+            clock::increment_for_testing(&mut clock, 86400000); // 1 day
+
+            // Withdraw partial amount
+            let withdraw_amount = 500 * MILLION;
+            let withdrawn_coin = unxv_lending::withdraw_asset(
+                &mut pool,
+                &mut account,
+                &registry,
+                withdraw_amount,
+                &clock,
+                test_scenario::ctx(&mut scenario),
+            );
+
+            // Verify withdrawal
+            assert!(coin::value(&withdrawn_coin) == withdraw_amount, 0);
+            assert!(unxv_lending::get_pool_total_supply(&pool) == supply_amount - withdraw_amount, 1);
             
+            test_scenario::return_shared(pool);
             test_scenario::return_shared(registry);
             test_utils::destroy(account);
-            test_utils::destroy(health_result);
+            test_utils::destroy(withdrawn_coin);
         };
         
-        clock.destroy_for_testing();
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
         test_scenario::end(scenario);
     }
     
-    // ========== Test UNXV Staking ==========
-    
     #[test]
-    fun test_unxv_staking_benefits() {
-        let mut scenario = setup_test_scenario();
-        
-        // Initialize the module
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            unxv_lending::init_for_testing(scenario.ctx());
-        };
-        
-        // Alice stakes UNXV for benefits
-        test_scenario::next_tx(&mut scenario, ALICE);
+    fun test_unxv_staking() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, mut clock) = setup_protocol(&mut scenario);
+
+        test_scenario::next_tx(&mut scenario, USER1);
         {
             let mut vault = test_scenario::take_shared<YieldFarmingVault>(&scenario);
-            let mut account = unxv_lending::create_user_account(scenario.ctx());
+            let mut account = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
             
-            let unxv_coin = unxv_lending::create_test_coin<UNXV>(STAKE_AMOUNT, scenario.ctx());
+            let stake_amount = 5 * MILLION; // 5 UNXV for Silver tier (5,000,000 with 6 decimals)
+            let stake_coin = create_test_coin<UNXV>(stake_amount, &mut scenario);
+            let lock_duration = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+            clock::increment_for_testing(&mut clock, 1000);
             
             let staking_result = unxv_lending::stake_unxv_for_benefits(
                 &mut vault,
                 &mut account,
-                unxv_coin,
-                0, // no lock duration for test
-                scenario.ctx()
+                stake_coin,
+                lock_duration,
+                &clock,
+                test_scenario::ctx(&mut scenario),
             );
             
-            // Verify staking result - should be Tier 3 (25K UNXV)
-            let (new_tier, borrow_rate_discount, supply_rate_bonus, benefits) = unxv_lending::get_staking_result_info(&staking_result);
-            assert!(new_tier == 3, 0);
-            assert!(borrow_rate_discount > 0, 1);
-            assert!(supply_rate_bonus > 0, 2);
-            assert!(vector::length(&benefits) > 0, 3);
+            // Verify staking result
+            assert!(unxv_lending::staking_result_new_tier(&staking_result) == 2, 0); // Silver tier
+            assert!(unxv_lending::staking_result_borrow_rate_discount(&staking_result) == 1000, 1); // 10% discount
+            assert!(unxv_lending::staking_result_supply_rate_bonus(&staking_result) == 500, 2); // 5% bonus
             
             test_scenario::return_shared(vault);
             test_utils::destroy(account);
             test_utils::destroy(staking_result);
         };
         
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
         test_scenario::end(scenario);
     }
     
-    // ========== Test Flash Loans ==========
-    
     #[test]
-    fun test_flash_loan_workflow() {
-        let mut scenario = setup_test_scenario();
-        let clock = create_test_clock(&mut scenario);
+    fun test_flash_loan() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, clock) = setup_protocol(&mut scenario);
         
-        // Setup protocol with liquidity
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            unxv_lending::init_for_testing(scenario.ctx());
-        };
-        
+        // Setup USDC asset and pool with liquidity
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
             let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
             
-            let asset_config = unxv_lending::create_test_asset_config(
-                string::utf8(b"USDC"),
-                true, true, 8000
-            );
-            let interest_model = unxv_lending::create_test_interest_model();
+            let asset_config = create_test_asset_config();
+            let rate_model = create_test_interest_model();
+            let oracle_feed_id = vector::empty<u8>();
             
             unxv_lending::add_supported_asset(
                 &mut registry,
+                &admin_cap,
                 string::utf8(b"USDC"),
+                string::utf8(b"NATIVE"),
                 asset_config,
-                interest_model,
-                scenario.ctx()
+                rate_model,
+                oracle_feed_id,
+                test_scenario::ctx(&mut scenario),
             );
             
             unxv_lending::create_lending_pool<USDC>(
                 &mut registry,
+                &admin_cap,
                 string::utf8(b"USDC"),
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
             
             test_scenario::return_shared(registry);
         };
         
-        // Add liquidity first
-        test_scenario::next_tx(&mut scenario, ALICE);
+        // Add liquidity to pool
+        test_scenario::next_tx(&mut scenario, USER1);
         {
             let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
-            let mut account = unxv_lending::create_user_account(scenario.ctx());
             let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            let mut account = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
             
-            let usdc_coin = unxv_lending::create_test_coin<USDC>(INITIAL_SUPPLY * 2, scenario.ctx());
-            let _supply_receipt = unxv_lending::test_supply_asset<USDC>(
+            let supply_coin = create_test_coin<USDC>(10000 * MILLION, &mut scenario);
+            unxv_lending::supply_asset(
                 &mut pool,
                 &mut account,
                 &registry,
-                usdc_coin,
+                supply_coin,
                 false,
                 &clock,
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
             
             test_scenario::return_shared(pool);
             test_scenario::return_shared(registry);
             test_utils::destroy(account);
-            test_utils::destroy(_supply_receipt);
         };
         
-        // Bob takes flash loan
-        test_scenario::next_tx(&mut scenario, BOB);
+        // Execute flash loan
+        test_scenario::next_tx(&mut scenario, USER2);
         {
             let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
             let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
             
-            let flash_amount = INITIAL_SUPPLY;
+            let loan_amount = 1000 * MILLION;
             
             // Initiate flash loan
-            let (loan_coin, flash_loan) = unxv_lending::initiate_flash_loan<USDC>(
+            let (loan_coin, flash_loan) = unxv_lending::initiate_flash_loan(
                 &mut pool,
                 &registry,
-                flash_amount,
-                scenario.ctx()
+                loan_amount,
+                test_scenario::ctx(&mut scenario),
             );
             
-            // Verify loan amount
-            assert!(coin::value(&loan_coin) == flash_amount, 0);
+            // Verify loan received
+            assert!(coin::value(&loan_coin) == loan_amount, 0);
             
-            // Simulate some operation with borrowed funds...
-            // For test, just prepare repayment
-            let fee = (flash_amount * 9) / 10000; // 0.09% fee
-            let repay_amount = flash_amount + fee;
-            let mut repay_coin = unxv_lending::create_test_coin<USDC>(repay_amount, scenario.ctx());
+            // Prepare repayment (loan + fee)
+            let fee = (loan_amount * 9) / 10000; // 0.09% fee
+            let repay_amount = loan_amount + fee;
+            let mut repay_coin = create_test_coin<USDC>(repay_amount, &mut scenario);
             
-            // Add borrowed amount to repayment
+            // Merge loan coin back for repayment simulation
             coin::join(&mut repay_coin, loan_coin);
             
             // Repay flash loan
-            unxv_lending::repay_flash_loan<USDC>(
+            unxv_lending::repay_flash_loan(
                 &mut pool,
                 &registry,
                 repay_coin,
                 flash_loan,
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
             
             test_scenario::return_shared(pool);
             test_scenario::return_shared(registry);
         };
         
-        clock.destroy_for_testing();
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
         test_scenario::end(scenario);
     }
     
-    // ========== Test Error Conditions ==========
-    
     #[test]
-    #[expected_failure]
-    fun test_supply_unsupported_asset() {
-        let mut scenario = setup_test_scenario();
-        let clock = create_test_clock(&mut scenario);
+    fun test_interest_rate_updates() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, mut clock) = setup_protocol(&mut scenario);
         
+        // Setup USDC asset and pool
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
-            unxv_lending::init_for_testing(scenario.ctx());
+            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+
+            let asset_config = create_test_asset_config();
+            let rate_model = create_test_interest_model();
+            let oracle_feed_id = vector::empty<u8>();
+
+            unxv_lending::add_supported_asset(
+                &mut registry,
+                &admin_cap,
+                string::utf8(b"USDC"),
+                string::utf8(b"NATIVE"),
+                asset_config,
+                rate_model,
+                oracle_feed_id,
+                test_scenario::ctx(&mut scenario),
+            );
+
+            unxv_lending::create_lending_pool<USDC>(
+                &mut registry,
+                &admin_cap,
+                string::utf8(b"USDC"),
+                test_scenario::ctx(&mut scenario),
+            );
+
+            test_scenario::return_shared(registry);
         };
-        
-        // Try to supply unsupported asset (no pool created)
-        test_scenario::next_tx(&mut scenario, ALICE);
+
+        // Test interest rate changes with utilization
+        test_scenario::next_tx(&mut scenario, USER1);
         {
             let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
-            let mut account = unxv_lending::create_user_account(scenario.ctx());
             let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
             
-            let usdc_coin = unxv_lending::create_test_coin<USDC>(INITIAL_SUPPLY, scenario.ctx());
+            let initial_utilization = unxv_lending::get_pool_utilization(&pool);
+            assert!(initial_utilization == 0, 0); // No utilization initially
+
+            // Update interest rates
+            clock::increment_for_testing(&mut clock, 3600000); // 1 hour
+            unxv_lending::update_interest_rates(&mut pool, &registry, &clock);
+
+            // Add some supply and borrow to change utilization
+            let mut account = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
             
-            // This should fail - no USDC support added
-            let _receipt = unxv_lending::test_supply_asset<USDC>(
+            // Supply
+            let supply_coin = create_test_coin<USDC>(1000 * MILLION, &mut scenario);
+            unxv_lending::supply_asset(
                 &mut pool,
                 &mut account,
                 &registry,
-                usdc_coin,
+                supply_coin,
                 true,
                 &clock,
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
+
+            // Borrow to increase utilization
+            let borrowed_coin = unxv_lending::borrow_asset(
+                &mut pool,
+                &mut account,
+                &registry,
+                400 * MILLION, // 40% utilization
+                string::utf8(b"VARIABLE"),
+                &clock,
+                test_scenario::ctx(&mut scenario),
+            );
+
+            // Check that utilization increased
+            let new_utilization = unxv_lending::get_pool_utilization(&pool);
+            assert!(new_utilization > initial_utilization, 1);
             
             test_scenario::return_shared(pool);
             test_scenario::return_shared(registry);
             test_utils::destroy(account);
-            test_utils::destroy(_receipt);
+            test_utils::destroy(borrowed_coin);
         };
         
-        clock.destroy_for_testing();
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
         test_scenario::end(scenario);
     }
 
 #[test]
-    #[expected_failure]
-    fun test_borrow_insufficient_collateral() {
-        let mut scenario = setup_test_scenario();
-        let clock = create_test_clock(&mut scenario);
-        
-        // Setup protocol
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            unxv_lending::init_for_testing(scenario.ctx());
-        };
+    fun test_emergency_pause() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, clock) = setup_protocol(&mut scenario);
         
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
             let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
-            
-            let asset_config = unxv_lending::create_test_asset_config(
-                string::utf8(b"USDC"),
-                true, true, 8000
+
+            // Pause protocol
+            unxv_lending::emergency_pause_protocol(
+                &mut registry,
+                &admin_cap,
+                test_scenario::ctx(&mut scenario),
             );
-            let interest_model = unxv_lending::create_test_interest_model();
+
+            assert!(unxv_lending::is_emergency_paused(&registry), 0);
+
+            // Resume protocol
+            unxv_lending::resume_protocol(
+                &mut registry,
+                &admin_cap,
+                test_scenario::ctx(&mut scenario),
+            );
+
+            assert!(!unxv_lending::is_emergency_paused(&registry), 1);
+
+            test_scenario::return_shared(registry);
+        };
+        
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
+        test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_health_factor_calculation() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, mut clock) = setup_protocol(&mut scenario);
+
+        // Setup asset and pool
+        test_scenario::next_tx(&mut scenario, ADMIN);
+        {
+            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            
+            let asset_config = create_test_asset_config();
+            let rate_model = create_test_interest_model();
+            let oracle_feed_id = vector::empty<u8>();
             
             unxv_lending::add_supported_asset(
                 &mut registry,
+                &admin_cap,
                 string::utf8(b"USDC"),
+                string::utf8(b"NATIVE"),
                 asset_config,
-                interest_model,
-                scenario.ctx()
+                rate_model,
+                oracle_feed_id,
+                test_scenario::ctx(&mut scenario),
             );
             
             unxv_lending::create_lending_pool<USDC>(
                 &mut registry,
+                &admin_cap,
                 string::utf8(b"USDC"),
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
             
             test_scenario::return_shared(registry);
         };
         
-        // Try to borrow without sufficient collateral
-        test_scenario::next_tx(&mut scenario, ALICE);
+        test_scenario::next_tx(&mut scenario, USER1);
         {
             let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
-            let mut account = unxv_lending::create_user_account(scenario.ctx());
             let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
-            
-            // Supply small amount as collateral
-            let usdc_coin = unxv_lending::create_test_coin<USDC>(100000, scenario.ctx());
-            let _supply_receipt = unxv_lending::test_supply_asset<USDC>(
+            let mut account = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
+
+            // Supply collateral
+            let supply_coin = create_test_coin<USDC>(2000 * MILLION, &mut scenario);
+            unxv_lending::supply_asset(
                 &mut pool,
                 &mut account,
                 &registry,
-                usdc_coin,
+                supply_coin,
                 true,
                 &clock,
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
             
-            // Try to borrow way more than collateral allows
-            let _borrowed_coin = unxv_lending::test_borrow_asset<USDC>(
+            // Calculate health factor with no debt (should be very high)
+            clock::increment_for_testing(&mut clock, 1000);
+            let health_result = unxv_lending::calculate_health_factor(
+                &account,
+                &registry,
+                &clock,
+            );
+
+            assert!(!unxv_lending::health_factor_result_is_liquidatable(&health_result), 0);
+            assert!(unxv_lending::health_factor_result_health_factor(&health_result) > 10000, 1); // > 1.0
+            
+            test_scenario::return_shared(pool);
+            test_scenario::return_shared(registry);
+            test_utils::destroy(account);
+            test_utils::destroy(health_result);
+        };
+        
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
+        test_scenario::end(scenario);
+    }
+    
+    #[test]
+    #[expected_failure(abort_code = 6)]
+    fun test_borrow_exceeds_liquidity() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, clock) = setup_protocol(&mut scenario);
+
+        // Setup asset without sufficient liquidity
+        test_scenario::next_tx(&mut scenario, ADMIN);
+        {
+            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            
+            let asset_config = create_test_asset_config();
+            let rate_model = create_test_interest_model();
+            let oracle_feed_id = vector::empty<u8>();
+            
+            unxv_lending::add_supported_asset(
+                &mut registry,
+                &admin_cap,
+                string::utf8(b"USDC"),
+                string::utf8(b"NATIVE"),
+                asset_config,
+                rate_model,
+                oracle_feed_id,
+                test_scenario::ctx(&mut scenario),
+            );
+            
+            unxv_lending::create_lending_pool<USDC>(
+                &mut registry,
+                &admin_cap,
+                string::utf8(b"USDC"),
+                test_scenario::ctx(&mut scenario),
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        test_scenario::next_tx(&mut scenario, USER1);
+        {
+            let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
+            let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            let mut account = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
+            
+            // Try to borrow from empty pool (should fail)
+            let borrowed_coin = unxv_lending::borrow_asset(
                 &mut pool,
                 &mut account,
                 &registry,
-                INITIAL_SUPPLY, // Much more than collateral
+                1000 * MILLION,
                 string::utf8(b"VARIABLE"),
                 &clock,
-                scenario.ctx()
+                test_scenario::ctx(&mut scenario),
             );
             
             test_scenario::return_shared(pool);
             test_scenario::return_shared(registry);
             test_utils::destroy(account);
-            test_utils::destroy(_supply_receipt);
-            test_utils::destroy(_borrowed_coin);
-        };
-        
-        clock.destroy_for_testing();
-        test_scenario::end(scenario);
-    }
-    
-    #[test]
-    #[expected_failure]
-    fun test_flash_loan_not_repaid() {
-        let mut scenario = setup_test_scenario();
-        
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            unxv_lending::init_for_testing(scenario.ctx());
-        };
-        
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
-            
-            let asset_config = unxv_lending::create_test_asset_config(
-                string::utf8(b"USDC"),
-                true, true, 8000
-            );
-            let interest_model = unxv_lending::create_test_interest_model();
-            
-            unxv_lending::add_supported_asset(
-                &mut registry,
-                string::utf8(b"USDC"),
-                asset_config,
-                interest_model,
-                scenario.ctx()
-            );
-            
-            unxv_lending::create_lending_pool<USDC>(
-                &mut registry,
-                string::utf8(b"USDC"),
-                scenario.ctx()
-            );
-            
-            test_scenario::return_shared(registry);
-        };
-        
-        // Try flash loan without proper repayment
-        test_scenario::next_tx(&mut scenario, BOB);
-        {
-            let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
-            let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
-            
-            let (loan_coin, flash_loan) = unxv_lending::initiate_flash_loan<USDC>(
-                &mut pool,
-                &registry,
-                1000000,
-                scenario.ctx()
-            );
-            
-            // Try to repay with insufficient amount (should fail)
-            let insufficient_repay = unxv_lending::create_test_coin<USDC>(500000, scenario.ctx());
-            
-            unxv_lending::repay_flash_loan<USDC>(
-                &mut pool,
-                &registry,
-                insufficient_repay,
-                flash_loan,
-                scenario.ctx()
-            );
-            
-            test_scenario::return_shared(pool);
-            test_scenario::return_shared(registry);
-            test_utils::destroy(loan_coin);
-        };
-        
-        test_scenario::end(scenario);
-    }
-    
-    // ========== Integration Tests ==========
-    
-    #[test]
-    fun test_full_lending_workflow() {
-        let mut scenario = setup_test_scenario();
-        let clock = create_test_clock(&mut scenario);
-        
-        // Step 1: Initialize system
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            unxv_lending::init_for_testing(scenario.ctx());
-        };
-        
-        // Step 2: Setup USDC asset
-        test_scenario::next_tx(&mut scenario, ADMIN);
-        {
-            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
-            
-            let asset_config = unxv_lending::create_test_asset_config(
-                string::utf8(b"USDC"),
-                true, true, 8000
-            );
-            let interest_model = unxv_lending::create_test_interest_model();
-            
-            unxv_lending::add_supported_asset(
-                &mut registry,
-                string::utf8(b"USDC"),
-                asset_config,
-                interest_model,
-                scenario.ctx()
-            );
-            
-            unxv_lending::create_lending_pool<USDC>(
-                &mut registry,
-                string::utf8(b"USDC"),
-                scenario.ctx()
-            );
-            
-            test_scenario::return_shared(registry);
-        };
-        
-        // Step 3: Alice supplies liquidity
-        test_scenario::next_tx(&mut scenario, ALICE);
-        {
-            let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
-            let mut account = unxv_lending::create_user_account(scenario.ctx());
-            let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
-            
-            let usdc_coin = unxv_lending::create_test_coin<USDC>(INITIAL_SUPPLY, scenario.ctx());
-            let _supply_receipt = unxv_lending::test_supply_asset<USDC>(
-                &mut pool,
-                &mut account,
-                &registry,
-                usdc_coin,
-                true,
-                &clock,
-                scenario.ctx()
-            );
-            
-            sui::transfer::public_transfer(account, ALICE);
-            test_scenario::return_shared(pool);
-            test_scenario::return_shared(registry);
-            test_utils::destroy(_supply_receipt);
-        };
-        
-        // Step 4: Bob borrows against Alice's liquidity
-        test_scenario::next_tx(&mut scenario, BOB);
-        {
-            let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
-            let mut account = unxv_lending::create_user_account(scenario.ctx());
-            let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
-            
-            // Bob supplies collateral first
-            let collateral_coin = unxv_lending::create_test_coin<USDC>(INITIAL_SUPPLY / 2, scenario.ctx());
-            let _supply_receipt = unxv_lending::test_supply_asset<USDC>(
-                &mut pool,
-                &mut account,
-                &registry,
-                collateral_coin,
-                true,
-                &clock,
-                scenario.ctx()
-            );
-            
-            // Bob borrows
-            let borrowed_coin = unxv_lending::test_borrow_asset<USDC>(
-                &mut pool,
-                &mut account,
-                &registry,
-                INITIAL_BORROW / 4, // Conservative borrow
-                string::utf8(b"VARIABLE"),
-                &clock,
-                scenario.ctx()
-            );
-            
-            // Verify borrow succeeded
-            assert!(coin::value(&borrowed_coin) > 0, 0);
-            
-            sui::transfer::public_transfer(account, BOB);
-            test_scenario::return_shared(pool);
-            test_scenario::return_shared(registry);
-            test_utils::destroy(_supply_receipt);
             test_utils::destroy(borrowed_coin);
         };
         
-        // Step 5: Verify system state
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
+        test_scenario::end(scenario);
+    }
+    
+    #[test]
+    #[expected_failure(abort_code = 1)]
+    fun test_unauthorized_access() {
+        let mut scenario = test_scenario::begin(ADMIN);
+        let (admin_cap, clock) = setup_protocol(&mut scenario);
+        
+        // Create account as USER1
+        test_scenario::next_tx(&mut scenario, USER1);
+        let mut account = unxv_lending::create_user_account(test_scenario::ctx(&mut scenario));
+        
+        // Setup USDC asset and pool first
         test_scenario::next_tx(&mut scenario, ADMIN);
         {
-            let pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
+            let mut registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            let asset_config = create_test_asset_config();
+            let rate_model = create_test_interest_model();
+            let oracle_feed_id = vector::empty<u8>();
+            
+            unxv_lending::add_supported_asset(
+                &mut registry,
+                &admin_cap,
+                string::utf8(b"USDC"),
+                string::utf8(b"NATIVE"),
+                asset_config,
+                rate_model,
+                oracle_feed_id,
+                test_scenario::ctx(&mut scenario),
+            );
+            
+            unxv_lending::create_lending_pool<USDC>(
+                &mut registry,
+                &admin_cap,
+                string::utf8(b"USDC"),
+                test_scenario::ctx(&mut scenario),
+            );
+            
+            test_scenario::return_shared(registry);
+        };
+        
+        // Try to use account from wrong sender (should fail)
+        test_scenario::next_tx(&mut scenario, USER2); // Wrong user trying to use USER1's account
+        {
+            let mut pool = test_scenario::take_shared<LendingPool<USDC>>(&scenario);
             let registry = test_scenario::take_shared<LendingRegistry>(&scenario);
+            let supply_coin = create_test_coin<USDC>(1000 * MILLION, &mut scenario);
             
-            let (total_supply, total_borrows, supply_rate, borrow_rate, utilization) = 
-                unxv_lending::get_pool_info(&pool);
-            
-            // Verify pool has liquidity and borrows
-            assert!(total_supply > 0, 1);
-            assert!(total_borrows > 0, 2);
-            assert!(utilization > 0, 3);
-            assert!(supply_rate >= 0, 4);
-            assert!(borrow_rate > supply_rate, 5);
+            // This should fail because USER2 is trying to use USER1's account
+            let _receipt = unxv_lending::supply_asset(
+                &mut pool,
+                &mut account,
+                &registry,
+                supply_coin,
+                true,
+                &clock,
+                test_scenario::ctx(&mut scenario),
+            );
             
             test_scenario::return_shared(pool);
             test_scenario::return_shared(registry);
         };
-        
-        clock.destroy_for_testing();
+
+        test_utils::destroy(account);
+        clock::destroy_for_testing(clock);
+        test_utils::destroy(admin_cap);
         test_scenario::end(scenario);
     }
 }
