@@ -223,8 +223,8 @@ module unxv_options::unxv_options_tests {
                 &registry,
                 &pricing_engine,
                 TEST_QUANTITY,
-                TEST_COLLATERAL,
                 MIN_PREMIUM,
+                TEST_COLLATERAL,
                 &clock,
                 ctx(&mut scenario),
             );

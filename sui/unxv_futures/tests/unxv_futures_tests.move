@@ -79,12 +79,11 @@ fun setup_protocol_and_underlying(scenario: &mut Scenario) {
 // Helper function to create BTC futures contract
 fun create_btc_futures_contract(scenario: &mut Scenario): object::ID {
     let mut market_id = object::id_from_address(@0x0);
-    
+    let deepbook_pool_id = object::id_from_address(@0x123456);
     next_tx(scenario, ADMIN);
     {
         let mut registry = test::take_shared<FuturesRegistry>(scenario);
         let admin_cap = test::take_from_sender<AdminCap>(scenario);
-        
         market_id = unxv_futures::create_futures_contract<TestCoin>(
             &mut registry,
             string::utf8(b"BTC"),
@@ -92,26 +91,24 @@ fun create_btc_futures_contract(scenario: &mut Scenario): object::ID {
             EXPIRY_TIMESTAMP,
             CONTRACT_SIZE,
             TICK_SIZE,
+            deepbook_pool_id,
             &admin_cap,
             ctx(scenario),
         );
-        
         test::return_shared(registry);
         test::return_to_sender(scenario, admin_cap);
     };
-    
     market_id
 }
 
 // Helper function to create second BTC futures contract for spreads
 fun create_btc_mar_futures_contract(scenario: &mut Scenario): object::ID {
     let mut market_id = object::id_from_address(@0x0);
-    
+    let deepbook_pool_id = object::id_from_address(@0x123456);
     next_tx(scenario, ADMIN);
     {
         let mut registry = test::take_shared<FuturesRegistry>(scenario);
         let admin_cap = test::take_from_sender<AdminCap>(scenario);
-        
         market_id = unxv_futures::create_futures_contract<TestCoin>(
             &mut registry,
             string::utf8(b"BTC"),
@@ -119,14 +116,13 @@ fun create_btc_mar_futures_contract(scenario: &mut Scenario): object::ID {
             EXPIRY_TIMESTAMP_MAR,
             CONTRACT_SIZE,
             TICK_SIZE,
+            deepbook_pool_id,
             &admin_cap,
             ctx(scenario),
         );
-        
         test::return_shared(registry);
         test::return_to_sender(scenario, admin_cap);
     };
-    
     market_id
 }
 

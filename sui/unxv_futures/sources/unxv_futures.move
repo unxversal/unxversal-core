@@ -13,7 +13,12 @@ use sui::clock::{Self, Clock};
 use sui::table::{Self, Table};
 use sui::vec_set::{Self, VecSet};
 use deepbook::balance_manager::{Self, BalanceManager, TradeProof};
+use deepbook::pool::{Self, Pool};
 use pyth::price_info::{Self, PriceInfoObject};
+use pyth::pyth;
+use pyth::price;
+use pyth::price_identifier;
+use pyth::i64 as pyth_i64;
 
 // ========== Error Codes ==========
 const E_INSUFFICIENT_BALANCE: u64 = 1;
@@ -23,6 +28,9 @@ const E_INSUFFICIENT_COLLATERAL: u64 = 4;
 const E_CONTRACT_EXPIRED: u64 = 7;
 const E_INVALID_SETTLEMENT_PRICE: u64 = 8;
 const E_SPREAD_NOT_AVAILABLE: u64 = 10;
+const E_PYTH_STALE: u64 = 1001;
+const E_PYTH_DEVIATION: u64 = 1002;
+const E_PYTH_FEED_ID: u64 = 1003;
 
 // ========== Constants ==========
 const BASIS_POINTS: u64 = 10000;
@@ -159,6 +167,7 @@ public struct FuturesMarket<phantom T: store> has key {
     contract_symbol: String,
     underlying_type: String,
     expiration_timestamp: u64,
+    deepbook_pool_id: ID,
     
     // Position tracking
     long_positions: Table<address, FuturesPosition>,
@@ -523,6 +532,7 @@ public fun create_futures_contract<T: store>(
     expiration_timestamp: u64,
     contract_size: u64,
     tick_size: u64,
+    deepbook_pool_id: ID,
     _admin_cap: &AdminCap,
     ctx: &mut TxContext,
 ): ID {
@@ -549,7 +559,7 @@ public fun create_futures_contract<T: store>(
         underlying_price: 0,
         volume_24h: 0,
         open_interest: 0,
-        deepbook_pool_id: option::none(),
+        deepbook_pool_id: option::some(deepbook_pool_id),
         price_feed_id: option::none(),
     };
     
@@ -559,6 +569,7 @@ public fun create_futures_contract<T: store>(
         contract_symbol,
         underlying_type: string::utf8(b"T"),
         expiration_timestamp,
+        deepbook_pool_id,
         long_positions: table::new(ctx),
         short_positions: table::new(ctx),
         total_positions: 0,
@@ -600,29 +611,57 @@ public fun create_futures_contract<T: store>(
 public fun open_futures_position<T: store>(
     market: &mut FuturesMarket<T>,
     registry: &FuturesRegistry,
+    pool: &mut Pool<USDC, T>,
     side: String, // "LONG" or "SHORT"
     size: u64,
-    entry_price: u64,
     margin_coin: Coin<USDC>,
     balance_manager: &mut BalanceManager,
     trade_proof: &TradeProof,
-    price_feeds: &vector<PriceInfoObject>,
+    price_info_object: &PriceInfoObject,
+    expected_feed_id: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ): FuturesPosition {
     assert!(!registry.is_paused, E_MARKET_NOT_ACTIVE);
     assert!(market.is_active && !market.is_expired, E_MARKET_NOT_ACTIVE);
     assert!(size > 0, E_INSUFFICIENT_BALANCE);
-    assert!(entry_price > 0, E_INVALID_PRICE);
-    
+
     let user = tx_context::sender(ctx);
     let margin_amount = coin::value(&margin_coin);
-    
+
+    // DeepBook integration: Place market order for position opening
+    let is_bid = side == string::utf8(b"LONG");
+    let client_order_id = clock::timestamp_ms(clock); // Use timestamp as unique order ID
+    let self_matching_option = 0u8; // SELF_MATCHING_ALLOWED
+    let pay_with_deep = false; // Use input token for fees
+    let _order_info = pool::place_market_order<USDC, T>(
+        pool,
+        balance_manager,
+        trade_proof,
+        client_order_id,
+        self_matching_option,
+        size,
+        is_bid,
+        pay_with_deep,
+        clock,
+        ctx,
+    );
+    // Use Pyth price as entry price (DeepBook fill price not accessible)
+    let entry_price = get_validated_pyth_price(
+        price_info_object,
+        expected_feed_id,
+        clock,
+        60, // max_age_sec
+        option::none(), // No deviation check for entry
+        0 // No deviation check for entry
+    );
+    assert!(entry_price > 0, E_INVALID_PRICE);
+
     // Calculate required margin
     let contract_value = size * entry_price;
     let required_margin = (contract_value * MIN_MARGIN_RATIO) / BASIS_POINTS;
     assert!(margin_amount >= required_margin, E_INSUFFICIENT_COLLATERAL);
-    
+
     // Create position
     let position = FuturesPosition {
         id: object::new(ctx),
@@ -642,20 +681,17 @@ public fun open_futures_position<T: store>(
         settlement_amount: option::none(),
         settlement_timestamp: option::none(),
     };
-    
+
     let position_id = object::id(&position);
-    
-    // Note: For production, position would be stored in market tables
-    // For now, returning position directly for testing/demo purposes
-    
+
     // Update market statistics
     market.total_positions = market.total_positions + 1;
     market.total_open_interest = market.total_open_interest + size;
     market.current_price = entry_price;
-    
+
     // Add margin to settlement funds
     balance::join(&mut market.settlement_funds, coin::into_balance(margin_coin));
-    
+
     // Emit event
     event::emit(FuturesPositionOpened {
         position_id,
@@ -667,12 +703,11 @@ public fun open_futures_position<T: store>(
         margin_posted: margin_amount,
         timestamp: clock::timestamp_ms(clock),
     });
-    
-    // Simplified DeepBook integration placeholder
+
+    // DeepBook and TradeProof integration would go here
     let _ = balance_manager;
     let _ = trade_proof;
-    let _ = price_feeds;
-    
+
     position
 }
 
@@ -742,24 +777,37 @@ public fun execute_final_settlement<T: store>(
     market: &mut FuturesMarket<T>,
     registry: &mut FuturesRegistry,
     settlement_engine: &mut SettlementEngine,
-    final_settlement_price: u64,
-    position: FuturesPosition,
+    price_info_object: &PriceInfoObject,
+    expected_feed_id: vector<u8>,
     clock: &Clock,
+    reference_price: Option<u64>, // For deviation check, e.g. TWAP or index
+    max_deviation_bps: u64,
+    position: FuturesPosition,
     _ctx: &mut TxContext,
 ): (u64, SignedInt) {
     assert!(market.is_expired, E_CONTRACT_EXPIRED);
+
+    // Fetch final settlement price from Pyth
+    let final_settlement_price = get_validated_pyth_price(
+        price_info_object,
+        expected_feed_id,
+        clock,
+        60, // max_age_sec
+        reference_price,
+        max_deviation_bps
+    );
     assert!(final_settlement_price > 0, E_INVALID_SETTLEMENT_PRICE);
-    
+
     let user = position.user;
     let position_size = position.size;
     let entry_price = position.average_price;
     let margin_posted = position.margin_posted;
     let side = position.side;
-    
+
     // Calculate settlement amount
     let settlement_amount;
     let realized_pnl;
-    
+
     if (side == string::utf8(b"LONG")) {
         if (final_settlement_price > entry_price) {
             let profit = (final_settlement_price - entry_price) * position_size;
@@ -791,11 +839,11 @@ public fun execute_final_settlement<T: store>(
             };
         };
     };
-    
+
     // Update settlement tracking
     market.settled_positions = market.settled_positions + 1;
     settlement_engine.total_settlements_processed = settlement_engine.total_settlements_processed + 1;
-    
+
     // Emit settlement event
     event::emit(PositionSettled {
         position_id: object::id(&position),
@@ -806,7 +854,7 @@ public fun execute_final_settlement<T: store>(
         realized_pnl,
         timestamp: clock::timestamp_ms(clock),
     });
-    
+
     // Clean up position
     let FuturesPosition { 
         id, user: _, side: _, size: _, average_price: _, margin_posted: _,
@@ -815,10 +863,10 @@ public fun execute_final_settlement<T: store>(
         settlement_eligible: _, settlement_amount: _, settlement_timestamp: _
     } = position;
     object::delete(id);
-    
+
     // Update registry
     let _ = registry;
-    
+
     (settlement_amount, realized_pnl)
 }
 
@@ -1039,6 +1087,38 @@ public fun apply_unxv_discount(
 ): u64 {
     let discount = (base_fee * discount_rate) / BASIS_POINTS;
     base_fee - discount
+}
+
+/// Helper to fetch and validate Pyth price (with staleness and deviation checks)
+public fun get_validated_pyth_price(
+    price_info_object: &PriceInfoObject,
+    expected_feed_id: vector<u8>,
+    clock: &Clock,
+    max_age_sec: u64,
+    reference_price: Option<u64>, // For deviation check, None disables
+    max_deviation_bps: u64,      // e.g. 100 = 1%
+): u64 {
+    // 1. Staleness check
+    let price_struct = pyth::get_price_no_older_than(price_info_object, clock, max_age_sec);
+
+    // 2. Feed ID check
+    let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
+    let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
+    assert!(price_id == expected_feed_id, E_PYTH_FEED_ID);
+
+    // 3. Extract price (i64)
+    let price_i64 = price::get_price(&price_struct);
+    let price_u64 = pyth_i64::get_magnitude_if_positive(&price_i64);
+
+    // 4. Deviation check (if reference provided)
+    if (option::is_some(&reference_price)) {
+        let ref_price = *option::borrow(&reference_price);
+        let deviation = if (price_u64 > ref_price) { price_u64 - ref_price } else { ref_price - price_u64 };
+        let deviation_bps = (deviation * BASIS_POINTS) / ref_price;
+        assert!(deviation_bps <= max_deviation_bps, E_PYTH_DEVIATION);
+    };
+
+    price_u64
 }
 
 // ========== Helper Functions ==========
