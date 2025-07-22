@@ -215,3 +215,40 @@ await client.moveCall({
 ✅ **No Placeholders**: Production-grade code throughout  
 
 The protocol is ready for testnet deployment and integration with CLI/server infrastructure. 
+
+---
+
+## Deployment & Initialization Checklist
+
+To use the UnXversal Options Protocol on-chain, you must create and initialize the following shared objects after publishing the package:
+
+### 1. **Registry**
+- Create the central `OptionsRegistry` object using the provided entry function.
+
+### 2. **Pools**
+- For each trading pair (e.g., BTC/USDC), create a DeepBook `Pool` using `create_permissionless_pool` or the appropriate entry function.
+- Pools are required for all underlying assets you want to support.
+
+### 3. **BalanceManagers**
+- Each user (or trading bot) must create their own `BalanceManager` object using `BalanceManager::new`.
+- This object holds user funds and is required for all trading actions.
+
+### 4. **Other Shared Objects**
+- Any other required shared objects (e.g., DeepBook Registry, AdminCaps, etc.) must also be created as needed.
+
+### 5. **Initialization Script Example**
+- After publishing the Move package, run a script or sequence of transactions to:
+    - Create the `OptionsRegistry`.
+    - Create all required `Pool` objects.
+    - (Optionally) Create initial `BalanceManager` objects for test users.
+    - Register assets and configure protocol parameters as needed.
+
+### 6. **Passing Objects to Entry Functions**
+- All protocol entry functions require you to pass in the relevant shared objects (e.g., `&mut Pool`, `&mut BalanceManager`, `&OptionsRegistry`).
+- The contract does **not** assume any pre-existing global objects; you must always pass them in.
+
+---
+
+**See the contract source for comments on each entry function specifying which objects must be passed in.**
+
+--- 

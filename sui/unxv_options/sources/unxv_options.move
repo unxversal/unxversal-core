@@ -5,15 +5,12 @@
 module unxv_options::unxv_options {
     use std::string::{Self, String};
     
-    use sui::balance::{Self, Balance};
-    use sui::coin::{Self, Coin};
-    use sui::object::{Self, UID, ID};
-    use sui::transfer;
-    use sui::tx_context::{Self, TxContext};
+    use sui::coin;
     use sui::event;
     use sui::clock::{Self, Clock};
     use sui::table::{Self, Table};
     use sui::vec_set::{Self, VecSet};
+    use sui::coin::Coin;
 
     
     // Pyth Network integration for price feeds
@@ -24,7 +21,13 @@ module unxv_options::unxv_options {
     use pyth::i64 as pyth_i64;
     
     // DeepBook integration for options trading
-    use deepbook::balance_manager::{BalanceManager, TradeProof};
+    use deepbook::balance_manager::{BalanceManager, TradeProof, deposit};
+    use deepbook::pool::{Pool, place_limit_order};
+    
+    // DeepBook order type and self-matching constants (copied from DeepBook, not public)
+    const NO_RESTRICTION: u8 = 0;
+    const IMMEDIATE_OR_CANCEL: u8 = 1;
+    const SELF_MATCHING_ALLOWED: u8 = 0;
     
     // Standard coin types
     public struct USDC has drop {}
@@ -42,11 +45,11 @@ module unxv_options::unxv_options {
     const E_INVALID_OPTION_TYPE: u64 = 11;
     const E_MARKET_NOT_ACTIVE: u64 = 12;
     const E_INSUFFICIENT_BALANCE: u64 = 13;
+    const E_INVALID_ID: u64 = 14;
     
     // ========== Constants ==========
     
     const BASIS_POINTS: u64 = 10000;
-    const SECONDS_PER_YEAR: u64 = 31536000;
     const MIN_OPTION_DURATION: u64 = 3600000; // 1 hour in milliseconds
     const MAX_OPTION_DURATION: u64 = 31536000000; // 1 year in milliseconds
     const DEFAULT_RISK_FREE_RATE: u64 = 300; // 3% annual rate in basis points
@@ -134,6 +137,7 @@ module unxv_options::unxv_options {
     }
     
     /// Pricing model configuration
+    #[allow(unused_field)]
     public struct PricingModel has store {
         model_type: String, // "BLACK_SCHOLES", "BINOMIAL", "MONTE_CARLO"
         risk_free_rate: u64,
@@ -287,6 +291,7 @@ module unxv_options::unxv_options {
     }
     
     /// Volatility surface for options pricing
+    #[allow(unused_field)]
     public struct VolatilitySurface has store {
         underlying_asset: String,
         time_to_expiry: vector<u64>,
@@ -296,6 +301,7 @@ module unxv_options::unxv_options {
     }
     
     /// Interest rate curve
+    #[allow(unused_field)]
     public struct InterestRateCurve has store {
         tenors: vector<u64>,
         rates: vector<u64>,
@@ -304,6 +310,7 @@ module unxv_options::unxv_options {
     }
     
     /// Value at Risk model
+    #[allow(unused_field)]
     public struct VaRModel has store {
         model_type: String,
         confidence_level: u64,
@@ -312,6 +319,7 @@ module unxv_options::unxv_options {
     }
     
     /// Stress testing scenario
+    #[allow(unused_field)]
     public struct StressScenario has store {
         scenario_name: String,
         price_shock: SignedInt,
@@ -326,6 +334,7 @@ module unxv_options::unxv_options {
     }
     
     /// Trade record for history tracking
+    #[allow(unused_field)]
     public struct TradeRecord has store {
         trader: address,
         side: String, // "BUY" or "SELL"
@@ -337,6 +346,7 @@ module unxv_options::unxv_options {
     }
     
     /// Price point for historical data
+    #[allow(unused_field)]
     public struct PricePoint has store {
         timestamp: u64,
         mark_price: u64,
@@ -346,6 +356,7 @@ module unxv_options::unxv_options {
     }
     
     /// Option pricing result
+    #[allow(unused_field)]
     public struct OptionPricing has drop {
         theoretical_price: u64,
         bid_price: u64,
@@ -357,6 +368,7 @@ module unxv_options::unxv_options {
     }
     
     /// Greeks calculation result
+    #[allow(unused_field)]
     public struct Greeks has drop, store, copy {
         delta: SignedInt,
         gamma: u64,
@@ -366,6 +378,7 @@ module unxv_options::unxv_options {
     }
     
     /// Portfolio Greeks
+    #[allow(unused_field)]
     public struct PortfolioGreeks has drop {
         total_delta: SignedInt,
         total_gamma: u64,
@@ -378,6 +391,7 @@ module unxv_options::unxv_options {
     }
     
     /// Exercise result
+    #[allow(unused_field)]
     public struct ExerciseResult has drop {
         quantity_exercised: u64,
         settlement_amount: u64,
@@ -389,6 +403,7 @@ module unxv_options::unxv_options {
     }
     
     /// Position close result
+    #[allow(unused_field)]
     public struct PositionCloseResult has drop {
         quantity_closed: u64,
         closing_premium: u64,
@@ -401,6 +416,7 @@ module unxv_options::unxv_options {
     // ========== Events ==========
     
     /// Option market created
+    #[allow(unused_field)]
     public struct OptionMarketCreated has copy, drop {
         market_id: ID,
         underlying_asset: String,
@@ -414,6 +430,7 @@ module unxv_options::unxv_options {
     }
     
     /// Option traded
+    #[allow(unused_field)]
     public struct OptionTraded has copy, drop {
         market_id: ID,
         position_id: ID,
@@ -429,6 +446,7 @@ module unxv_options::unxv_options {
     }
     
     /// Option position opened
+    #[allow(unused_field)]
     public struct OptionPositionOpened has copy, drop {
         position_id: ID,
         owner: address,
@@ -443,6 +461,7 @@ module unxv_options::unxv_options {
     }
     
     /// Option exercised
+    #[allow(unused_field)]
     public struct OptionExercised has copy, drop {
         position_id: ID,
         market_id: ID,
@@ -457,6 +476,7 @@ module unxv_options::unxv_options {
     }
     
     /// Option expired
+    #[allow(unused_field)]
     public struct OptionExpired has copy, drop {
         market_id: ID,
         underlying_asset: String,
@@ -469,6 +489,7 @@ module unxv_options::unxv_options {
     }
     
     /// Greeks updated
+    #[allow(unused_field)]
     public struct GreeksUpdated has copy, drop {
         position_id: ID,
         market_id: ID,
@@ -481,6 +502,7 @@ module unxv_options::unxv_options {
     }
     
     /// UNXV benefits applied
+    #[allow(unused_field)]
     public struct UnxvBenefitsApplied has copy, drop {
         user: address,
         benefit_type: String,
@@ -492,6 +514,7 @@ module unxv_options::unxv_options {
     }
     
     /// Registry created
+    #[allow(unused_field)]
     public struct RegistryCreated has copy, drop {
         registry_id: ID,
         admin: address,
@@ -595,7 +618,7 @@ module unxv_options::unxv_options {
     
     /// Test helper to create test coins
     #[test_only]
-    public fun create_test_coin<T>(_amount: u64, ctx: &mut TxContext): Coin<T> {
+    public fun create_test_coin<T: drop>(_amount: u64, ctx: &mut TxContext): Coin<T> {
         coin::from_balance(balance::create_for_testing<T>(_amount), ctx)
     }
     
@@ -774,6 +797,7 @@ module unxv_options::unxv_options {
     public fun buy_option<T: store>(
         market: &mut OptionMarket<T>,
         registry: &OptionsRegistry,
+        pool: &mut Pool<T, USDC>,
         _pricing_engine: &OptionsPricingEngine,
         quantity: u64,
         max_premium: u64,
@@ -886,14 +910,22 @@ module unxv_options::unxv_options {
             timestamp: clock::timestamp_ms(clock),
         });
         
-        // Validate and use DeepBook integration for order execution
-        deepbook::balance_manager::validate_proof(balance_manager, trade_proof);
-        
-        // In a full implementation, we would:
-        // 1. Withdraw premium from balance_manager 
-        // 2. Execute the option purchase through DeepBook if there's a corresponding pool
-        // 3. Handle the actual fund transfers
-        // For now, we assume the premium payment is handled off-chain or through separate transaction
+        // Execute the trade through DeepBook
+        place_limit_order<T, USDC>(
+            pool,
+            balance_manager,
+            trade_proof,
+            0, // client_order_id
+            IMMEDIATE_OR_CANCEL,
+            SELF_MATCHING_ALLOWED,
+            option_price,
+            quantity,
+            true, // is_bid
+            false, // pay_with_deep
+            clock::timestamp_ms(clock) + 60000, // expire_timestamp
+            clock,
+            ctx
+        );
         
         position
     }
@@ -902,10 +934,11 @@ module unxv_options::unxv_options {
     public fun sell_option<T: store>(
         market: &mut OptionMarket<T>,
         registry: &OptionsRegistry,
+        pool: &mut Pool<T, USDC>,
         _pricing_engine: &OptionsPricingEngine,
         quantity: u64,
         min_premium: u64,
-        collateral_amount: u64,
+        collateral_coin: Coin<USDC>,
         balance_manager: &mut BalanceManager,
         trade_proof: &TradeProof,
         price_feeds: &vector<PriceInfoObject>,
@@ -942,7 +975,7 @@ module unxv_options::unxv_options {
             registry.risk_parameters.min_collateral_ratio,
         );
         
-        assert!(collateral_amount >= required_collateral, E_INSUFFICIENT_COLLATERAL);
+        assert!(coin::value(&collateral_coin) >= required_collateral, E_INSUFFICIENT_COLLATERAL);
         
         // Calculate Greeks
         let greeks = calculate_greeks_simple(
@@ -980,7 +1013,7 @@ module unxv_options::unxv_options {
         };
         
         // Add collateral to position
-        table::add(&mut position.collateral_deposited, string::utf8(b"USDC"), collateral_amount);
+        table::add(&mut position.collateral_deposited, string::utf8(b"USDC"), coin::value(&collateral_coin));
         
         let position_id = object::id(&position);
         
@@ -1017,14 +1050,25 @@ module unxv_options::unxv_options {
             timestamp: clock::timestamp_ms(clock),
         });
         
-        // Validate and use DeepBook integration for collateral management
-        deepbook::balance_manager::validate_proof(balance_manager, trade_proof);
-        
-        // In a full implementation, we would:
-        // 1. Collect premium into balance_manager
-        // 2. Lock collateral in balance_manager or separate escrow
-        // 3. Route orders through DeepBook if hedging is enabled
-        // For now, we assume collateral management is handled through balance_manager validation
+        // Lock collateral in the balance manager
+        deposit<USDC>(balance_manager, collateral_coin, ctx);
+
+        // Place the sell order on DeepBook
+        place_limit_order<T, USDC>(
+            pool,
+            balance_manager,
+            trade_proof,
+            1, // client_order_id
+            NO_RESTRICTION,
+            SELF_MATCHING_ALLOWED,
+            option_price,
+            quantity,
+            false, // is_bid (ask)
+            false, // pay_with_deep
+            clock::timestamp_ms(clock) + 3600000, // expire_timestamp
+            clock,
+            ctx
+        );
         
         position
     }
@@ -1032,14 +1076,16 @@ module unxv_options::unxv_options {
     // ========== Exercise and Settlement ==========
     
     /// Exercise option position
+    #[allow(lint(self_transfer))]
     public fun exercise_option<T: store>(
         position: &mut OptionPosition,
         market: &mut OptionMarket<T>,
         registry: &OptionsRegistry,
+        _pool: &mut Pool<T, USDC>,
         quantity: u64,
         settlement_preference: String,
         balance_manager: &mut BalanceManager,
-        trade_proof: &TradeProof,
+        _trade_proof: &TradeProof,
         price_feeds: &vector<PriceInfoObject>,
         clock: &Clock,
         ctx: &mut TxContext,
@@ -1108,15 +1154,13 @@ module unxv_options::unxv_options {
             timestamp: current_time,
         });
         
-        // Consume unused parameters
-        // Validate DeepBook integration for settlement
-        deepbook::balance_manager::validate_proof(balance_manager, trade_proof);
-        
-        // In a full implementation, we would:
-        // 1. Transfer settlement amount to trader's balance_manager
-        // 2. Handle any cash settlement through DeepBook pools
-        // 3. Update collateral and margin requirements
-        // For now, we assume settlement is handled through validated balance_manager
+        // Settle funds through DeepBook
+        let settlement_coin = deepbook::balance_manager::withdraw<USDC>(
+            balance_manager, 
+            net_settlement, 
+            ctx
+        );
+        transfer::public_transfer(settlement_coin, tx_context::sender(ctx));
         
         exercise_result
     }
@@ -1369,7 +1413,7 @@ module unxv_options::unxv_options {
                 // ITM call: higher delta, approaching 1.0 (10000 in basis points)
                 let itm_amount = moneyness_ratio - 10000; // How much ITM
                 7000 + (itm_amount / 10) // Base 0.7 + ITM boost
-            } else {
+        } else {
                 // OTM call: lower delta, approaching 0
                 let otm_amount = 10000 - moneyness_ratio; // How much OTM
                 let base_delta = 3000; // Base 0.3
@@ -1489,9 +1533,8 @@ module unxv_options::unxv_options {
         // Validate feed ID for specific assets (simplified validation)
         if (asset == string::utf8(b"BTC")) {
             // BTC/USD price feed ID (example - in production use actual feed IDs)
-            let _expected_feed_id = x"e62df6c8b4c85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43";
-            // Note: In production, would assert!(price_id == expected_feed_id, E_INVALID_ID);
-            // For now, we'll skip strict validation to allow testing
+            let expected_feed_id = x"e62df6c8b4c85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43";
+            assert!(_price_id == expected_feed_id, E_INVALID_ID);
         };
         
         // Get the price with staleness check (max 60 seconds old)
@@ -1629,235 +1672,6 @@ module unxv_options::unxv_options {
             500 // 5%
         } else {
             0 // No discount
-        }
-    }
-    
-    /// Get exercise result details for testing
-    public fun get_exercise_result_details(result: &ExerciseResult): (u64, u64) {
-        (result.quantity_exercised, result.settlement_amount)
-    }
-    
-    /// Get Greeks values for testing
-    public fun get_greeks_values(greeks: &Greeks): (u64, u64) {
-        (greeks.gamma, greeks.vega)
-    }
-    
-    /// Test-only simplified buy option function
-    #[test_only]
-    public fun test_buy_option<T: store>(
-        market: &mut OptionMarket<T>,
-        registry: &OptionsRegistry,
-        _pricing_engine: &OptionsPricingEngine,
-        quantity: u64,
-        max_premium: u64,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ): OptionPosition {
-        // Simplified version without DeepBook integration for testing
-        assert!(!registry.is_paused, E_MARKET_NOT_ACTIVE);
-        assert!(market.is_active && !market.is_expired, E_MARKET_NOT_ACTIVE);
-        assert!(quantity > 0, E_INSUFFICIENT_BALANCE);
-        
-        let underlying_price = 50000000000; // $50,000 as placeholder
-        let time_to_expiry = market.expiry_timestamp - clock::timestamp_ms(clock);
-        let volatility = 200000; // 2% volatility as placeholder (reduced for testing)
-        
-        // Use simplified pricing for tests to avoid overflow
-        let option_price = if (market.option_type == string::utf8(b"CALL")) {
-            if (underlying_price > market.strike_price) {
-                (underlying_price - market.strike_price) + 1000000000 // $1,000 time value
-            } else {
-                500000000 // $500 for out-of-money options
-            }
-        } else { // PUT
-            if (market.strike_price > underlying_price) {
-                (market.strike_price - underlying_price) + 1000000000 // $1,000 time value  
-            } else {
-                500000000 // $500 for out-of-money options
-            }
-        };
-        
-        assert!(option_price <= max_premium, E_INSUFFICIENT_BALANCE);
-        
-        let greeks = calculate_greeks_simple(
-            underlying_price,
-            market.strike_price,
-            time_to_expiry,
-            volatility,
-            market.option_type,
-        );
-        
-        let position = OptionPosition {
-            id: object::new(ctx),
-            owner: tx_context::sender(ctx),
-            market_id: object::id(market),
-            position_type: string::utf8(b"LONG"),
-            quantity,
-            entry_price: option_price,
-            entry_timestamp: clock::timestamp_ms(clock),
-            collateral_deposited: table::new(ctx),
-            margin_requirement: 0,
-            unrealized_pnl: signed_int_from(0),
-            delta: greeks.delta,
-            gamma: greeks.gamma,
-            theta: greeks.theta,
-            vega: greeks.vega,
-            rho: greeks.rho,
-            is_exercised: false,
-            exercise_timestamp: option::none(),
-            settlement_amount: option::none(),
-            auto_exercise: false,
-            stop_loss_price: option::none(),
-            take_profit_price: option::none(),
-            delta_hedge_enabled: false,
-        };
-        
-        // Update market statistics
-        market.total_open_interest = market.total_open_interest + quantity;
-        market.total_volume = market.total_volume + (quantity * option_price);
-        market.last_trade_price = option::some(option_price);
-        
-        position
-    }
-    
-    /// Test-only simplified sell option function
-    #[test_only]
-    public fun test_sell_option<T: store>(
-        market: &mut OptionMarket<T>,
-        registry: &OptionsRegistry,
-        _pricing_engine: &OptionsPricingEngine,
-        quantity: u64,
-        min_premium: u64,
-        collateral_amount: u64,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ): OptionPosition {
-        // Simplified version without DeepBook integration for testing
-        assert!(!registry.is_paused, E_MARKET_NOT_ACTIVE);
-        assert!(market.is_active && !market.is_expired, E_MARKET_NOT_ACTIVE);
-        assert!(quantity > 0, E_INSUFFICIENT_BALANCE);
-        
-        let underlying_price = 50000000000; // $50,000 as placeholder
-        let time_to_expiry = market.expiry_timestamp - clock::timestamp_ms(clock);
-        let volatility = 200000; // 2% volatility as placeholder (reduced for testing)
-        
-        let option_price = black_scholes_price(
-            underlying_price,
-            market.strike_price,
-            time_to_expiry,
-            DEFAULT_RISK_FREE_RATE,
-            volatility,
-            market.option_type,
-        );
-        
-        assert!(option_price >= min_premium, E_INSUFFICIENT_BALANCE);
-        
-        let required_collateral = 1000000; // Simplified minimal collateral requirement for testing
-        
-        assert!(collateral_amount >= required_collateral, E_INSUFFICIENT_COLLATERAL);
-        
-        let greeks = calculate_greeks_simple(
-            underlying_price,
-            market.strike_price,
-            time_to_expiry,
-            volatility,
-            market.option_type,
-        );
-        
-        let mut position = OptionPosition {
-            id: object::new(ctx),
-            owner: tx_context::sender(ctx),
-            market_id: object::id(market),
-            position_type: string::utf8(b"SHORT"),
-            quantity,
-            entry_price: option_price,
-            entry_timestamp: clock::timestamp_ms(clock),
-            collateral_deposited: table::new(ctx),
-            margin_requirement: required_collateral,
-            unrealized_pnl: signed_int_from(0),
-            delta: signed_int_negative(greeks.delta.value),
-            gamma: greeks.gamma,
-            theta: signed_int_negative(greeks.theta.value),
-            vega: greeks.vega,
-            rho: greeks.rho,
-            is_exercised: false,
-            exercise_timestamp: option::none(),
-            settlement_amount: option::none(),
-            auto_exercise: false,
-            stop_loss_price: option::none(),
-            take_profit_price: option::none(),
-            delta_hedge_enabled: false,
-        };
-        
-        table::add(&mut position.collateral_deposited, string::utf8(b"USDC"), collateral_amount);
-        
-        // Update market statistics
-        market.total_open_interest = market.total_open_interest + quantity;
-        market.total_volume = market.total_volume + (quantity * option_price);
-        market.last_trade_price = option::some(option_price);
-        
-        position
-    }
-    
-    /// Test-only simplified exercise option function
-    #[test_only]
-    public fun test_exercise_option<T: store>(
-        position: &mut OptionPosition,
-        market: &mut OptionMarket<T>,
-        registry: &OptionsRegistry,
-        quantity: u64,
-        settlement_preference: String,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ): ExerciseResult {
-        // Simplified version without DeepBook integration for testing
-        assert!(!registry.is_paused, E_MARKET_NOT_ACTIVE);
-        assert!(position.owner == tx_context::sender(ctx), E_POSITION_NOT_FOUND);
-        assert!(position.position_type == string::utf8(b"LONG"), E_OPTION_NOT_EXERCISABLE);
-        assert!(quantity <= position.quantity, E_INSUFFICIENT_BALANCE);
-        assert!(!position.is_exercised, E_OPTION_NOT_EXERCISABLE);
-        
-        let current_time = clock::timestamp_ms(clock);
-        let underlying_price = 55000000000; // $55,000 ITM for testing
-        let is_in_the_money = check_if_in_the_money(
-            market.option_type,
-            market.strike_price,
-            underlying_price,
-        );
-        
-        assert!(is_in_the_money, E_OPTION_NOT_EXERCISABLE);
-        
-        let intrinsic_value = calculate_intrinsic_value(
-            market.option_type,
-            market.strike_price,
-            underlying_price,
-        );
-        let settlement_amount = (intrinsic_value * quantity) / 1000000;
-        
-        let exercise_fee = (settlement_amount * registry.settlement_parameters.settlement_fee) / BASIS_POINTS;
-        let net_settlement = settlement_amount - exercise_fee;
-        
-        if (quantity == position.quantity) {
-            position.is_exercised = true;
-        };
-        position.quantity = position.quantity - quantity;
-        position.exercise_timestamp = option::some(current_time);
-        position.settlement_amount = option::some(net_settlement);
-        
-        market.total_open_interest = market.total_open_interest - quantity;
-        
-        ExerciseResult {
-            quantity_exercised: quantity,
-            settlement_amount: net_settlement,
-            settlement_type: settlement_preference,
-            profit_loss: if (net_settlement >= (position.entry_price * quantity)) {
-                signed_int_from(net_settlement - (position.entry_price * quantity))
-            } else {
-                signed_int_negative((position.entry_price * quantity) - net_settlement)
-            },
-            exercise_fee,
-            assets_received: vector[string::utf8(b"USDC")],
-            amounts_received: vector[net_settlement],
         }
     }
 }
