@@ -15,6 +15,13 @@ module unxv_lending::unxv_lending {
     use std::string::{String};
     use std::vector;
     use std::option::{Self, Option};
+    use pyth::price_info::{Self, PriceInfoObject};
+    use pyth::pyth;
+    use pyth::price;
+    use pyth::price_identifier;
+    use pyth::i64 as pyth_i64;
+    use deepbook::balance_manager::{BalanceManager, TradeProof};
+    use deepbook::pool::{Pool};
 
     // Error codes
     const E_NOT_AUTHORIZED: u64 = 1;
@@ -576,6 +583,10 @@ module unxv_lending::unxv_lending {
         use_as_collateral: bool,
         clock: &Clock,
         ctx: &mut TxContext,
+        collateral_asset_names: &vector<String>,
+        collateral_price_feeds: &vector<PriceInfoObject>,
+        debt_asset_names: &vector<String>,
+        debt_price_feeds: &vector<PriceInfoObject>,
     ): SupplyReceipt {
         assert!(!registry.emergency_pause, E_EMERGENCY_PAUSE_ACTIVE);
         assert!(pool.is_active && !pool.is_frozen, E_EMERGENCY_PAUSE_ACTIVE);
@@ -622,7 +633,7 @@ module unxv_lending::unxv_lending {
             table::add(&mut account.supply_balances, pool.asset_name, new_position);
             if (use_as_collateral && asset_config.is_collateral) {
                 vec_set::insert(&mut account.assets_as_collateral, pool.asset_name);
-        };
+            };
         };
         
         // Emit supply event
@@ -653,6 +664,10 @@ module unxv_lending::unxv_lending {
         withdraw_amount: u64,
         clock: &Clock,
         ctx: &mut TxContext,
+        collateral_asset_names: &vector<String>,
+        collateral_price_feeds: &vector<PriceInfoObject>,
+        debt_asset_names: &vector<String>,
+        debt_price_feeds: &vector<PriceInfoObject>,
     ): Coin<T> {
         assert!(!registry.emergency_pause, E_EMERGENCY_PAUSE_ACTIVE);
         assert!(pool.is_active, E_EMERGENCY_PAUSE_ACTIVE);
@@ -671,8 +686,13 @@ module unxv_lending::unxv_lending {
         
         if (is_collateral) {
             // Update account health after hypothetical withdrawal
+            let position = table::borrow(&account.supply_balances, asset_name);
+            let current_balance = position.scaled_balance;
+            let scaled_withdraw = (withdraw_amount * INITIAL_EXCHANGE_RATE) / pool.supply_index;
+            let new_scaled_balance = if (scaled_withdraw <= current_balance) { current_balance - scaled_withdraw } else { 0 };
             let hypothetical_health = calculate_health_factor_after_withdrawal(
-                account, registry, asset_name, withdraw_amount
+                account, registry, asset_name, new_scaled_balance,
+                collateral_asset_names, collateral_price_feeds, debt_asset_names, debt_price_feeds, clock
             );
             assert!(hypothetical_health >= MIN_HEALTH_FACTOR, E_HEALTH_FACTOR_TOO_LOW);
         };
@@ -728,6 +748,10 @@ module unxv_lending::unxv_lending {
         interest_rate_mode: String,
         clock: &Clock,
         ctx: &mut TxContext,
+        collateral_asset_names: &vector<String>,
+        collateral_price_feeds: &vector<PriceInfoObject>,
+        debt_asset_names: &vector<String>,
+        debt_price_feeds: &vector<PriceInfoObject>,
     ): Coin<T> {
         assert!(!registry.emergency_pause, E_EMERGENCY_PAUSE_ACTIVE);
         assert!(pool.is_active && !pool.is_frozen, E_EMERGENCY_PAUSE_ACTIVE);
@@ -749,7 +773,7 @@ module unxv_lending::unxv_lending {
 
         // Calculate health factor after hypothetical borrow
         let health_after_borrow = calculate_health_factor_after_borrow(
-            account, registry, pool.asset_name, borrow_amount
+            account, registry, pool.asset_name, borrow_amount, collateral_asset_names, collateral_price_feeds, debt_asset_names, debt_price_feeds, clock
         );
         assert!(health_after_borrow >= MIN_HEALTH_FACTOR, E_HEALTH_FACTOR_TOO_LOW);
         
@@ -821,6 +845,10 @@ module unxv_lending::unxv_lending {
         repay_coin: Coin<T>,
         clock: &Clock,
         ctx: &mut TxContext,
+        collateral_asset_names: &vector<String>,
+        collateral_price_feeds: &vector<PriceInfoObject>,
+        debt_asset_names: &vector<String>,
+        debt_price_feeds: &vector<PriceInfoObject>,
     ): RepayReceipt {
         assert!(!registry.emergency_pause, E_EMERGENCY_PAUSE_ACTIVE);
         assert!(pool.is_active, E_EMERGENCY_PAUSE_ACTIVE);
@@ -861,7 +889,7 @@ module unxv_lending::unxv_lending {
         balance::join(&mut pool.cash, repay_balance);
 
         // Calculate health factor improvement
-        let new_health_factor = calculate_current_health_factor(account, registry);
+        let new_health_factor = calculate_current_health_factor(account, registry, collateral_asset_names, collateral_price_feeds, debt_asset_names, debt_price_feeds, clock);
         let health_improvement = if (new_health_factor > account.health_factor) {
             new_health_factor - account.health_factor
         } else { 0 };
@@ -999,72 +1027,169 @@ module unxv_lending::unxv_lending {
     }
 
     // Health factor calculations
-    fun calculate_current_health_factor(
+    /// Calculate current health factor given explicit asset names and price feeds
+    /// asset_names and price_feeds must be parallel arrays for all collateral and debt assets
+    public fun calculate_current_health_factor(
         account: &UserAccount,
         registry: &LendingRegistry,
+        collateral_asset_names: &vector<String>,
+        collateral_price_feeds: &vector<PriceInfoObject>,
+        debt_asset_names: &vector<String>,
+        debt_price_feeds: &vector<PriceInfoObject>,
+        clock: &Clock,
     ): u64 {
         let mut total_collateral_value = 0;
-        let total_debt_value = 0;
-        let mut liquidation_threshold_value = 0;
-
-        // Calculate total collateral value
-        let collateral_assets = vec_set::keys(&account.assets_as_collateral);
+        let collateral_len = vector::length(collateral_asset_names);
         let mut i = 0;
-        while (i < vector::length(collateral_assets)) {
-            let asset_name = vector::borrow(collateral_assets, i);
-            if (table::contains(&account.supply_balances, *asset_name)) {
-                let position = table::borrow(&account.supply_balances, *asset_name);
+        while (i < collateral_len) {
+            let asset_name = *vector::borrow(collateral_asset_names, i);
+            if (table::contains(&account.supply_balances, asset_name)) {
+                let position = table::borrow(&account.supply_balances, asset_name);
                 if (position.is_collateral) {
-                    let asset_config = table::borrow(&registry.supported_assets, *asset_name);
-                    // TODO: Get real price from oracle
-                    let asset_price = 1000000; // Placeholder $1 price
+                    let asset_config = table::borrow(&registry.supported_assets, asset_name);
+                    let asset_price = get_asset_price(registry, collateral_price_feeds, asset_name, clock);
                     let balance_value = position.scaled_balance * asset_price / INITIAL_EXCHANGE_RATE;
-                    
-                    total_collateral_value = total_collateral_value + 
-                        (balance_value * asset_config.collateral_factor) / BASIS_POINTS;
-                    liquidation_threshold_value = liquidation_threshold_value +
-                        (balance_value * asset_config.liquidation_threshold) / BASIS_POINTS;
+                    total_collateral_value = total_collateral_value + (balance_value * asset_config.collateral_factor) / BASIS_POINTS;
                 };
             };
             i = i + 1;
         };
-
-        // Calculate total debt value (simplified - should iterate through all borrow positions)
-        // For now, return safe health factor if no debt
-        if (total_debt_value == 0) {
-            return BASIS_POINTS * 10; // Very healthy
+        
+        let mut total_debt_value = 0;
+        let debt_len = vector::length(debt_asset_names);
+        let mut j = 0;
+        while (j < debt_len) {
+            let asset_name = *vector::borrow(debt_asset_names, j);
+            if (table::contains(&account.borrow_balances, asset_name)) {
+                let borrow_position = table::borrow(&account.borrow_balances, asset_name);
+                let asset_price = get_asset_price(registry, debt_price_feeds, asset_name, clock);
+                let debt_value = borrow_position.scaled_balance * asset_price / INITIAL_EXCHANGE_RATE;
+                total_debt_value = total_debt_value + debt_value;
+            };
+            j = j + 1;
         };
-
-        // Health factor = total_collateral_value / total_debt_value
-        if (total_debt_value > 0) {
-            (total_collateral_value * BASIS_POINTS) / total_debt_value
+        
+        if (total_debt_value == 0) {
+            BASIS_POINTS * 10
         } else {
-            BASIS_POINTS * 10 // Very healthy if no debt
+            (total_collateral_value * BASIS_POINTS) / total_debt_value
         }
     }
 
-    // Hypothetical health factor after withdrawal
-    fun calculate_health_factor_after_withdrawal(
-        _account: &UserAccount,
-        _registry: &LendingRegistry,
-        _asset_name: String,
-        _withdraw_amount: u64,
+    /// Calculate health factor after withdrawal for a specific asset
+    /// The caller must pass the hypothetical new scaled balance for the asset being withdrawn
+    public fun calculate_health_factor_after_withdrawal(
+        account: &UserAccount,
+        registry: &LendingRegistry,
+        asset_name: String,
+        new_scaled_balance: u64,
+        collateral_asset_names: &vector<String>,
+        collateral_price_feeds: &vector<PriceInfoObject>,
+        debt_asset_names: &vector<String>,
+        debt_price_feeds: &vector<PriceInfoObject>,
+        clock: &Clock,
     ): u64 {
-        // Simplified calculation - should properly account for price impact
-        // For production, implement full calculation with oracle prices
-        MIN_HEALTH_FACTOR + 1000 // Return safe value for now
+        let mut total_collateral_value = 0;
+        let collateral_len = vector::length(collateral_asset_names);
+        let mut i = 0;
+        while (i < collateral_len) {
+            let name = *vector::borrow(collateral_asset_names, i);
+            if (name == asset_name) {
+                if (table::contains(&account.supply_balances, name)) {
+                    let position = table::borrow(&account.supply_balances, name);
+                    if (position.is_collateral) {
+                        let asset_config = table::borrow(&registry.supported_assets, name);
+                        let asset_price = get_asset_price(registry, collateral_price_feeds, name, clock);
+                        let balance_value = new_scaled_balance * asset_price / INITIAL_EXCHANGE_RATE;
+                        total_collateral_value = total_collateral_value + (balance_value * asset_config.collateral_factor) / BASIS_POINTS;
+                    };
+                };
+            } else if (table::contains(&account.supply_balances, name)) {
+                let position = table::borrow(&account.supply_balances, name);
+                if (position.is_collateral) {
+                    let asset_config = table::borrow(&registry.supported_assets, name);
+                    let asset_price = get_asset_price(registry, collateral_price_feeds, name, clock);
+                    let balance_value = position.scaled_balance * asset_price / INITIAL_EXCHANGE_RATE;
+                    total_collateral_value = total_collateral_value + (balance_value * asset_config.collateral_factor) / BASIS_POINTS;
+                };
+            };
+            i = i + 1;
+        };
+        
+        let mut total_debt_value = 0;
+        let debt_len = vector::length(debt_asset_names);
+        let mut j = 0;
+        while (j < debt_len) {
+            let name = *vector::borrow(debt_asset_names, j);
+            if (table::contains(&account.borrow_balances, name)) {
+                let borrow_position = table::borrow(&account.borrow_balances, name);
+                let asset_price = get_asset_price(registry, debt_price_feeds, name, clock);
+                let debt_value = borrow_position.scaled_balance * asset_price / INITIAL_EXCHANGE_RATE;
+                total_debt_value = total_debt_value + debt_value;
+            };
+            j = j + 1;
+        };
+        
+        if (total_debt_value == 0) {
+            BASIS_POINTS * 10
+        } else {
+            (total_collateral_value * BASIS_POINTS) / total_debt_value
+        }
     }
 
-    // Hypothetical health factor after borrow
-    fun calculate_health_factor_after_borrow(
-        _account: &UserAccount,
-        _registry: &LendingRegistry,
-        _asset_name: String,
-        _borrow_amount: u64,
+    /// Calculate health factor after borrow for a specific asset
+    /// The caller must pass the hypothetical new scaled debt for the asset being borrowed
+    public fun calculate_health_factor_after_borrow(
+        account: &UserAccount,
+        registry: &LendingRegistry,
+        asset_name: String,
+        new_scaled_debt: u64,
+        collateral_asset_names: &vector<String>,
+        collateral_price_feeds: &vector<PriceInfoObject>,
+        debt_asset_names: &vector<String>,
+        debt_price_feeds: &vector<PriceInfoObject>,
+        clock: &Clock,
     ): u64 {
-        // Simplified calculation - should properly account for new debt
-        // For production, implement full calculation with oracle prices
-        MIN_HEALTH_FACTOR + 1000 // Return safe value for now
+        let mut total_collateral_value = 0;
+        let collateral_len = vector::length(collateral_asset_names);
+        let mut i = 0;
+        while (i < collateral_len) {
+            let name = *vector::borrow(collateral_asset_names, i);
+            if (table::contains(&account.supply_balances, name)) {
+                let position = table::borrow(&account.supply_balances, name);
+                if (position.is_collateral) {
+                    let asset_config = table::borrow(&registry.supported_assets, name);
+                    let asset_price = get_asset_price(registry, collateral_price_feeds, name, clock);
+                    let balance_value = position.scaled_balance * asset_price / INITIAL_EXCHANGE_RATE;
+                    total_collateral_value = total_collateral_value + (balance_value * asset_config.collateral_factor) / BASIS_POINTS;
+                };
+            };
+            i = i + 1;
+        };
+        
+        let mut total_debt_value = 0;
+        let debt_len = vector::length(debt_asset_names);
+        let mut j = 0;
+        while (j < debt_len) {
+            let name = *vector::borrow(debt_asset_names, j);
+            if (name == asset_name) {
+                let asset_price = get_asset_price(registry, debt_price_feeds, name, clock);
+                let debt_value = new_scaled_debt * asset_price / INITIAL_EXCHANGE_RATE;
+                total_debt_value = total_debt_value + debt_value;
+            } else if (table::contains(&account.borrow_balances, name)) {
+                let borrow_position = table::borrow(&account.borrow_balances, name);
+                let asset_price = get_asset_price(registry, debt_price_feeds, name, clock);
+                let debt_value = borrow_position.scaled_balance * asset_price / INITIAL_EXCHANGE_RATE;
+                total_debt_value = total_debt_value + debt_value;
+            };
+            j = j + 1;
+        };
+        
+        if (total_debt_value == 0) {
+            BASIS_POINTS * 10
+        } else {
+            (total_collateral_value * BASIS_POINTS) / total_debt_value
+        }
     }
 
     // UNXV benefits calculation
@@ -1142,8 +1267,7 @@ module unxv_lending::unxv_lending {
         account.unxv_stake_amount = new_total_stake;
 
         // Destroy the staked coin (simplified for v1)
-        let coin_balance = coin::into_balance(stake_coin);
-        balance::destroy_for_testing(coin_balance); // Simplified for testing
+        transfer::public_transfer(stake_coin, @0x0); // Burn the staked coin
         
         let benefits = calculate_tier_benefits(new_tier);
         
@@ -1344,11 +1468,22 @@ module unxv_lending::unxv_lending {
     public fun calculate_health_factor(
         account: &UserAccount,
         registry: &LendingRegistry,
+        collateral_asset_names: &vector<String>,
+        collateral_price_feeds: &vector<PriceInfoObject>,
+        debt_asset_names: &vector<String>,
+        debt_price_feeds: &vector<PriceInfoObject>,
         clock: &Clock,
     ): HealthFactorResult {
         let _current_timestamp = clock::timestamp_ms(clock);
-        let health_factor = calculate_current_health_factor(account, registry);
-
+        let health_factor = calculate_current_health_factor(
+            account,
+            registry,
+            collateral_asset_names,
+            collateral_price_feeds,
+            debt_asset_names,
+            debt_price_feeds,
+            clock
+        );
         HealthFactorResult {
             health_factor,
             total_collateral_value: account.total_collateral_value,
@@ -1370,13 +1505,17 @@ module unxv_lending::unxv_lending {
         liquidation_amount: u64,
         clock: &Clock,
         ctx: &mut TxContext,
+        collateral_asset_names: &vector<String>,
+        collateral_price_feeds: &vector<PriceInfoObject>,
+        debt_asset_names: &vector<String>,
+        debt_price_feeds: &vector<PriceInfoObject>,
     ): LiquidationResult {
         assert!(!liquidation_engine.emergency_pause, E_EMERGENCY_PAUSE_ACTIVE);
         assert!(tx_context::sender(ctx) == liquidator_account.owner, E_NOT_AUTHORIZED);
 
         // Check if borrower is liquidatable
-        let health_result = calculate_health_factor(borrower_account, registry, clock);
-        assert!(health_result.is_liquidatable, E_LIQUIDATION_NOT_ALLOWED);
+        let health_result = calculate_current_health_factor(borrower_account, registry, collateral_asset_names, collateral_price_feeds, debt_asset_names, debt_price_feeds, clock);
+        assert!(health_result < MIN_HEALTH_FACTOR, E_LIQUIDATION_NOT_ALLOWED);
 
         let current_timestamp = clock::timestamp_ms(clock);
 
@@ -1397,7 +1536,7 @@ module unxv_lending::unxv_lending {
             debt_amount: liquidation_amount,
             collateral_seized,
             liquidation_bonus: liquidation_engine.liquidation_bonus,
-            health_factor_before: health_result.health_factor,
+            health_factor_before: health_result,
             health_factor_after: MIN_HEALTH_FACTOR + 1000, // Simplified
             flash_loan_used: false,
             timestamp: current_timestamp,
@@ -1453,29 +1592,56 @@ module unxv_lending::unxv_lending {
         });
     }
 
+    /// Helper to fetch and validate asset price from Pyth
+    public fun get_asset_price(
+        registry: &LendingRegistry,
+        price_feeds: &vector<PriceInfoObject>,
+        asset: String,
+        clock: &Clock
+    ): u64 {
+        assert!(!vector::is_empty(price_feeds), E_ASSET_NOT_SUPPORTED);
+        let price_info_object = vector::borrow(price_feeds, 0);
+        let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
+        let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
+        assert!(table::contains(&registry.oracle_feeds, asset), E_ASSET_NOT_SUPPORTED);
+        let expected_feed_id = table::borrow(&registry.oracle_feeds, asset);
+        assert!(price_id == *expected_feed_id, E_ASSET_NOT_SUPPORTED);
+        let price_struct = pyth::get_price_no_older_than(price_info_object, clock, 60_000); // 60s
+        let price_i64 = price::get_price(&price_struct);
+        let price_u64 = pyth_i64::get_magnitude_if_positive(&price_i64);
+        assert!(price_u64 > 0, E_ASSET_NOT_SUPPORTED);
+        let expo = price::get_expo(&price_struct);
+        let expo_magnitude = pyth_i64::get_magnitude_if_positive(&expo);
+        if (expo_magnitude <= 8) {
+            price_u64 * 1000000 // Scale to 6 decimals for USD prices
+        } else {
+            price_u64 / 100 // Handle very large exponents
+        }
+    }
+
     // Test-only functions for internal state inspection
     #[test_only]
     public fun get_pool_total_supply<T>(pool: &LendingPool<T>): u64 {
-        pool.total_supply
+        return pool.total_supply;
     }
 
     #[test_only]
     public fun get_pool_total_borrows<T>(pool: &LendingPool<T>): u64 {
-        pool.total_borrows
+        return pool.total_borrows;
     }
 
     #[test_only]
     public fun get_pool_utilization<T>(pool: &LendingPool<T>): u64 {
-        pool.utilization_rate
+        return pool.utilization_rate;
     }
 
     #[test_only]
     public fun get_user_supply_balance(account: &UserAccount, asset: String): u64 {
         if (table::contains(&account.supply_balances, asset)) {
             let position = table::borrow(&account.supply_balances, asset);
-            position.scaled_balance
+            return position.scaled_balance;
         } else {
-            0
+            return 0;
         }
     }
 
@@ -1483,20 +1649,20 @@ module unxv_lending::unxv_lending {
     public fun get_user_borrow_balance(account: &UserAccount, asset: String): u64 {
         if (table::contains(&account.borrow_balances, asset)) {
             let position = table::borrow(&account.borrow_balances, asset);
-            position.scaled_balance
+            return position.scaled_balance;
         } else {
-            0
+            return 0;
         }
     }
     
     #[test_only]
     public fun get_user_health_factor(account: &UserAccount): u64 {
-        account.health_factor
+        return account.health_factor;
     }
     
     #[test_only]
     public fun is_emergency_paused(registry: &LendingRegistry): bool {
-        registry.emergency_pause
+        return registry.emergency_pause;
     }
     
     // Test helper functions for creating structs
@@ -1514,7 +1680,7 @@ module unxv_lending::unxv_lending {
         reserve_factor: u64,
         is_active: bool,
     ): AssetConfig {
-        AssetConfig {
+        return AssetConfig {
             asset_name,
             asset_type,
             is_collateral,
@@ -1526,7 +1692,7 @@ module unxv_lending::unxv_lending {
             borrow_cap,
             reserve_factor,
             is_active,
-        }
+        };
     }
     
     #[test_only]
@@ -1537,13 +1703,13 @@ module unxv_lending::unxv_lending {
         optimal_utilization: u64,
         max_rate: u64,
     ): InterestRateModel {
-        InterestRateModel {
+        return InterestRateModel {
             base_rate,
             multiplier,
             jump_multiplier,
             optimal_utilization,
             max_rate,
-        }
+        };
     }
 
     // Getter functions for result structs (for testing)

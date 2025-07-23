@@ -20,9 +20,10 @@ module unxv_autoswap::unxv_autoswap {
     
     // Pyth Network integration for price feeds
     use pyth::price_info::{Self, PriceInfoObject};
-    use pyth::price::{Self, Price};
-    use pyth::i64::{Self as pyth_i64, I64};
-    use pyth::pyth;
+    use pyth::price_identifier;
+    use pyth::price_feed;
+    use pyth::price;
+    use pyth::i64 as pyth_i64;
     
     // DeepBook integration for liquidity
     use deepbook::balance_manager::{BalanceManager, TradeProof};
@@ -481,14 +482,16 @@ module unxv_autoswap::unxv_autoswap {
     /// Execute swap to UNXV with actual coin handling
     public fun execute_swap_to_unxv<T>(
         registry: &mut AutoSwapRegistry,
+        pool: &mut deepbook::pool::Pool<T, UNXV>,
         input_coin: Coin<T>,
+        deep_fee_coin: Coin<deepbook::deep::DEEP>,
         min_output: u64,
         max_slippage: u64,
         fee_payment_asset: String,
         price_feeds: vector<PriceInfoObject>,
         clock: &Clock,
         ctx: &mut TxContext,
-    ): (Coin<UNXV>, SwapResult) {
+    ): (Coin<T>, Coin<UNXV>, Coin<deepbook::deep::DEEP>, SwapResult) {
         // Validate system state
         assert!(!registry.is_paused, E_SYSTEM_PAUSED);
         assert!(max_slippage <= registry.max_slippage, E_SLIPPAGE_TOO_HIGH);
@@ -501,7 +504,7 @@ module unxv_autoswap::unxv_autoswap {
         assert!(vec_set::contains(&registry.supported_assets, &input_asset), E_ASSET_NOT_SUPPORTED);
         
         // Validate price feeds
-        validate_price_feeds(&price_feeds, clock);
+        let price_feed_val = validate_price_feeds(registry, &price_feeds, input_asset, clock);
         
         // Check circuit breakers
         check_circuit_breaker(registry, input_asset, input_amount, clock);
@@ -523,12 +526,15 @@ module unxv_autoswap::unxv_autoswap {
         let fees_paid = calculate_swap_fee(input_amount, registry.swap_fee, has_unxv_discount);
         
         // Execute swap through simulated DeepBook integration
-        let (output_coin, actual_output) = execute_swap_via_deepbook<T, UNXV>(
+        let (input_coin_out, output_coin, deep_fee_coin_out) = execute_swap_via_deepbook<T, UNXV>(
+            pool,
             input_coin,
-            route_info.estimated_output,
-            route_info.path,
+            deep_fee_coin,
+            min_output,
+            clock,
             ctx
         );
+        let actual_output = coin::value(&output_coin);
         
         // Calculate actual slippage
         let actual_slippage = calculate_slippage(route_info.estimated_output, actual_output);
@@ -569,20 +575,22 @@ module unxv_autoswap::unxv_autoswap {
         // Consume remaining elements of price_feeds vector
         vector::destroy_empty(price_feeds);
         
-        (output_coin, swap_result)
+        (input_coin_out, output_coin, deep_fee_coin_out, swap_result)
     }
     
     /// Execute swap to USDC with actual coin handling
     public fun execute_swap_to_usdc<T>(
         registry: &mut AutoSwapRegistry,
+        pool: &mut deepbook::pool::Pool<T, USDC>,
         input_coin: Coin<T>,
+        deep_fee_coin: Coin<deepbook::deep::DEEP>,
         min_output: u64,
         max_slippage: u64,
         fee_payment_asset: String,
         price_feeds: vector<PriceInfoObject>,
         clock: &Clock,
         ctx: &mut TxContext,
-    ): (Coin<USDC>, SwapResult) {
+    ): (Coin<T>, Coin<USDC>, Coin<deepbook::deep::DEEP>, SwapResult) {
         // Validate system state
         assert!(!registry.is_paused, E_SYSTEM_PAUSED);
         assert!(max_slippage <= registry.max_slippage, E_SLIPPAGE_TOO_HIGH);
@@ -594,7 +602,7 @@ module unxv_autoswap::unxv_autoswap {
         assert!(vec_set::contains(&registry.supported_assets, &input_asset), E_ASSET_NOT_SUPPORTED);
         
         // Validate price feeds
-        validate_price_feeds(&price_feeds, clock);
+        let price_feed_val = validate_price_feeds(registry, &price_feeds, input_asset, clock);
         
         // Calculate optimal route to USDC
         let route_info = calculate_optimal_route_to_usdc(
@@ -613,12 +621,15 @@ module unxv_autoswap::unxv_autoswap {
         let fees_paid = calculate_swap_fee(input_amount, registry.swap_fee, has_unxv_discount);
         
         // Execute swap
-        let (output_coin, actual_output) = execute_swap_via_deepbook<T, USDC>(
+        let (input_coin_out, output_coin, deep_fee_coin_out) = execute_swap_via_deepbook<T, USDC>(
+            pool,
             input_coin,
-            route_info.estimated_output,
-            route_info.path,
+            deep_fee_coin,
+            min_output,
+            clock,
             ctx
         );
+        let actual_output = coin::value(&output_coin);
         
         let actual_slippage = calculate_slippage(route_info.estimated_output, actual_output);
         
@@ -657,7 +668,7 @@ module unxv_autoswap::unxv_autoswap {
         
         vector::destroy_empty(price_feeds);
         
-        (output_coin, swap_result)
+        (input_coin_out, output_coin, deep_fee_coin_out, swap_result)
     }
     
     // ========== Protocol Fee Processing ==========
@@ -760,7 +771,8 @@ module unxv_autoswap::unxv_autoswap {
         
         // Execute burn by destroying UNXV balance
         let burn_balance = balance::split(&mut burn_vault.accumulated_unxv, burn_amount);
-        balance::destroy_for_testing(burn_balance); // This represents burning (destroying) the tokens
+        let burn_coin = coin::from_balance(burn_balance, ctx);
+        burn_coin(burn_coin);
         
         // Update burn tracking
         burn_vault.total_burned = burn_vault.total_burned + burn_amount;
@@ -906,34 +918,49 @@ module unxv_autoswap::unxv_autoswap {
         string::utf8(b"ASSET")
     }
     
-    /// Execute swap via DeepBook integration (mock implementation)
-    fun execute_swap_via_deepbook<I, O>(
-        input_coin: Coin<I>,
-        estimated_output: u64,
-        route_path: vector<String>,
-        ctx: &mut TxContext,
-    ): (Coin<O>, u64) {
-        // Consume input coin
-        let input_amount = coin::value(&input_coin);
-        let input_balance = coin::into_balance(input_coin);
-        balance::destroy_for_testing(input_balance);
-        
-        // Simulate output with slight slippage
-        let actual_output = estimated_output * 995 / 1000; // 0.5% slippage
-        
-        // Create mock output coin
-        let output_balance = balance::create_for_testing<O>(actual_output);
-        let output_coin = coin::from_balance(output_balance, ctx);
-        
-        (output_coin, actual_output)
+    /// Validate price feeds for freshness, correct feed ID, and extract price
+    fun validate_price_feeds(
+        registry: &AutoSwapRegistry,
+        price_feeds: &vector<PriceInfoObject>,
+        asset: String,
+        clock: &Clock
+    ): u64 {
+        assert!(table::contains(&registry.pyth_feeds, asset), E_INVALID_PRICE);
+        let expected_feed_id = table::borrow(&registry.pyth_feeds, asset);
+        let price_info_object = vector::borrow(price_feeds, 0);
+        let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
+        let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
+        assert!(price_id == *expected_feed_id, E_INVALID_PRICE);
+        let price_timestamp = price_info::get_arrival_time(&price_info);
+        let now = clock::timestamp_ms(clock);
+        assert!(now >= price_timestamp, E_INVALID_PRICE);
+        assert!(now - price_timestamp <= MAX_PRICE_AGE, E_INVALID_PRICE); // 5 min staleness
+        let price_feed_val = price_info::get_price_feed(&price_info);
+        let price_struct = price_feed::get_price(price_feed_val);
+        let price_i64 = price::get_price(&price_struct);
+        let price_u64 = pyth_i64::get_magnitude_if_positive(&price_i64);
+        assert!(price_u64 > 0, E_INVALID_PRICE);
+        let expo = price::get_expo(&price_struct);
+        let expo_magnitude = pyth_i64::get_magnitude_if_positive(&expo);
+        if (expo_magnitude <= 8) {
+            price_u64 * 1000000 // 6 decimals
+        } else {
+            price_u64 / 100
+        }
     }
-    
-    /// Validate price feeds for freshness and availability
-    fun validate_price_feeds(price_feeds: &vector<PriceInfoObject>, clock: &Clock) {
-        // Mock validation - in production would check each feed
-        let _current_time = clock::timestamp_ms(clock);
-        // For now, just ensure we have the feeds vector (simplified validation)
-        // In production would check timestamp and feed staleness
+
+    /// Execute swap via DeepBook integration (production: use Pool, BalanceManager, and TradeProof)
+    fun execute_swap_via_deepbook<I, O>(
+        pool: &mut deepbook::pool::Pool<I, O>,
+        input_coin: Coin<I>,
+        deep_fee_coin: Coin<deepbook::deep::DEEP>,
+        min_output: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): (Coin<I>, Coin<O>, Coin<deepbook::deep::DEEP>) {
+        // Use DeepBook's swap_exact_base_for_quote or swap_exact_quote_for_base depending on direction
+        // For I -> O, use swap_exact_base_for_quote
+        pool.swap_exact_base_for_quote(input_coin, deep_fee_coin, min_output, clock, ctx)
     }
     
     /// Aggregate multiple fee coins into total amount
@@ -946,7 +973,8 @@ module unxv_autoswap::unxv_autoswap {
             
             // Consume coin
             let balance = coin::into_balance(coin);
-            balance::destroy_for_testing(balance);
+            let burn_coin = coin::from_balance(balance, _ctx);
+            burn_coin(burn_coin);
         };
         
         vector::destroy_empty(fee_coins);
@@ -1171,6 +1199,11 @@ module unxv_autoswap::unxv_autoswap {
     /// Estimate gas cost based on route complexity
     fun estimate_gas_cost(hops: u64): u64 {
         1000000 + (hops * 500000) // Base cost + per-hop cost
+    }
+    
+    /// Helper function to burn a coin by consuming it
+    fun burn_coin<T>(coin: Coin<T>) {
+        transfer::public_transfer(coin, @0x0);
     }
     
     // ========== Read-Only Functions ==========

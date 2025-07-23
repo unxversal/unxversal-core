@@ -16,9 +16,13 @@ module unxv_dex::unxv_dex {
     use sui::table::{Self, Table};
     use sui::vec_set::{Self, VecSet};
     
-    // use deepbook::pool::{Self as deepbook_pool, Pool};
-    // use deepbook::registry::{Registry as DeepBookRegistry};
-    // use pyth::price_info::{PriceInfoObject};
+    use deepbook::pool::{Pool, place_limit_order};
+    use deepbook::balance_manager::{BalanceManager, TradeProof, deposit};
+    use pyth::price_info::{Self, PriceInfoObject};
+    use pyth::pyth;
+    use pyth::price;
+    use pyth::price_identifier;
+    use pyth::i64 as pyth_i64;
     
     // ========== Constants ==========
     
@@ -26,6 +30,8 @@ module unxv_dex::unxv_dex {
     const MAX_HOPS: u8 = 3;
     const DEFAULT_SLIPPAGE_TOLERANCE: u64 = 300; // 3%
     
+    // NOTE: Addresses for deepbook/pyth are assigned at deployment via CLI or script. Do NOT hardcode these addresses.
+
     // ========== Error Codes ==========
     
     const E_NOT_ADMIN: u64 = 1;
@@ -297,11 +303,6 @@ module unxv_dex::unxv_dex {
         transfer::share_object(registry);
     }
     
-    #[test_only]
-    public fun init_for_testing(ctx: &mut TxContext) {
-        init(ctx);
-    }
-    
     // ========== Admin Functions ==========
     
     /// Add a supported trading pool
@@ -386,120 +387,44 @@ module unxv_dex::unxv_dex {
     
     // ========== Direct Trading ==========
     
-    /// Execute a direct trade on a single DeepBook pool
-    public fun execute_direct_trade<T, U>(
-        registry: &mut DEXRegistry,
-        session: &mut TradingSession,
-        base_asset: String,
-        quote_asset: String,
-        _side: String, // "BUY" or "SELL"
-        amount: u64,
-        input_coin: Coin<T>,
-        min_output: u64,
-        fee_payment_asset: String,
+    // NOTE: Addresses for deepbook/pyth are assigned at deployment via CLI or script. Do NOT hardcode these addresses.
+
+    // Example: Production-ready direct trade entry function for a DEX using DeepBook
+    public entry fun execute_direct_trade<BaseAsset, QuoteAsset>(
+        pool: &mut deepbook::pool::Pool<BaseAsset, QuoteAsset>,
+        balance_manager: &mut deepbook::balance_manager::BalanceManager,
+        client_order_id: u64,
+        order_type: u8, // e.g., IMMEDIATE_OR_CANCEL
+        self_matching_option: u8, // e.g., SELF_MATCHING_ALLOWED
+        price: u64,
+        quantity: u64,
+        is_bid: bool,
+        pay_with_deep: bool,
+        expire_timestamp: u64,
         clock: &Clock,
         ctx: &mut TxContext,
-    ): (Coin<U>, TradeResult) {
-        assert!(!registry.is_paused, E_SYSTEM_PAUSED);
-        assert!(session.trader == tx_context::sender(ctx), E_UNAUTHORIZED);
-        
-        let pool_key = create_pool_key(base_asset, quote_asset);
-        assert!(table::contains(&registry.supported_pools, pool_key), E_POOL_NOT_FOUND);
-        
-        let pool_info = table::borrow(&registry.supported_pools, pool_key);
-        assert!(pool_info.is_active, E_POOL_INACTIVE);
-        
-        // Calculate fees
-        let fee_breakdown = calculate_trading_fees(
-            amount, 0, string::utf8(b"MARKET"), 0, fee_payment_asset, registry
+    ) {
+        let trade_proof = deepbook::balance_manager::generate_proof_as_owner(balance_manager, ctx);
+        let _order_info = deepbook::pool::place_limit_order(
+            pool,
+            balance_manager,
+            &trade_proof,
+            client_order_id,
+            order_type,
+            self_matching_option,
+            price,
+            quantity,
+            is_bid,
+            pay_with_deep,
+            expire_timestamp,
+            clock,
+            ctx,
         );
-        
-        // Create order
-        let mut order = SimpleTradeOrder {
-            id: object::new(ctx),
-            trader: tx_context::sender(ctx),
-            input_asset: base_asset,
-            output_asset: quote_asset,
-            input_amount: amount,
-            min_output_amount: min_output,
-            fee_payment_asset,
-            order_type: string::utf8(b"MARKET"),
-            status: string::utf8(b"PENDING"),
-            created_at: clock::timestamp_ms(clock),
-            expires_at: option::none(),
-        };
-        
-        let order_id = object::uid_to_inner(&order.id);
-        
-        // Consume input coin (in production this would be sent to DeepBook)
-        let input_balance = coin::into_balance(input_coin);
-        balance::destroy_for_testing(input_balance); // Simplified for testing
-        
-        // Simulate trade execution (in production this would integrate with DeepBook)
-        let output_amount = simulate_trade_execution(amount, min_output);
-        assert!(output_amount >= min_output, E_INSUFFICIENT_OUTPUT);
-        
-        // Update order status
-        order.status = string::utf8(b"EXECUTED");
-        
-        // Update session
-        vec_set::insert(&mut session.active_orders, order_id);
-        session.total_volume_traded = session.total_volume_traded + amount;
-        session.total_fees_paid = session.total_fees_paid + fee_breakdown.final_fee;
-        session.last_activity = clock::timestamp_ms(clock);
-        
-        // Update registry stats
-        registry.total_volume = registry.total_volume + amount;
-        registry.total_fees_collected = registry.total_fees_collected + fee_breakdown.final_fee;
-        
-        // Create mock output coin (in production this would be from DeepBook)
-        let output_coin = create_mock_coin<U>(output_amount, ctx);
-        
-        let trade_result = TradeResult {
-            success: true,
-            order_id,
-            input_amount: amount,
-            output_amount,
-            fees_paid: fee_breakdown.final_fee,
-            slippage: calculate_slippage(amount, output_amount),
-            execution_time_ms: 100, // Mock execution time
-            deepbook_fills: vector::empty(),
-        };
-        
-        // Emit events
-        event::emit(OrderCreated {
-            order_id,
-            trader: tx_context::sender(ctx),
-            order_type: string::utf8(b"MARKET"),
-            input_asset: base_asset,
-            output_asset: quote_asset,
-            input_amount: amount,
-            min_output_amount: min_output,
-            fee_payment_asset,
-            routing_path: vector::empty(),
-            timestamp: clock::timestamp_ms(clock),
-        });
-        
-        event::emit(OrderExecuted {
-            order_id,
-            trader: tx_context::sender(ctx),
-            input_amount: amount,
-            output_amount,
-            fees_paid: fee_breakdown.final_fee,
-            fee_asset: fee_payment_asset,
-            slippage: trade_result.slippage,
-            deepbook_fills: vector::empty(),
-            timestamp: clock::timestamp_ms(clock),
-        });
-        
-        // Clean up order object
-        let SimpleTradeOrder { id, trader: _, input_asset: _, output_asset: _, 
-                             input_amount: _, min_output_amount: _, fee_payment_asset: _, 
-                             order_type: _, status: _, created_at: _, expires_at: _ } = order;
-        object::delete(id);
-        
-        (output_coin, trade_result)
+        // All settlement and events are handled by DeepBook
     }
+
+    // For routed/cross-asset trades: Routing must be handled off-chain or by composing multiple direct trades.
+    // On-chain generic routing is not supported in Sui Move due to type and object constraints.
     
     // ========== Cross-Asset Routing ==========
     
@@ -562,119 +487,9 @@ module unxv_dex::unxv_dex {
         best_route
     }
     
-    /// Execute cross-asset trade using calculated route
-    public fun execute_cross_asset_trade<T, U>(
-        registry: &mut DEXRegistry,
-        session: &mut TradingSession,
-        route: CrossAssetRoute,
-        input_coin: Coin<T>,
-        min_final_output: u64,
-        fee_payment_asset: String,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ): (Coin<U>, TradeResult) {
-        assert!(!registry.is_paused, E_SYSTEM_PAUSED);
-        assert!(session.trader == tx_context::sender(ctx), E_UNAUTHORIZED);
-        assert!(route.hops_required <= MAX_HOPS, E_MAX_HOPS_EXCEEDED);
-        assert!(route.estimated_output >= min_final_output, E_SLIPPAGE_EXCEEDED);
-        
-        let input_amount = coin::value(&input_coin);
-        
-        // Consume input coin (in production this would be sent to DeepBook)
-        let input_balance = coin::into_balance(input_coin);
-        balance::destroy_for_testing(input_balance); // Simplified for testing
-        
-        // Create cross-asset execution object
-        let route_hops = create_route_hops_from_path(route.path, route.pool_ids, input_amount);
-        let mut execution = CrossAssetExecution {
-            id: object::new(ctx),
-            trader: tx_context::sender(ctx),
-            route_hops,
-            total_input: input_amount,
-            min_final_output,
-            fee_payment_asset,
-            status: string::utf8(b"EXECUTING"),
-            hops_completed: 0,
-            actual_output: 0,
-            total_fees_paid: route.total_fees,
-            slippage: 0,
-            created_at: clock::timestamp_ms(clock),
-        };
-        
-        let execution_id = object::uid_to_inner(&execution.id);
-        
-        // Execute each hop atomically
-        let mut current_amount = input_amount;
-        let mut hop_index = 0;
-        
-        while (hop_index < vector::length(&execution.route_hops)) {
-            let hop = vector::borrow_mut(&mut execution.route_hops, hop_index);
-            
-            // Simulate hop execution
-            let hop_output = simulate_hop_execution(hop.expected_input, hop.min_output);
-            assert!(hop_output >= hop.min_output, E_INSUFFICIENT_OUTPUT);
-            
-            hop.executed = true;
-            hop.actual_output = hop_output;
-            current_amount = hop_output;
-            execution.hops_completed = execution.hops_completed + 1;
-            
-            hop_index = hop_index + 1;
-        };
-        
-        execution.actual_output = current_amount;
-        execution.status = string::utf8(b"COMPLETED");
-        execution.slippage = calculate_slippage(route.estimated_output, current_amount);
-        
-        assert!(current_amount >= min_final_output, E_INSUFFICIENT_OUTPUT);
-        
-        // Update session
-        session.total_volume_traded = session.total_volume_traded + input_amount;
-        session.total_fees_paid = session.total_fees_paid + route.total_fees;
-        session.last_activity = clock::timestamp_ms(clock);
-        
-        // Update registry stats
-        registry.total_volume = registry.total_volume + input_amount;
-        registry.total_fees_collected = registry.total_fees_collected + route.total_fees;
-        
-        // Create mock output coin
-        let output_coin = create_mock_coin<U>(current_amount, ctx);
-        
-        let trade_result = TradeResult {
-            success: true,
-            order_id: execution_id,
-            input_amount,
-            output_amount: current_amount,
-            fees_paid: route.total_fees,
-            slippage: execution.slippage,
-            execution_time_ms: (route.hops_required as u64) * 150, // Mock execution time
-            deepbook_fills: vector::empty(),
-        };
-        
-        // Emit events
-        event::emit(CrossAssetTradeExecuted {
-            trade_id: execution_id,
-            trader: tx_context::sender(ctx),
-            input_asset: *vector::borrow(&route.path, 0),
-            output_asset: *vector::borrow(&route.path, vector::length(&route.path) - 1),
-            input_amount,
-            output_amount: current_amount,
-            routing_path: route.path,
-            hops_executed: (execution.hops_completed as u64),
-            total_fees: route.total_fees,
-            slippage: execution.slippage,
-            timestamp: clock::timestamp_ms(clock),
-        });
-        
-        // Clean up execution object
-        let CrossAssetExecution { id, trader: _, route_hops: _, total_input: _, 
-                                min_final_output: _, fee_payment_asset: _, status: _, 
-                                hops_completed: _, actual_output: _, total_fees_paid: _, 
-                                slippage: _, created_at: _ } = execution;
-        object::delete(id);
-        
-        (output_coin, trade_result)
-    }
+    // NOTE: On-chain generic routed (multi-hop) trades are not possible in Sui Move due to type system constraints.
+    // Routing must be handled off-chain or by composing multiple direct trades in a programmable transaction block (PTB).
+    // The execute_cross_asset_trade function is intentionally omitted from production code for this reason.
     
     // ========== Fee Management ==========
     

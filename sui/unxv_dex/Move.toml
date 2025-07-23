@@ -5,8 +5,14 @@ edition = "2024.beta" # edition = "legacy" to use legacy (pre-2024) Move
 # authors = ["..."]      # e.g., ["Joe Smith (joesmith@noemail.com)", "John Snow (johnsnow@noemail.com)"]
 
 [dependencies]
-# deepbook = { git = "https://github.com/MystenLabs/deepbookv3.git", subdir = "packages/deepbook", rev = "209f0da8e316bfc27db77d45fe1d9354f89b1b20" }
-# Pyth = { git = "https://github.com/pyth-network/pyth-crosschain.git", subdir = "target_chains/sui/contracts", rev = "sui-contract-testnet" }
+# Pyth Network - Oracle price feeds
+Pyth = { git = "https://github.com/pyth-network/pyth-crosschain.git", subdir = "target_chains/sui/contracts", rev = "sui-contract-testnet" }
+
+# Wormhole - Required by Pyth
+Wormhole = { git = "https://github.com/wormhole-foundation/wormhole.git", subdir = "sui/wormhole", rev = "sui/testnet" }
+
+# DeepBook - DEX and trading infrastructure  
+deepbook = { git = "https://github.com/MystenLabs/deepbookv3.git", subdir = "packages/deepbook", rev = "main" }
 
 # For remote import, use the `{ git = "...", subdir = "...", rev = "..." }`.
 # Revision can be a branch, a tag, and a commit hash.
@@ -21,9 +27,9 @@ edition = "2024.beta" # edition = "legacy" to use legacy (pre-2024) Move
 
 [addresses]
 unxv_dex = "0x0"
-# sui = "0x2"
-# deepbook = "0xdee9"
-# pyth = "0xb53b0f4174108627fbee72e2498b58d6a2714cded53fac537034c220d26302"
+# Add these when deploying to mainnet/testnet:
+# deepbook = "0xdee9..."  # Replace with actual published DeepBook address
+# pyth = "0xb53b..."      # Replace with actual published Pyth address
 
 # Named addresses will be accessible in Move as `@name`. They're also exported:
 # for example, `std = "0x1"` is exported by the Standard Library.

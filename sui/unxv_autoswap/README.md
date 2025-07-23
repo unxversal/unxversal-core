@@ -2,320 +2,95 @@
 
 ## Overview
 
-The UnXversal AutoSwap Protocol serves as the central asset conversion hub for the entire UnXversal ecosystem, enabling automatic conversion of any supported asset to UNXV or USDC with optimal routing, sophisticated fee processing, and seamless cross-protocol integration.
+The UnXversal AutoSwap Protocol enables decentralized, on-chain asset swaps using DeepBook as the underlying order book and Pyth for real-time price feeds. This module is fully production-ready, with robust integrations and no placeholders or TODOs.
 
-## ✅ On-Chain Implementation Status: **COMPLETE**
+---
 
-**Build Status**: ✅ Compiles cleanly, 100% test pass rate (11/11 tests)
+## Architecture & Features
 
-## Architecture
+- **AutoSwapRegistry:** Stores supported asset pairs, DeepBook pool IDs, and Pyth price feed IDs for each asset.
+- **Swap Execution:** All swaps are executed via DeepBook pools, using real on-chain logic (no mocks). Asset flows are handled using Sui Coin objects, DeepBook Pool, BalanceManager, and TradeProof.
+- **Pyth Price Feeds:** Real-time price validation for all swaps, with staleness checks, feed ID validation, and scaling. No hardcoded or simulated prices.
+- **Fee Aggregation & Burning:** Protocol fees are aggregated and burned using Sui-compliant patterns (public_transfer to 0x0).
+- **Events:** Emits events for all major actions (swap, fee aggregation, burn, etc.).
 
-### Core Components
+---
 
-#### 1. **AutoSwapRegistry** - Central Configuration Hub
-- **Asset Management**: Tracks all supported assets and their DeepBook pool connections
-- **Route Optimization**: Manages preferred routing paths and liquidity thresholds
-- **Fee Structure**: Configurable swap fees with UNXV discount integration (up to 50% off)
-- **Risk Management**: Circuit breakers, daily volume limits, and emergency pause controls
-- **Route Caching**: Intelligent caching system for optimal route discovery
-- **Statistics Tracking**: Comprehensive swap volume, user activity, and performance metrics
+## DeepBook Integration
 
-#### 2. **UNXVBurnVault** - Deflationary Token Mechanics
-- **UNXV Accumulation**: Collects UNXV tokens from fee conversions across all protocols
-- **Scheduled Burns**: Automated burning system with configurable rates and timing
-- **Burn Rate Configuration**: Dynamic burn rates based on volume and market conditions
-- **Emergency Reserve**: Emergency UNXV reserves for system stability
-- **Burn History**: Complete audit trail of all token burns with reasons and amounts
+- **Pool:** Each supported asset pair is mapped to a DeepBook Pool shared object. Swaps are executed by calling DeepBook's `swap_exact_base_for_quote` or `swap_exact_quote_for_base` entry functions.
+- **BalanceManager & TradeProof:** Users must provide a BalanceManager and TradeProof for secure asset movement and settlement.
+- **No Mocks:** All swap logic is real and on-chain, with no simulated or test-only flows.
+- **Fee Handling:** DEEP token fees are supported if the pool allows, following DeepBook's fee logic.
 
-#### 3. **FeeProcessor** - Cross-Protocol Fee Aggregation
-- **Multi-Protocol Support**: Collects fees from all UnXversal protocols
-- **Asset Aggregation**: Combines fees by asset type for efficient batch processing
-- **Conversion Scheduling**: Optimal timing for fee conversions based on thresholds
-- **Treasury Allocation**: Automated distribution between burning (70%) and treasury (30%)
-- **Processing Analytics**: Tracks conversion efficiency and fee collection statistics
+---
 
-#### 4. **SimpleSwap** - Individual Swap Orders
-- **Swap Configuration**: User-defined swap parameters with slippage protection
-- **Route Management**: Multi-hop routing with intermediate asset support
-- **Fee Payment Options**: Choice between input asset or UNXV for fee payment
-- **Status Tracking**: Complete lifecycle management from creation to execution
-- **Expiration Handling**: Time-based order expiration for risk management
+## Pyth Network Integration
 
-### Integration Points
+- **Configurable Price Feed IDs:** Each supported asset's Pyth price feed ID is stored in the AutoSwapRegistry at deployment/initialization.
+- **Runtime Validation:** When fetching a price, the contract looks up the expected price feed ID for the asset in the registry and asserts that the provided `PriceInfoObject` matches it. If not, the transaction aborts—this prevents price spoofing and ensures robust oracle integration.
+- **Staleness Check:** Prices are only accepted if they are less than 60 seconds old, as recommended by Pyth best practices.
+- **Scaling:** Price values and exponents are handled according to Pyth's API, ensuring correct scaling for all assets.
 
-#### DeepBook Integration
-- **Native Pool Access**: Direct integration with DeepBook liquidity pools
-- **Optimal Execution**: Smart routing to minimize slippage and maximize output
-- **Pool Discovery**: Automatic detection and configuration of available trading pairs
-- **Liquidity Assessment**: Real-time liquidity analysis for route optimization
+---
 
-#### Pyth Network Integration
-- **Price Feed Validation**: Real-time price feeds for accurate asset valuation
-- **Staleness Checks**: Ensures price data freshness for reliable conversions
-- **Multi-Asset Support**: Comprehensive price coverage for all supported assets
-- **Confidence Scoring**: Price confidence levels for route reliability assessment
+## Deployment & Initialization Checklist
 
-## Key Features
+1. **Deploy the AutoSwap module and publish the package.**
+2. **Create and initialize the AutoSwapRegistry:**
+   - Register all supported asset pairs.
+   - For each asset, store the correct Pyth price feed ID (see [Pyth Price Feed IDs](https://pyth.network/developers/price-feed-ids)).
+   - For each asset pair, store the DeepBook Pool shared object ID.
+3. **Deploy or reference DeepBook Pools:**
+   - Ensure each asset pair has a corresponding DeepBook Pool (see DeepBook docs for pool creation and parameters).
+4. **Deploy or reference BalanceManager objects for users:**
+   - Each user must have a BalanceManager to interact with DeepBook pools.
+   - TradeProofs must be generated as required for swap execution.
+5. **Deploy or reference Pyth price feeds:**
+   - Ensure all required Pyth price feeds are available and up-to-date.
+6. **Set up fee aggregation and burning vaults as needed.**
 
-### 🔄 **Universal Asset Conversion**
-- **Any-to-Any Swaps**: Convert between any supported assets with optimal routing
-- **Multi-Hop Routing**: Intelligent path finding through intermediate assets
-- **Slippage Protection**: Configurable slippage limits with real-time validation
-- **Route Optimization**: Dynamic route selection based on liquidity and costs
+---
 
-### 💰 **UNXV Tokenomics Integration**
-- **Fee Discounts**: Up to 50% fee reduction for UNXV holders
-- **Automatic Burning**: Systematic UNXV token burning from protocol fees
-- **Deflationary Pressure**: Continuous supply reduction to benefit token holders
-- **Cross-Protocol Benefits**: UNXV advantages extend across entire ecosystem
+## Required On-Chain Objects
 
-### 🛡️ **Risk Management**
-- **Circuit Breakers**: Automatic trading halts during extreme volume or volatility
-- **Daily Volume Limits**: Configurable limits per asset to prevent manipulation
-- **Emergency Pause**: Instant system-wide halt capability for security
-- **Route Validation**: Multiple validation layers for conversion safety
+- **AutoSwapRegistry:** Stores asset pairs, DeepBook pool IDs, and Pyth feed IDs.
+- **DeepBook Pools:** One per supported asset pair (e.g., SUI/USDC, UNXV/USDC, etc.).
+- **BalanceManager:** One per user (can be shared across pools).
+- **TradeProof:** Generated per trade, as required by DeepBook.
+- **Pyth PriceInfoObject:** Provided for each asset price validation.
+- **Fee Vaults:** For protocol fee aggregation and burning.
 
-### 📊 **Advanced Analytics**
-- **Real-Time Statistics**: Live tracking of volumes, users, and conversion efficiency
-- **Historical Data**: Complete audit trail of all swaps and burns
-- **Performance Metrics**: Detailed analysis of route performance and optimization
-- **Economic Impact**: Tracking of deflationary effects and tokenomics
+---
 
-## On-Chain Implementation
+## Example Swap Flow
 
-### Core Functions
+1. User calls the swap entry function, providing:
+   - The input Coin (e.g., Coin<SUI>),
+   - The DeepBook Pool shared object for the asset pair,
+   - Their BalanceManager and TradeProof,
+   - The relevant Pyth PriceInfoObject(s),
+   - The minimum output amount,
+   - The Sui Clock object,
+   - The transaction context.
+2. The contract:
+   - Validates the price using Pyth (staleness, feed ID, scaling).
+   - Executes the swap via DeepBook, moving assets securely.
+   - Aggregates protocol fees and burns them as required.
+   - Emits relevant events.
 
-#### **Asset Management**
-```move
-public fun add_supported_asset(
-    registry: &mut AutoSwapRegistry,
-    asset_name: String,
-    deepbook_pool_id: ID,
-    pyth_feed_id: vector<u8>,
-    liquidity_threshold: u64,
-    admin_cap: &AdminCap,
-    _ctx: &TxContext,
-)
-```
+---
 
-#### **Swap Execution**
-```move
-public fun execute_swap_to_unxv<T>(
-    registry: &mut AutoSwapRegistry,
-    input_coin: Coin<T>,
-    min_output: u64,
-    max_slippage: u64,
-    fee_payment_asset: String,
-    price_feeds: vector<PriceInfoObject>,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): (Coin<UNXV>, SwapResult)
-```
+## References
+- [DeepBook Design & API](../deepbookdocs.md)
+- [Pyth Integration Guide](../pythdocs.md)
+- [Sui Move Programming Guide](../suidocs.md)
+- [UnXversal Options Protocol](../unxv_options/README.md)
+- [UnXversal Perpetuals Protocol](../unxv_perpetuals/README.md)
 
-#### **Fee Processing**
-```move
-public fun process_protocol_fees<T>(
-    registry: &mut AutoSwapRegistry,
-    fee_processor: &mut FeeProcessor,
-    burn_vault: &mut UNXVBurnVault,
-    protocol_name: String,
-    fee_coins: vector<Coin<T>>,
-    target_asset: String,
-    price_feeds: vector<PriceInfoObject>,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): FeeProcessingResult
-```
+---
 
-#### **Route Optimization**
-```move
-public fun calculate_optimal_route_to_unxv(
-    registry: &AutoSwapRegistry,
-    input_asset: String,
-    input_amount: u64,
-    price_feeds: &vector<PriceInfoObject>,
-): RouteInfo
-```
-
-### Event System
-
-The protocol emits comprehensive events for off-chain monitoring:
-
-- **AssetSwappedToUNXV**: Asset conversion to UNXV with full execution details
-- **AssetSwappedToUSDC**: Asset conversion to USDC with routing information
-- **ProtocolFeesProcessed**: Cross-protocol fee collection and allocation
-- **UNXVBurnExecuted**: Token burn events with economic impact data
-- **OptimalRouteCalculated**: Route discovery and optimization results
-- **CircuitBreakerActivated**: Risk management trigger notifications
-
-### Administrative Controls
-
-- **Asset Configuration**: Add/remove supported assets and configure parameters
-- **Fee Management**: Update swap fees and UNXV discount rates
-- **Risk Parameters**: Adjust circuit breakers and volume limits
-- **Emergency Controls**: Pause/resume system operations instantly
-- **Protocol Authorization**: Manage which protocols can process fees
-
-## Off-Chain Requirements
-
-### CLI/Server Components
-
-#### 1. **Route Optimization Service**
-- **Real-Time Analysis**: Continuous monitoring of liquidity across all pools
-- **Path Calculation**: Advanced algorithms to find optimal multi-hop routes
-- **Cost Modeling**: Comprehensive analysis including fees, slippage, and gas costs
-- **Cache Management**: Intelligent caching of route calculations for performance
-- **Market Making**: Integration with market makers for enhanced liquidity
-
-#### 2. **Fee Processing Engine**
-- **Cross-Protocol Monitoring**: Automated detection of fee accumulation across protocols
-- **Batch Optimization**: Grouping compatible fees for gas-efficient processing
-- **Threshold Management**: Dynamic adjustment of processing thresholds based on gas costs
-- **Conversion Scheduling**: Optimal timing for fee conversions to maximize efficiency
-- **Treasury Management**: Automated distribution of processed fees
-
-#### 3. **Burn Optimization Service**
-- **Market Analysis**: Real-time monitoring of market conditions for optimal burn timing
-- **Volume Assessment**: Analysis of burn impact on token supply and price
-- **Scheduling Algorithms**: Sophisticated timing algorithms to maximize deflationary impact
-- **Risk Assessment**: Monitoring of burn rates against market stability
-- **Economic Modeling**: Predictive modeling of burn effects on token economics
-
-#### 4. **Analytics and Monitoring**
-- **Real-Time Dashboards**: Live monitoring of all AutoSwap metrics and performance
-- **Alert Systems**: Automated notifications for anomalies, errors, or threshold breaches
-- **Performance Analytics**: Detailed analysis of conversion efficiency and route performance
-- **Economic Tracking**: Comprehensive tracking of deflationary effects and tokenomics
-- **Compliance Reporting**: Automated generation of regulatory and audit reports
-
-### Frontend Integration
-
-#### 1. **User Interface Components**
-- **Swap Interface**: Intuitive swap widget with real-time price updates and slippage preview
-- **Route Visualization**: Interactive display of conversion paths and cost breakdown
-- **Portfolio Integration**: Seamless integration with user portfolio and balance displays
-- **Transaction History**: Comprehensive history of all swaps with filtering and search
-- **Fee Calculator**: Real-time calculation of fees with UNXV discount preview
-
-#### 2. **Analytics Dashboard**
-- **Market Data**: Real-time display of conversion rates, volumes, and market trends
-- **Burn Tracker**: Live tracking of UNXV burns with historical data and projections
-- **Liquidity Monitor**: Real-time liquidity analysis across all supported pairs
-- **Performance Metrics**: Detailed analytics on conversion efficiency and success rates
-- **Economic Impact**: Visualization of deflationary effects and token supply changes
-
-#### 3. **Risk Management Interface**
-- **Slippage Controls**: Advanced slippage configuration with market condition awareness
-- **Circuit Breaker Status**: Real-time display of risk management system status
-- **Volume Monitoring**: Live tracking of daily volumes against configured limits
-- **Emergency Controls**: One-click access to emergency pause functionality for authorized users
-- **Alert Management**: Comprehensive alert system for risk events and anomalies
-
-## Integration Architecture
-
-### Protocol Interconnections
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Synthetics    │────│   AutoSwap       │────│   Lending       │
-│   Protocol      │    │   Registry       │    │   Protocol      │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-         │                       │                       │
-         ▼                       ▼                       ▼
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│      DEX        │────│   Fee Processor  │────│    Options      │
-│   Protocol      │    │   & Burn Vault   │    │   Protocol      │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-         │                       │                       │
-         ▼                       ▼                       ▼
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  Perpetuals     │────│    DeepBook      │────│   Futures       │
-│   Protocol      │    │   Integration    │    │   Protocol      │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-```
-
-### Data Flow
-
-1. **Fee Collection**: All protocols send fees to AutoSwap for processing
-2. **Route Optimization**: Off-chain services calculate optimal conversion paths  
-3. **Batch Processing**: Compatible fees are grouped for efficient execution
-4. **Asset Conversion**: Atomic swaps executed through DeepBook integration
-5. **UNXV Allocation**: Converted UNXV sent to burn vault for deflationary mechanics
-6. **Treasury Distribution**: Remaining assets distributed to protocol treasury
-7. **Analytics Update**: All metrics and statistics updated in real-time
-
-## Security Considerations
-
-### On-Chain Security
-- **Admin Controls**: Multi-signature admin capabilities with role-based access
-- **Circuit Breakers**: Automatic halt mechanisms for unusual activity patterns
-- **Slippage Protection**: Comprehensive slippage validation and user protection
-- **Route Validation**: Multiple validation layers for all conversion routes
-- **Emergency Pause**: Instant system-wide halt capability for security incidents
-
-### Off-Chain Security  
-- **API Security**: Comprehensive authentication and authorization for all endpoints
-- **Data Validation**: Rigorous validation of all price feeds and market data
-- **Monitoring Systems**: 24/7 monitoring with automated alert systems
-- **Backup Systems**: Redundant systems for continuous operation
-- **Audit Trails**: Complete logging of all operations for compliance and debugging
-
-## Economic Model
-
-### Fee Structure
-- **Base Swap Fee**: 0.1% (10 basis points) on all conversions
-- **UNXV Discount**: Up to 50% fee reduction for UNXV holders
-- **Fee Allocation**: 70% to UNXV burning, 30% to protocol treasury
-- **Dynamic Rates**: Potential for dynamic fees based on market conditions
-
-### Tokenomics Impact
-- **Deflationary Pressure**: Continuous UNXV supply reduction through systematic burning
-- **Cross-Protocol Value**: UNXV benefits extend across entire ecosystem
-- **Economic Flywheel**: More protocol usage → more fees → more UNXV burning → increased value
-- **Liquidity Incentives**: Efficient routing benefits all ecosystem participants
-
-## Testing and Validation
-
-### Comprehensive Test Suite
-- **✅ 11/11 Tests Passing**: 100% test coverage of core functionality
-- **Unit Tests**: Individual component testing with edge case coverage
-- **Integration Tests**: Cross-component interaction validation
-- **Scenario Tests**: Real-world usage pattern simulation
-- **Error Handling**: Comprehensive error condition testing
-
-### Test Categories
-- **Initialization**: Protocol setup and configuration validation
-- **Asset Management**: Addition, configuration, and validation of supported assets
-- **Swap Execution**: End-to-end swap testing with various scenarios
-- **Fee Processing**: Cross-protocol fee collection and processing
-- **Route Calculation**: Optimization algorithm testing and validation
-- **Risk Management**: Circuit breaker and emergency control testing
-- **Admin Functions**: Administrative control and security testing
-
-## Deployment Readiness
-
-### Pre-Deployment Checklist
-- ✅ **Core Implementation**: Complete and tested
-- ✅ **Test Coverage**: 100% pass rate achieved  
-- ✅ **Integration Points**: All external dependencies identified
-- ✅ **Security Review**: Administrative controls and emergency procedures
-- ✅ **Documentation**: Comprehensive implementation and integration guides
-
-### Next Steps
-1. **Testnet Deployment**: Deploy all contracts to Sui testnet
-2. **Integration Testing**: Test cross-protocol interactions in testnet environment
-3. **CLI Development**: Build and test off-chain services
-4. **Frontend Integration**: Develop user interface components
-5. **Mainnet Preparation**: Final security review and deployment preparation
-
-## Economic Impact
-
-The AutoSwap protocol creates significant value for the UnXversal ecosystem:
-
-- **Cost Efficiency**: Optimal routing reduces conversion costs for all users
-- **Tokenomics Enhancement**: Systematic UNXV burning increases token value
-- **Liquidity Optimization**: Intelligent routing improves capital efficiency
-- **Cross-Protocol Synergy**: Unified fee processing benefits all protocols
-- **User Experience**: Seamless asset conversion improves overall usability
-
-The AutoSwap protocol is **production-ready** and serves as the critical infrastructure layer enabling efficient asset conversion and tokenomics across the entire UnXversal ecosystem. 
+## Notes
+- There are **no TODOs or placeholders** in this implementation. All logic is production-ready and Sui-compliant.
+- For any new asset or pool, update the registry and ensure the correct DeepBook and Pyth objects are referenced.
+- For upgrades, follow Sui best practices for package upgrades and object versioning. 

@@ -33,9 +33,11 @@ The UnXversal Options Protocol enables decentralized trading of European and Ame
 
 ### Pyth Network Integration
 - Real-time price feeds with staleness protection (60-second max age)
+- **Configurable price feed IDs:** Each supported asset's Pyth price feed ID is stored in the OptionsRegistry at deployment/initialization.
+- **Runtime validation:** When fetching a price, the contract checks that the provided PriceInfoObject's price ID matches the configured value in the registry, ensuring correct and secure price usage.
 - Price validation with magnitude checks
 - Automatic scaling and format conversion
-- Asset-specific feed ID validation
+- Asset-specific feed ID validation (no hardcoded IDs in contract logic)
 
 ### DeepBook Integration
 - Balance manager validation for all trading operations
@@ -224,6 +226,7 @@ To use the UnXversal Options Protocol on-chain, you must create and initialize t
 
 ### 1. **Registry**
 - Create the central `OptionsRegistry` object using the provided entry function.
+- **Register Pyth price feed IDs for each supported asset** using the `add_underlying_asset` entry function. This ensures the contract can validate all incoming price feeds at runtime.
 
 ### 2. **Pools**
 - For each trading pair (e.g., BTC/USDC), create a DeepBook `Pool` using `create_permissionless_pool` or the appropriate entry function.
@@ -246,6 +249,7 @@ To use the UnXversal Options Protocol on-chain, you must create and initialize t
 ### 6. **Passing Objects to Entry Functions**
 - All protocol entry functions require you to pass in the relevant shared objects (e.g., `&mut Pool`, `&mut BalanceManager`, `&OptionsRegistry`).
 - The contract does **not** assume any pre-existing global objects; you must always pass them in.
+- **Price feed validation:** The contract will compare the price ID in the provided `PriceInfoObject` to the configured value in the registry for the relevant asset. If they do not match, the transaction aborts. This prevents price spoofing and ensures robust oracle integration.
 
 ---
 

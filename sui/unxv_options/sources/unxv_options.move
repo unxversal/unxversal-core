@@ -812,7 +812,7 @@ module unxv_options::unxv_options {
         assert!(quantity > 0, E_INSUFFICIENT_BALANCE);
         
         // Get current pricing
-        let underlying_price = get_underlying_price(price_feeds, market.underlying_asset, clock);
+        let underlying_price = get_underlying_price(registry, price_feeds, market.underlying_asset, clock);
         let time_to_expiry = market.expiry_timestamp - clock::timestamp_ms(clock);
         let volatility = get_implied_volatility(_pricing_engine, market.underlying_asset);
         
@@ -950,7 +950,7 @@ module unxv_options::unxv_options {
         assert!(quantity > 0, E_INSUFFICIENT_BALANCE);
         
         // Get current pricing
-        let underlying_price = get_underlying_price(price_feeds, market.underlying_asset, clock);
+        let underlying_price = get_underlying_price(registry, price_feeds, market.underlying_asset, clock);
         let time_to_expiry = market.expiry_timestamp - clock::timestamp_ms(clock);
         let volatility = get_implied_volatility(_pricing_engine, market.underlying_asset);
         
@@ -1098,7 +1098,7 @@ module unxv_options::unxv_options {
         
         // Check if option is in the money and within exercise window
         let current_time = clock::timestamp_ms(clock);
-        let underlying_price = get_underlying_price(price_feeds, market.underlying_asset, clock);
+        let underlying_price = get_underlying_price(registry, price_feeds, market.underlying_asset, clock);
         let is_in_the_money = check_if_in_the_money(
             market.option_type,
             market.strike_price,
@@ -1519,42 +1519,40 @@ module unxv_options::unxv_options {
     
     // ========== Helper Functions ==========
     
-    /// Get underlying price from Pyth feeds (simplified)
-    fun get_underlying_price(price_feeds: &vector<PriceInfoObject>, asset: String, clock: &Clock): u64 {
+    /// Get underlying price from Pyth feeds (improved: validates against registry-configured feed ID)
+    fun get_underlying_price(registry: &OptionsRegistry, price_feeds: &vector<PriceInfoObject>, asset: String, clock: &Clock): u64 {
         assert!(!vector::is_empty(price_feeds), E_INSUFFICIENT_BALANCE);
-        
+
         // Get the first price feed - in production would validate the correct feed ID for the asset
         let price_info_object = vector::borrow(price_feeds, 0);
-        
+
         // Get price info and validate feed ID
         let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
-        let _price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
-        
-        // Validate feed ID for specific assets (simplified validation)
-        if (asset == string::utf8(b"BTC")) {
-            // BTC/USD price feed ID (example - in production use actual feed IDs)
-            let expected_feed_id = x"e62df6c8b4c85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43";
-            assert!(_price_id == expected_feed_id, E_INVALID_ID);
-        };
-        
+        let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
+
+        // Look up expected feed ID from registry
+        assert!(table::contains(&registry.oracle_feeds, asset), E_INVALID_ID);
+        let expected_feed_id = table::borrow(&registry.oracle_feeds, asset);
+        assert!(price_id == *expected_feed_id, E_INVALID_ID);
+
         // Get the price with staleness check (max 60 seconds old)
         let price_struct = pyth::get_price_no_older_than(
             price_info_object, 
             clock,
             60_000 // 60 seconds max age in milliseconds
         );
-        
+
         // Extract price and convert to u64
         let price_i64 = price::get_price(&price_struct);
         let price_u64 = pyth_i64::get_magnitude_if_positive(&price_i64);
-        
+
         // Ensure we have a valid positive price
         assert!(price_u64 > 0, E_INSUFFICIENT_BALANCE);
-        
+
         // Convert from Pyth's format to our format (handle scaling)
         let expo = price::get_expo(&price_struct);
         let expo_magnitude = pyth_i64::get_magnitude_if_positive(&expo);
-        
+
         // Scale price based on exponent (simplified scaling)
         if (expo_magnitude <= 8) {
             price_u64 * (1000000) // Scale to 6 decimals for USD prices

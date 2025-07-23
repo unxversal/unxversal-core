@@ -19,8 +19,10 @@ module unxv_perpetuals::unxv_perpetuals {
     
     // Pyth Network integration for price feeds
     use pyth::price_info::{Self, PriceInfoObject};
-    use pyth::price::{Self, Price};
-    use pyth::pyth;
+    use pyth::price_identifier;
+    use pyth::price;
+    use pyth::i64 as pyth_i64;
+    use pyth::price_feed;
     
     // Simple signed integer representation for now
     public struct SignedInt has store, copy, drop {
@@ -962,7 +964,7 @@ module unxv_perpetuals::unxv_perpetuals {
         leverage: u64,
         margin_coin: Coin<USDC>,
         mut price_limit: Option<u64>,
-        mut price_feeds: vector<PriceInfoObject>,
+        price_feeds: &vector<PriceInfoObject>,
         clock: &Clock,
         ctx: &mut TxContext,
     ): (PerpetualPosition, PositionResult) {
@@ -984,7 +986,7 @@ module unxv_perpetuals::unxv_perpetuals {
         assert!(margin_amount >= required_margin, E_INSUFFICIENT_MARGIN);
         
         // Get current price from price feeds
-        let current_price = get_mark_price(price_feeds, market.price_feed_id);
+        let current_price = get_mark_price(registry, price_feeds, market.market_symbol, clock);
         
         // Check price limit if specified
         if (option::is_some(&price_limit)) {
@@ -1088,13 +1090,13 @@ module unxv_perpetuals::unxv_perpetuals {
         user_account: &mut UserAccount,
         mut size_to_close: Option<u64>,
         mut price_limit: Option<u64>,
-        mut price_feeds: vector<PriceInfoObject>,
+        price_feeds: &vector<PriceInfoObject>,
         clock: &Clock,
         ctx: &mut TxContext,
     ): (Coin<USDC>, Option<PerpetualPosition>) {
         assert!(!registry.emergency_pause, E_SYSTEM_PAUSED);
         
-        let current_price = get_mark_price(price_feeds, market.price_feed_id);
+        let current_price = get_mark_price(registry, price_feeds, market.market_symbol, clock);
         let close_size = if (option::is_some(&size_to_close)) {
             option::extract(&mut size_to_close)
         } else {
@@ -1239,15 +1241,14 @@ module unxv_perpetuals::unxv_perpetuals {
         calculator: &mut FundingRateCalculator,
         market: &PerpetualsMarket<T>,
         registry: &PerpetualsRegistry,
-        mut price_feeds: vector<PriceInfoObject>,
+        price_feeds: &vector<PriceInfoObject>,
         clock: &Clock,
     ): FundingRateCalculation {
         let current_time = clock::timestamp_ms(clock);
         
         // Get current mark and index prices
-        let mark_price = get_mark_price(vector::empty(), market.price_feed_id);
-        let index_price = get_index_price(&price_feeds, &market.price_feed_id);
-        vector::destroy_empty(price_feeds);
+        let mark_price = get_mark_price(registry, price_feeds, market.market_symbol, clock);
+        let index_price = get_index_price(registry, price_feeds, market.market_symbol, clock);
         
         // Calculate premium component: (mark_price - index_price) / index_price
         let premium_component = if (mark_price >= index_price) {
@@ -1352,13 +1353,13 @@ module unxv_perpetuals::unxv_perpetuals {
         user_account: &mut UserAccount,
         liquidator: address,
         mut liquidation_size: Option<u64>,
-        mut price_feeds: vector<PriceInfoObject>,
+        price_feeds: &vector<PriceInfoObject>,
         clock: &Clock,
         ctx: &mut TxContext,
     ): Coin<USDC> {
         assert!(vec_set::contains(&engine.registered_liquidators, &liquidator), E_UNAUTHORIZED_LIQUIDATOR);
         
-        let current_price = get_mark_price(price_feeds, market.price_feed_id);
+        let current_price = get_mark_price(registry, price_feeds, market.market_symbol, clock);
         assert!(check_liquidation_eligibility(market, position, current_price), E_POSITION_NOT_LIQUIDATABLE);
         
         // Determine optimal liquidation size based on health factor
@@ -1634,19 +1635,45 @@ module unxv_perpetuals::unxv_perpetuals {
         }
     }
     
-    /// Get mark price from Pyth feeds
-    fun get_mark_price(price_feeds: vector<PriceInfoObject>, _feed_id: vector<u8>): u64 {
-        // Simplified implementation - in production would validate feed ID and extract price
-        // For testing, we expect an empty vector
-        vector::destroy_empty(price_feeds);
-        1000000000 // Return 1000 USDC as placeholder
+    /// Get mark price from Pyth feeds (production: validates feed ID, staleness, scaling)
+    fun get_mark_price(
+        registry: &PerpetualsRegistry,
+        price_feeds: &vector<PriceInfoObject>,
+        market_symbol: String,
+        clock: &Clock
+    ): u64 {
+        assert!(table::contains(&registry.price_feeds, market_symbol), E_INVALID_PRICE);
+        let expected_feed_id = table::borrow(&registry.price_feeds, market_symbol);
+        let price_info_object = vector::borrow(price_feeds, 0);
+        let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
+        let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
+        assert!(price_id == *expected_feed_id, E_INVALID_PRICE);
+        let price_timestamp = price_info::get_arrival_time(&price_info);
+        let now = clock::timestamp_ms(clock);
+        assert!(now >= price_timestamp, E_INVALID_PRICE);
+        assert!(now - price_timestamp <= 60000, E_INVALID_PRICE); // 60s staleness
+        let price_feed_val = price_info::get_price_feed(&price_info);
+        let price_struct = price_feed::get_price(price_feed_val);
+        let price_i64 = price::get_price(&price_struct);
+        let price_u64 = pyth_i64::get_magnitude_if_positive(&price_i64);
+        assert!(price_u64 > 0, E_INVALID_PRICE);
+        let expo = price::get_expo(&price_struct);
+        let expo_magnitude = pyth_i64::get_magnitude_if_positive(&expo);
+        if (expo_magnitude <= 8) {
+            price_u64 * 1000000 // 6 decimals
+        } else {
+            price_u64 / 100
+        }
     }
-    
-    /// Get index price (spot price) from Pyth feeds
-    fun get_index_price(_price_feeds: &vector<PriceInfoObject>, _feed_id: &vector<u8>): u64 {
-        // In production, would extract spot price from Pyth feeds
-        // For now, return a price slightly different from mark price to simulate premium
-        999500000 // Return 999.5 USDC as placeholder (0.05% discount to mark)
+
+    /// Get index price (spot price) from Pyth feeds (same as above, but could use a different feed if needed)
+    fun get_index_price(
+        registry: &PerpetualsRegistry,
+        price_feeds: &vector<PriceInfoObject>,
+        market_symbol: String,
+        clock: &Clock
+    ): u64 {
+        get_mark_price(registry, price_feeds, market_symbol, clock)
     }
     
     /// Calculate volatility adjustment based on recent price movements
