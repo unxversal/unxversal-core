@@ -1496,3 +1496,109 @@ struct TradingAnalytics has drop {
 - Launch cross-chain preparation infrastructure
 
 The UnXversal Perpetuals Protocol represents the most sophisticated derivatives product in the ecosystem, providing institutional-grade perpetual futures trading with deep DeepBook liquidity integration, comprehensive risk management, and seamless ecosystem interoperability while driving significant UNXV utility and deflationary pressure through fee conversion and burning mechanisms. 
+
+---
+
+## Required Bots and Automation
+
+### 1. Liquidation Bots
+- **Role:** Monitor for undercollateralized or unhealthy positions and trigger liquidations.
+- **Interaction:** Call on-chain liquidation functions; interact with liquidation queue and insurance fund.
+- **Reward:** Receive a percentage of liquidation penalty (see FEE_REVIEW.md).
+
+### 2. Settlement Bots
+- **Role:** Trigger funding rate settlements, daily mark-to-market, and contract expiries.
+- **Interaction:** Call on-chain settlement/mark-to-market functions.
+- **Reward:** Receive a percentage of settlement fees (if applicable).
+
+### 3. Automation Bots
+- **Role:** Automate risk checks, rebalancing, and protocol parameter updates (if allowed).
+- **Interaction:** Monitor protocol events, submit transactions as needed.
+- **Reward:** Can be incentivized via protocol fees or UNXV boosts.
+
+---
+
+## On-Chain Objects/Interfaces for Bots
+
+```move
+struct InsuranceFund has key, store {
+    id: UID,
+    balance: Balance<USDC>,
+    total_contributions: u64,
+    total_payouts: u64,
+}
+
+struct LiquidationRequest has store {
+    position_id: ID,
+    user: address,
+    liquidation_price: u64,
+    margin_deficit: u64,
+    priority_score: u64,
+    request_timestamp: u64,
+}
+
+struct LiquidationQueue has key, store {
+    id: UID,
+    pending_liquidations: vector<LiquidationRequest>,
+}
+
+struct SettlementRequest has store {
+    contract_id: ID,
+    expiry_timestamp: u64,
+    settlement_price: Option<u64>,
+    is_settled: bool,
+    request_timestamp: u64,
+}
+
+struct SettlementQueue has key, store {
+    id: UID,
+    pending_settlements: vector<SettlementRequest>,
+}
+
+struct BotRewardTracker has key, store {
+    id: UID,
+    bot_address: address,
+    total_rewards_earned: u64,
+    last_reward_timestamp: u64,
+}
+```
+
+---
+
+## Off-Chain Bot Interfaces (TypeScript)
+
+```typescript
+interface LiquidationBot {
+  pollLiquidationQueue(): Promise<LiquidationRequest[]>;
+  submitLiquidation(positionId: string): Promise<TxResult>;
+  claimReward(botAddress: string): Promise<RewardReceipt>;
+}
+
+interface SettlementBot {
+  pollSettlementQueue(): Promise<SettlementRequest[]>;
+  submitSettlement(contractId: string): Promise<TxResult>;
+  claimReward(botAddress: string): Promise<RewardReceipt>;
+}
+
+interface RewardTrackerBot {
+  getTotalRewards(botAddress: string): Promise<number>;
+  getLastRewardTimestamp(botAddress: string): Promise<number>;
+}
+
+interface TxResult {
+  success: boolean;
+  txHash: string;
+  error?: string;
+}
+
+interface RewardReceipt {
+  amount: number;
+  timestamp: number;
+  txHash: string;
+}
+```
+
+---
+
+## References
+- See [FEE_REVIEW.md](../FEE_REVIEW.md) and [UNXV_BOTS.md](../UNXV_BOTS.md) for details on bot rewards and incentives. 

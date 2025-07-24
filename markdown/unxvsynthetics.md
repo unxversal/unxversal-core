@@ -642,3 +642,103 @@ public fun transfer_admin_to_burn(admin_cap: AdminCap, ctx: &mut TxContext) {
 - Gradual burn of collected fees
 
 This creates a sustainable flywheel where protocol usage drives UNXV demand and supply reduction, while providing clear utility and value accrual to token holders. 
+
+---
+
+## Required Bots and Automation
+
+### 1. Liquidation Bots
+- **Role:** Monitor for undercollateralized or unhealthy positions and trigger liquidations.
+- **Interaction:** Call on-chain liquidation functions; interact with liquidation queue and insurance fund.
+- **Reward:** Receive a percentage of liquidation fee (see FEE_REVIEW.md).
+
+### 2. Automation Bots
+- **Role:** Automate protocol functions such as rebalancing, fee processing, and risk management.
+- **Interaction:** Call on-chain automation functions; interact with automation queue.
+- **Reward:** Receive a percentage of protocol fees (see FEE_REVIEW.md).
+
+---
+
+## On-Chain Objects/Interfaces for Bots
+
+```move
+struct LiquidationRequest has store {
+    position_id: ID,
+    user: address,
+    liquidation_price: u64,
+    margin_deficit: u64,
+    priority_score: u64,
+    request_timestamp: u64,
+}
+
+struct LiquidationQueue has key, store {
+    id: UID,
+    pending_liquidations: vector<LiquidationRequest>,
+}
+
+struct AutomationRequest has store {
+    vault_id: String,
+    action: String, // e.g., "REBALANCE", "FEE_PROCESSING"
+    parameters: Table<String, u64>,
+    request_timestamp: u64,
+}
+
+struct AutomationQueue has key, store {
+    id: UID,
+    pending_automations: vector<AutomationRequest>,
+}
+
+struct InsuranceFund has key, store {
+    id: UID,
+    balance: Balance<USDC>,
+    total_contributions: u64,
+    total_payouts: u64,
+}
+
+struct BotRewardTracker has key, store {
+    id: UID,
+    bot_address: address,
+    total_rewards_earned: u64,
+    last_reward_timestamp: u64,
+}
+```
+
+---
+
+## Off-Chain Bot Interfaces (TypeScript)
+
+```typescript
+interface LiquidationBot {
+  pollLiquidationQueue(): Promise<LiquidationRequest[]>;
+  submitLiquidation(positionId: string): Promise<TxResult>;
+  claimReward(botAddress: string): Promise<RewardReceipt>;
+}
+
+interface AutomationBot {
+  pollAutomationQueue(): Promise<AutomationRequest[]>;
+  submitAutomation(request: AutomationRequest): Promise<TxResult>;
+  claimReward(botAddress: string): Promise<RewardReceipt>;
+}
+
+interface RewardTrackerBot {
+  getTotalRewards(botAddress: string): Promise<number>;
+  getLastRewardTimestamp(botAddress: string): Promise<number>;
+}
+
+interface TxResult {
+  success: boolean;
+  txHash: string;
+  error?: string;
+}
+
+interface RewardReceipt {
+  amount: number;
+  timestamp: number;
+  txHash: string;
+}
+```
+
+---
+
+## References
+- See [FEE_REVIEW.md](../FEE_REVIEW.md) and [UNXV_BOTS.md](../UNXV_BOTS.md) for details on bot rewards and incentives. 

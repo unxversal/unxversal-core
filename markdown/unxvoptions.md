@@ -1537,3 +1537,103 @@ class SettlementManager {
 - **Network Effects**: Options strategies enhance utility of synthetics and lending
 
 The UnXversal Options Protocol creates sophisticated derivatives infrastructure while providing clear utility and value accrual for UNXV token holders through innovative staking mechanisms and comprehensive ecosystem integration. 
+
+---
+
+## Required Bots and Automation
+
+### 1. Market Creation Bots
+- **Role:** Create new option markets (strikes/expiries) at required intervals.
+- **Interaction:** Call on-chain market creation functions; interact with market creation registry.
+- **Reward:** Receive a percentage of protocol fees for new market creation (see FEE_REVIEW.md).
+
+### 2. Settlement Bots
+- **Role:** Trigger settlement for expiring options and process exercises.
+- **Interaction:** Call on-chain settlement functions; interact with settlement queue.
+- **Reward:** Receive a percentage of settlement fees.
+
+### 3. Automation Bots
+- **Role:** Automate risk checks, rebalancing, and protocol parameter updates (if allowed).
+- **Interaction:** Monitor protocol events, submit transactions as needed.
+- **Reward:** Can be incentivized via protocol fees or UNXV boosts.
+
+---
+
+## On-Chain Objects/Interfaces for Bots
+
+```move
+struct MarketCreationRequest has store {
+    asset: String,
+    strike: u64,
+    expiry: u64,
+    option_type: String, // "CALL" or "PUT"
+    request_timestamp: u64,
+}
+
+struct MarketCreationRegistry has key, store {
+    id: UID,
+    created_markets: vector<String>,
+    last_creation_timestamp: u64,
+    pending_requests: vector<MarketCreationRequest>,
+}
+
+struct SettlementRequest has store {
+    option_market_id: ID,
+    expiry_timestamp: u64,
+    settlement_price: Option<u64>,
+    is_settled: bool,
+    request_timestamp: u64,
+}
+
+struct SettlementQueue has key, store {
+    id: UID,
+    pending_settlements: vector<SettlementRequest>,
+}
+
+struct BotRewardTracker has key, store {
+    id: UID,
+    bot_address: address,
+    total_rewards_earned: u64,
+    last_reward_timestamp: u64,
+}
+```
+
+---
+
+## Off-Chain Bot Interfaces (TypeScript)
+
+```typescript
+interface MarketCreationBot {
+  pollMarketCreationRegistry(): Promise<MarketCreationRequest[]>;
+  submitMarketCreation(request: MarketCreationRequest): Promise<TxResult>;
+  claimReward(botAddress: string): Promise<RewardReceipt>;
+}
+
+interface SettlementBot {
+  pollSettlementQueue(): Promise<SettlementRequest[]>;
+  submitSettlement(optionMarketId: string): Promise<TxResult>;
+  claimReward(botAddress: string): Promise<RewardReceipt>;
+}
+
+interface RewardTrackerBot {
+  getTotalRewards(botAddress: string): Promise<number>;
+  getLastRewardTimestamp(botAddress: string): Promise<number>;
+}
+
+interface TxResult {
+  success: boolean;
+  txHash: string;
+  error?: string;
+}
+
+interface RewardReceipt {
+  amount: number;
+  timestamp: number;
+  txHash: string;
+}
+```
+
+---
+
+## References
+- See [FEE_REVIEW.md](../FEE_REVIEW.md) and [UNXV_BOTS.md](../UNXV_BOTS.md) for details on bot rewards and incentives. 

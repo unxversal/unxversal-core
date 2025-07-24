@@ -403,6 +403,103 @@ struct VaultPerformanceData has store {
 
 ---
 
+## Required Bots and Automation
+
+### 1. Automation Bots
+- **Role:** Automate rebalancing, yield optimization, and risk management for liquidity vaults/pools.
+- **Interaction:** Call on-chain automation functions; interact with automation queue.
+- **Reward:** Receive a percentage of performance/yield optimization fees (see FEE_REVIEW.md).
+
+### 2. Liquidation Bots (if relevant)
+- **Role:** Monitor for unhealthy vaults/pools and trigger liquidations if required by protocol.
+- **Interaction:** Call on-chain liquidation functions; interact with liquidation queue.
+- **Reward:** Receive a percentage of liquidation fees (if applicable).
+
+---
+
+## On-Chain Objects/Interfaces for Bots
+
+```move
+struct AutomationRequest has store {
+    vault_id: String,
+    action: String, // e.g., "REBALANCE", "OPTIMIZE_YIELD"
+    parameters: Table<String, u64>,
+    request_timestamp: u64,
+}
+
+struct AutomationQueue has key, store {
+    id: UID,
+    pending_automations: vector<AutomationRequest>,
+}
+
+struct LiquidationRequest has store {
+    vault_id: String,
+    reason: String, // e.g., "UNDERCOLLATERALIZED", "RISK_BREACH"
+    request_timestamp: u64,
+}
+
+struct LiquidationQueue has key, store {
+    id: UID,
+    pending_liquidations: vector<LiquidationRequest>,
+}
+
+struct BotRewardTracker has key, store {
+    id: UID,
+    bot_address: address,
+    total_rewards_earned: u64,
+    last_reward_timestamp: u64,
+}
+
+struct InsuranceFund has key, store {
+    id: UID,
+    balance: Balance<USDC>,
+    total_contributions: u64,
+    total_payouts: u64,
+}
+```
+
+---
+
+## Off-Chain Bot Interfaces (TypeScript)
+
+```typescript
+interface AutomationBot {
+  pollAutomationQueue(): Promise<AutomationRequest[]>;
+  submitAutomation(request: AutomationRequest): Promise<TxResult>;
+  claimReward(botAddress: string): Promise<RewardReceipt>;
+}
+
+interface LiquidationBot {
+  pollLiquidationQueue(): Promise<LiquidationRequest[]>;
+  submitLiquidation(vaultId: string): Promise<TxResult>;
+  claimReward(botAddress: string): Promise<RewardReceipt>;
+}
+
+interface RewardTrackerBot {
+  getTotalRewards(botAddress: string): Promise<number>;
+  getLastRewardTimestamp(botAddress: string): Promise<number>;
+}
+
+interface TxResult {
+  success: boolean;
+  txHash: string;
+  error?: string;
+}
+
+interface RewardReceipt {
+  amount: number;
+  timestamp: number;
+  txHash: string;
+}
+```
+
+---
+
+## References
+- See [FEE_REVIEW.md](../FEE_REVIEW.md) and [UNXV_BOTS.md](../UNXV_BOTS.md) for details on bot rewards and incentives.
+
+---
+
 ## Conclusion
 
 The UnXversal Liquidity protocol provides a unified, permissionless, and orderbook-based framework for all liquidity provisioning strategies—manual, automated, and hybrid. All strategies operate on the unxvdex layer, with robust risk management, analytics, and cross-protocol integration. The protocol is designed for upgradability, community governance, and seamless integration with the broader UnXversal ecosystem.
