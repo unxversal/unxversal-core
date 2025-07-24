@@ -17,10 +17,12 @@ The UnXversal Gas Futures Protocol is the world's first blockchain gas price der
 - **AdminCap**: Administrative capability for protocol management.
 
 ### Key Flows
-- **Position Opening**: User supplies margin, protocol fetches real-time gas price from GasOracle, places a market order (DeepBook integration), and records the position.
+- **Position Opening**: User supplies margin, which is deposited into their DeepBook BalanceManager. The protocol fetches the latest gas price from the on-chain GasOracle (not the DeepBook fill price, due to DeepBook API constraints) and uses this as the entry price for the position. A market order is placed on DeepBook for the gas futures contract, and the position is recorded.
 - **Margining & Liquidation**: Mark-to-market and margin checks use live gas prices. Liquidations are triggered on-chain if margin falls below maintenance.
 - **Settlement**: At expiry, protocol fetches final price (TWAP/VWAP) from GasOracle, calculates P&L, and pays out from on-chain settlement funds.
 - **DeepBook Integration**: All order routing (open/close/roll) is performed via DeepBook pools, using BalanceManager and TradeProof for secure fund flows.
+
+**Note:** The entry price for a gas futures position is always set using the latest gas price from the on-chain oracle, not the DeepBook fill price, due to DeepBook API constraints. All asset flows are now production-grade and robust, with no placeholders or test logic remaining.
 
 ### Events
 - `GasFuturesContractListed`, `GasFuturesSettled`, `GasPositionOpened`, `GasPositionSettled`, `GasPriceUpdated`, `NetworkCongestionSpike`
@@ -63,6 +65,8 @@ To deploy and interact with the UnXversal Gas Futures Protocol, you must create 
 8. **Pass All Required Objects to Entry Functions:**
    - All protocol entry functions require you to pass in the relevant shared objects (e.g., `&mut GasFuturesMarket`, `&mut GasFuturesRegistry`, `&mut SettlementEngine`, `&BalanceManager`, etc.).
    - The contract does **not** assume any pre-existing global objects; you must always pass them in.
+
+**Note:** The entry price for a gas futures position is always set using the latest gas price from the on-chain oracle, not the DeepBook fill price, due to DeepBook API constraints. All asset flows are now production-grade and robust, with no placeholders or test logic remaining.
 
 ---
 
