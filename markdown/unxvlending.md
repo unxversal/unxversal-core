@@ -1,5 +1,7 @@
 # UnXversal Lending Protocol Design
 
+> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **asset and pool listing is permissioned (admin only); only the admin can add new supported assets and create lending pools.**
+
 ## System Architecture & User Flow Overview
 
 ### How All Components Work Together
@@ -9,9 +11,9 @@ The UnXversal Lending protocol creates a sophisticated credit system that seamle
 #### **Core Object Hierarchy & Relationships**
 
 ```
-LendingRegistry (Shared) ← Central lending configuration & risk parameters
+LendingRegistry (Shared, admin-controlled) ← Central lending configuration & risk parameters
     ↓ manages pools
-LendingPool<T> (Shared) → InterestRateModel ← dynamic rate calculation
+LendingPool<T> (Shared, admin-created) → InterestRateModel ← dynamic rate calculation
     ↓ tracks liquidity         ↓ calculates APR/APY
 UserPosition (individual) ← collateral & debt tracking
     ↓ validates safety
@@ -125,7 +127,9 @@ update all affected positions
 
 ## Overview
 
-UnXversal Lending is a robust permissionless lending protocol that enables users to supply assets to earn yield and borrow assets against collateral. It seamlessly integrates with the UnXversal ecosystem, supporting synthetic assets from the synthetics protocol, leveraged trading through the spot DEX, and UNXV tokenomics with fee discounts and yield optimization.
+UnXversal Lending is a robust lending protocol with **admin-permissioned asset and pool listing**. Only the admin can add new supported assets and create lending pools. Users can supply/borrow assets, but the set of available assets and pools is managed by the admin for risk and protocol consistency.
+
+> **Key Policy:** Only assets and pools listed by the admin in the LendingRegistry are available for supply/borrow. Users cannot list new assets or create new pools directly.
 
 ## Integration with UnXversal Ecosystem
 
@@ -148,7 +152,7 @@ UnXversal Lending is a robust permissionless lending protocol that enables users
 
 ### On-Chain Objects
 
-#### 1. LendingRegistry (Shared Object)
+#### 1. LendingRegistry (Shared Object, Admin-Controlled)
 ```move
 struct LendingRegistry has key {
     id: UID,
@@ -197,7 +201,7 @@ struct InterestRateModel has store {
 }
 ```
 
-#### 2. LendingPool (Shared Object)
+#### 2. LendingPool (Admin-Created Only)
 ```move
 struct LendingPool<phantom T> has key {
     id: UID,
@@ -1216,25 +1220,18 @@ class FlashLoanArbitrageBot {
 6. **Economic Attacks**: Incentive alignment and circuit breakers
 7. **Cross-Protocol Risks**: Integration security with synthetics and DEX
 
+## Permissioning & Market Creation
+
+- **Asset/Pool Listing:** Only the admin (holding AdminCap) can add new supported assets and create lending pools. This is a permissioned operation for risk management and protocol consistency.
+- **On-Chain/Off-Chain Split:**
+  - On-chain: All supply, borrow, collateral, and liquidation logic; admin listing of assets/pools; event emission.
+  - Off-chain: Indexing, liquidation bots, price monitoring, and user-facing automation.
+
 ## Deployment Strategy
 
-### Phase 1: Core Lending Infrastructure
-- Deploy basic supply/borrow functionality
-- Implement standard collateral types (SUI, USDC, major tokens)
-- Launch UNXV staking and reward system
-- Set up basic liquidation engine
-
-### Phase 2: Advanced Features
-- Add synthetic asset collateral support
-- Implement leveraged trading integration
-- Deploy flash loan functionality
-- Launch yield farming strategies
-
-### Phase 3: Ecosystem Integration  
-- Full synthetics protocol integration
-- Advanced DEX trading features
-- Cross-protocol arbitrage tools
-- Institutional features and credit delegation
+- **Phase 1:** Deploy registry, admin lists initial assets and creates pools (SUI, USDC, major tokens, etc.)
+- **Phase 2:** Add advanced features and integrations as needed, with admin managing new asset/pool listings
+- **Phase 3:** Admin can add new assets/pools as needed, but users cannot list new assets or create pools directly
 
 ## UNXV Integration Benefits
 

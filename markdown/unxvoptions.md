@@ -1,5 +1,7 @@
 # UnXversal Options Protocol Design
 
+> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **market listing/creation is permissioned (admin only); only the admin can add new option markets to the protocol. DeepBook itself is permissionless, but the Options registry is permissioned.**
+
 ## System Architecture & User Flow Overview
 
 ### How All Components Work Together
@@ -9,7 +11,7 @@ The UnXversal Options protocol creates a sophisticated derivatives ecosystem tha
 #### **Core Object Hierarchy & Relationships**
 
 ```
-OptionsRegistry (Shared) ← Central options configuration & supported assets
+OptionsRegistry (Shared, permissioned) ← Central options configuration & supported assets (admin only)
     ↓ manages markets
 OptionsMarket<T> (Shared) → GreeksCalculator ← real-time risk metrics
     ↓ tracks positions         ↓ calculates delta/gamma/theta
@@ -19,10 +21,21 @@ CollateralManager (Service) → PriceOracle ← Pyth price feeds
     ↓ monitors margins         ↓ provides pricing
 SettlementEngine ← handles expiration & exercise
     ↓ executes via
-DEX Integration → AutoSwap ← asset conversions
+DEX Integration → AutoSwap ← asset conversions (DeepBook pool creation is permissionless, but Options registry listing is admin-only)
     ↓ enables hedging         ↓ handles settlements
 UNXV Integration → fee discounts & premium features
 ```
+
+---
+
+## Permissioning Policy
+
+- **Market listing/creation in the Options registry is permissioned (admin only).**
+- **DeepBook pool creation is permissionless, but only pools/markets added by the admin are recognized by the Options registry.**
+- **All trading, position management, and advanced order types are permissionless for users, but only on markets listed by the admin.**
+- See [MOVING_FORWARD.md](../MOVING_FORWARD.md) for the full permissioning matrix and rationale.
+
+---
 
 #### **Complete User Journey Flows**
 

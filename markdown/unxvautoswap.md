@@ -1,5 +1,7 @@
 # UnXversal Autoswap Contracts Design
 
+> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **asset and pool listing is permissioned (admin only); only the admin can add new supported assets and configure pools in AutoSwap. DeepBook itself is permissionless, but the AutoSwap registry is permissioned.**
+
 ## System Architecture & User Flow Overview
 
 ### How All Components Work Together
@@ -10,9 +12,9 @@ The UnXversal AutoSwap protocol serves as the critical circulatory system of the
 
 **ON-CHAIN OBJECTS:**
 ```
-AutoSwapRegistry (Shared) ← Central conversion configuration & supported assets
+AutoSwapRegistry (Shared, permissioned) ← Central conversion configuration & supported assets (admin only)
     ↓ manages swaps
-SimpleSwap (Owned) → DeepBook Pools ← liquidity sources for conversions
+SimpleSwap (Owned) → DeepBook Pools ← liquidity sources for conversions (DeepBook pool creation is permissionless, but AutoSwap registry listing is admin-only)
     ↓ immediate execution    ↓ provides best rates & executes swaps
 BalanceManager ← manages cross-protocol balances
     ↓ validates operations
@@ -30,6 +32,17 @@ ConversionEngine → FeeProcessor ← handles automatic fee conversions
 BurnScheduler → Analytics ← manages UNXV burn timing & amounts
     ↓ schedules burns        ↓ tracks burn metrics & economics
 ```
+
+---
+
+## Permissioning Policy
+
+- **Asset and pool listing in the AutoSwap registry is permissioned (admin only).**
+- **DeepBook pool creation is permissionless, but only pools/assets added by the admin are recognized by the AutoSwap registry.**
+- **All swaps, conversions, and fee processing are permissionless for users and protocols, but only on assets/pools listed by the admin.**
+- See [MOVING_FORWARD.md](../MOVING_FORWARD.md) for the full permissioning matrix and rationale.
+
+---
 
 #### **Complete User Journey Flows**
 

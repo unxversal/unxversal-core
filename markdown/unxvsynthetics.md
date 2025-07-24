@@ -1,5 +1,7 @@
 # UnXversal Synthetics Protocol Design
 
+> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **synthetic asset listing is permissioned (admin only), but trading/market creation for listed assets is permissionless via DeepBook.**
+
 ## System Architecture & User Flow Overview
 
 ### How All Components Work Together
@@ -10,9 +12,9 @@ The UnXversal Synthetics protocol creates a sophisticated ecosystem where multip
 
 **ON-CHAIN OBJECTS:**
 ```
-SynthRegistry (Shared) ← Central configuration & synthetic asset definitions
+SynthRegistry (Shared, admin-controlled) ← Central configuration & synthetic asset definitions
     ↓ manages
-SyntheticAsset configs → DeepBook Pools ← trading venues for synthetics
+SyntheticAsset configs (admin-listed only) → DeepBook Pools ← permissionless trading venues for synthetics
     ↓ references            ↓ provides liquidity
 CollateralVault (Shared) ← individual user USDC collateral positions
     ↓ tracks collateral
@@ -100,7 +102,9 @@ DeepBookIndexer → TradingAnalytics ← market data processing
 
 ## Overview
 
-UnXversal Synthetics enables permissionless creation and trading of synthetic assets backed by USDC collateral, built on top of DeepBook's order book infrastructure. Users can mint synthetic assets by depositing USDC and trade them on DeepBook pools with automatic price feeds from Pyth Network.
+UnXversal Synthetics enables **admin-permissioned listing** of synthetic assets (only the admin can add new synths), but **permissionless trading and DeepBook pool creation** for any listed asset. Users can mint synthetic assets by depositing USDC and trade them on DeepBook pools with automatic price feeds from Pyth Network.
+
+> **Key Policy:** Only assets listed by the admin in the SynthRegistry can be minted/traded. Anyone can create DeepBook pools for these assets, but new asset types require admin approval/listing.
 
 ### Benefits of USDC-Only Collateral
 
@@ -130,7 +134,7 @@ UnXversal Synthetics enables permissionless creation and trading of synthetic as
 
 ### On-Chain Objects
 
-#### 1. SynthRegistry (Shared Object)
+#### 1. SynthRegistry (Shared Object, Admin-Controlled)
 ```move
 struct SynthRegistry has key {
     id: UID,                                      // Unique identifier for the registry object
@@ -155,7 +159,7 @@ struct AdminCap has key, store {
 }
 ```
 
-#### 2. SyntheticAsset (Stored in Registry)
+#### 2. SyntheticAsset (Admin-Listed Only)
 ```move
 struct SyntheticAsset has store {
     name: String,                     // Full name of the synthetic asset (e.g., "Synthetic Bitcoin")
@@ -563,9 +567,17 @@ class VaultManager {
 - Liquidation queue
 - Fee analytics
 
+## Permissioning & Market Creation
+
+- **Asset Listing:** Only the admin (holding AdminCap) can add new synthetic assets to the registry. This is a permissioned operation for risk management and protocol consistency.
+- **Market Creation/Trading:** Anyone can create DeepBook pools and trade any listed synthetic asset. Trading, liquidity provision, and pool creation are permissionless for assets already listed by the admin.
+- **On-Chain/Off-Chain Split:**
+  - On-chain: All minting, burning, collateral, and trading logic; admin listing of assets; event emission.
+  - Off-chain: Indexing, liquidation bots, price monitoring, and user-facing automation.
+
 ## AdminCap Explanation
 
-The `AdminCap` is a capability object that grants administrative privileges during the initial protocol setup. It allows the deployer to:
+The `AdminCap` is a capability object that grants administrative privileges during the initial protocol setup and for listing new synthetic assets. **Only the admin can list new assets.**
 
 ### Initial Setup Functions (Requires AdminCap)
 ```move
@@ -608,29 +620,14 @@ public fun transfer_admin_to_burn(admin_cap: AdminCap, ctx: &mut TxContext) {
 
 ## Security Considerations
 
-1. **Oracle Failures**: Multiple price feed validation
-2. **Flash Loan Attacks**: Atomic operation constraints
-3. **Collateral Volatility**: Dynamic liquidation thresholds (USDC stability mitigates this)
-4. **Smart Contract Risks**: Formal verification and audits
-5. **Economic Attacks**: Incentive alignment and circuit breakers
-6. **AdminCap Security**: Must be destroyed after deployment to ensure immutability
+- **Asset Listing is Permissioned:** Only admin can list new assets. This prevents spam, risk, and protocol inconsistency.
+- **Market Creation/Trading is Permissionless:** Anyone can create pools and trade for listed assets, maximizing composability and liquidity.
 
 ## Deployment Strategy
 
-### Phase 1: Core Infrastructure
-- Deploy SynthRegistry and core contracts
-- Create initial synthetic assets (sUSD, sBTC, sETH)
-- Set up price feeds and DeepBook pools
-
-### Phase 2: Advanced Features  
-- Liquidation bots and flash loan integration
-- Advanced synthetic assets (commodities, indices)
-- Cross-collateral support
-
-### Phase 3: Ecosystem Integration
-- Integration with other UnXversal protocols
-- Synthetic derivatives and structured products
-- Institutional features
+- **Phase 1:** Deploy registry, admin lists initial assets (sUSD, sBTC, sETH, etc.)
+- **Phase 2:** Permissionless DeepBook pool creation and trading for listed assets
+- **Phase 3:** Admin can add new assets as needed, but users cannot list new assets directly
 
 ## UNXV Tokenomics Integration
 

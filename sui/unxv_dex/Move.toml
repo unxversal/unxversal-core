@@ -13,6 +13,7 @@ Wormhole = { git = "https://github.com/wormhole-foundation/wormhole.git", subdir
 
 # DeepBook - DEX and trading infrastructure  
 deepbook = { git = "https://github.com/MystenLabs/deepbookv3.git", subdir = "packages/deepbook", rev = "main" }
+unxv_autoswap = { local = "../unxv_autoswap" }
 
 # For remote import, use the `{ git = "...", subdir = "...", rev = "..." }`.
 # Revision can be a branch, a tag, and a commit hash.

@@ -23,6 +23,7 @@ module unxv_dex::unxv_dex {
     use pyth::price;
     use pyth::price_identifier;
     use pyth::i64 as pyth_i64;
+    use unxv_autoswap::unxv_autoswap::{Self as AutoSwap, AutoSwapRegistry, FeeProcessor, UNXVBurnVault, FeeProcessingResult};
     
     // ========== Constants ==========
     
@@ -552,27 +553,30 @@ module unxv_dex::unxv_dex {
         }
     }
     
-    /// Process fees with AutoSwap integration (placeholder)
-    public fun process_fees_with_autoswap(
-        fee_breakdown: FeeBreakdown,
-        trader: address,
+    /// Process fees with AutoSwap integration (production)
+    public fun process_fees_with_autoswap<T: store>(
+        autoswap_registry: &mut AutoSwapRegistry,
+        fee_processor: &mut FeeProcessor,
+        burn_vault: &mut UNXVBurnVault,
+        protocol_name: String,
+        fee_coins: vector<Coin<T>>,
+        target_asset: String, // "UNXV" or "USDC"
+        price_feeds: vector<PriceInfoObject>,
         clock: &Clock,
-    ) {
-        // Emit fee collection event
-        event::emit(TradingFeesCollected {
-            trader,
-            base_fee: fee_breakdown.base_trading_fee,
-            unxv_discount: fee_breakdown.unxv_discount,
-            routing_fee: fee_breakdown.routing_fee,
-            total_fee: fee_breakdown.final_fee,
-            fee_asset: fee_breakdown.fee_asset,
-            unxv_burned: if (fee_breakdown.fee_asset == string::utf8(b"UNXV")) {
-                fee_breakdown.final_fee
-            } else {
-                0
-            },
-            timestamp: clock::timestamp_ms(clock),
-        });
+        ctx: &mut TxContext,
+    ): FeeProcessingResult {
+        // Call the real AutoSwap protocol fee processing function
+        AutoSwap::process_protocol_fees<T>(
+            autoswap_registry,
+            fee_processor,
+            burn_vault,
+            protocol_name,
+            fee_coins,
+            target_asset,
+            price_feeds,
+            clock,
+            ctx
+        )
     }
     
     // ========== Arbitrage Detection ==========

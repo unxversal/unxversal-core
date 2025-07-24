@@ -1,5 +1,7 @@
 # UnXversal Perpetuals Protocol Design
 
+> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **market listing/creation is permissioned (admin only); only the admin can add new perpetual markets to the protocol. DeepBook itself is permissionless, but the Perpetuals registry is permissioned.**
+
 ## System Architecture & User Flow Overview
 
 ### How All Components Work Together
@@ -9,7 +11,7 @@ The UnXversal Perpetuals protocol creates a sophisticated leverage trading ecosy
 #### **Core Object Hierarchy & Relationships**
 
 ```
-PerpetualsRegistry (Shared) ← Central configuration & supported assets
+PerpetualsRegistry (Shared, permissioned) ← Central configuration & supported assets (admin only)
     ↓ manages markets
 PerpetualMarket<T> (Shared) → FundingRateEngine ← dynamic rate calculation
     ↓ tracks positions          ↓ maintains price convergence
@@ -19,10 +21,21 @@ MarginManager (Service) → PriceOracle ← real-time pricing
     ↓ monitors health           ↓ provides mark prices
 LiquidationEngine ← processes liquidations
     ↓ executes via
-DeepBook Integration → AutoSwap ← asset conversions
+DeepBook Integration → AutoSwap ← asset conversions (DeepBook pool creation is permissionless, but Perpetuals registry listing is admin-only)
     ↓ provides liquidity       ↓ handles settlements
 UNXV Integration → fee discounts & enhanced leverage
 ```
+
+---
+
+## Permissioning Policy
+
+- **Market listing/creation in the Perpetuals registry is permissioned (admin only).**
+- **DeepBook pool creation is permissionless, but only pools/markets added by the admin are recognized by the Perpetuals registry.**
+- **All trading, position management, and advanced order types are permissionless for users, but only on markets listed by the admin.**
+- See [MOVING_FORWARD.md](../MOVING_FORWARD.md) for the full permissioning matrix and rationale.
+
+---
 
 #### **Complete User Journey Flows**
 

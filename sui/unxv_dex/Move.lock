@@ -2,8 +2,8 @@
 
 [move]
 version = 3
-manifest_digest = "E46D3D460D8C97531A5079B7A9B3607EEF98584184674DC45480B169FCF2DC71"
-deps_digest = "CAFAD8A7CF51067FB4358215BECB86BD100DD64E57C2AC8A7AE7D74B688F5965"
+manifest_digest = "3D5564A374FF45C197D6F0AA503C03B6B2149C2AD97A78C49A114EDFEC0EC845"
+deps_digest = "04732BFEF428F74DE262001DC455D76B909EBC394B034A9A15CC095E4BDD9CEF"
 dependencies = [
   { id = "Bridge", name = "Bridge" },
   { id = "MoveStdlib", name = "MoveStdlib" },
@@ -12,6 +12,7 @@ dependencies = [
   { id = "SuiSystem", name = "SuiSystem" },
   { id = "Wormhole", name = "Wormhole" },
   { id = "deepbook", name = "deepbook" },
+  { id = "unxv_autoswap", name = "unxv_autoswap" },
 ]
 
 [[move.package]]
@@ -77,6 +78,20 @@ source = { git = "https://github.com/MystenLabs/deepbookv3.git", rev = "main", s
 
 dependencies = [
   { id = "Sui", name = "Sui" },
+]
+
+[[move.package]]
+id = "unxv_autoswap"
+source = { local = "../unxv_autoswap" }
+
+dependencies = [
+  { id = "Bridge", name = "Bridge" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Pyth", name = "Pyth" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "Wormhole", name = "Wormhole" },
+  { id = "deepbook", name = "deepbook" },
 ]
 
 [move.toolchain-version]

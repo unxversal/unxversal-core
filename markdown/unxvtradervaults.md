@@ -1,5 +1,17 @@
 # UnXversal Trader Vaults Protocol Design
 
+> **Note:** This document has been revised to align with [MOVING_FORWARD.md](../MOVING_FORWARD.md). Trader vault creation is permissionless. Vaults can use any UnXversal protocol as underlying (especially unxvdex for orderbook-based strategies). The on-chain protocol provides the vault/fund logic, while all advanced strategy execution, analytics, and automation can be handled off-chain (CLI/server) or via the frontend. All permissioning, architecture, and integration policies are governed by MOVING_FORWARD.md.
+
+---
+
+## Migration Note
+- This protocol is now fully permissionless: **anyone can create a trader vault**.
+- Vaults can use any UnXversal protocol as underlying, with a strong recommendation to use unxvdex for all orderbook-based strategies.
+- All previous restrictions or admin-only language have been removed.
+- For implementation and integration details, always reference [MOVING_FORWARD.md](../MOVING_FORWARD.md).
+
+---
+
 ## System Architecture & User Flow Overview
 
 ### How All Components Work Together

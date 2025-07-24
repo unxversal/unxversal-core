@@ -1,5 +1,7 @@
 # UnXversal Spot DEX Protocol Design
 
+> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **pool listing/market creation is permissioned (admin only); only the admin can add new supported pools to the DEX. DeepBook itself is permissionless, but the DEX registry is permissioned.**
+
 ## System Architecture & User Flow Overview
 
 ### How All Components Work Together
@@ -10,9 +12,9 @@ The UnXversal Spot DEX operates as an intelligent aggregation layer that orchest
 
 **ON-CHAIN OBJECTS:**
 ```
-DEXRegistry (Shared) ← Central trading configuration & supported pools
+DEXRegistry (Shared, permissioned) ← Central trading configuration & supported pools (admin only)
     ↓ manages pools
-SimpleTradeOrder (Owned) → DeepBook Pools ← individual asset pairs
+SimpleTradeOrder (Owned) → DeepBook Pools ← individual asset pairs (DeepBook pool creation is permissionless, but DEX registry listing is admin-only)
     ↓ immediate execution      ↓ provides liquidity & executes trades
 BalanceManager ← holds user funds across all pools
     ↓ validates funds

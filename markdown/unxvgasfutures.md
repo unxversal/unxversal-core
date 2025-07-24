@@ -1,5 +1,7 @@
 # UnXversal Gas Futures Protocol Design
 
+> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **market/contract creation is permissionless (with a minimum interval restriction, e.g., daily as the smallest interval); anyone can create new gas futures contracts. DeepBook pool creation is also permissionless.**
+
 ## System Architecture & User Flow Overview
 
 ### How All Components Work Together
@@ -10,13 +12,13 @@ The UnXversal Gas Futures protocol creates the world's first blockchain gas pric
 
 **ON-CHAIN OBJECTS:**
 ```
-GasFuturesRegistry (Shared) ← Central gas market configuration for sponsored transaction era
+GasFuturesRegistry (Shared, permissionless) ← Central gas market configuration for sponsored transaction era (anyone can create contracts, subject to minimum interval enforcement)
     ↓ manages contracts
 GasFuturesContract (Shared) → GasPosition (individual) ← gas station & sponsor hedging
     ↓ tracks contract terms     ↓ tracks hedging exposure
 SettlementEngine ← processes gas-based settlement using TWAP
     ↓ executes settlement
-AutoSwap Integration ← handles settlement payments & UNXV conversions
+AutoSwap Integration ← handles settlement payments & UNXV conversions (DeepBook pool creation is permissionless)
 ```
 
 **OFF-CHAIN SERVICES (CLI/Server):**
@@ -25,9 +27,22 @@ GasPriceOracle → GasStationAnalytics ← sponsored transaction volume tracking
     ↓ monitors Sui gas prices   ↓ analyzes gas station costs
 ML Prediction Engine → SponsorRiskProfiler ← risk assessment for sponsorship models
     ↓ forecasts gas trends      ↓ calculates optimal hedging
-EnterpriseHedgingService → ContractCreationBot ← automated market creation
+EnterpriseHedgingService → ContractCreationBot ← automated market creation (off-chain bots can automate market creation and are incentivized)
     ↓ manages corporate hedging ↓ creates gas futures contracts
 ```
+
+---
+
+## Permissioning Policy
+
+- **Market/contract creation in the Gas Futures registry is permissionless (anyone can create, subject to minimum interval enforcement).**
+- **DeepBook pool creation is permissionless.**
+- **All trading, position management, and advanced order types are permissionless for users.**
+- **Minimum interval enforcement (e.g., daily) is implemented to prevent spam and ensure orderly market creation.**
+- **Off-chain bots (run by users or the CLI/server) can automate market creation, liquidation, and settlement, and are incentivized via rewards.**
+- See [MOVING_FORWARD.md](../MOVING_FORWARD.md) for the full permissioning matrix and rationale.
+
+---
 
 #### **Complete User Journey Flows**
 

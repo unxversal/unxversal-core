@@ -1,5 +1,7 @@
 # UnXversal Dated Futures Protocol Design
 
+> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **market/contract creation is permissionless (with a minimum interval restriction, e.g., daily as the smallest interval); anyone can create new futures contracts. DeepBook pool creation is also permissionless.**
+
 ## System Architecture & User Flow Overview
 
 ### How All Components Work Together
@@ -9,7 +11,7 @@ The UnXversal Dated Futures protocol provides traditional futures contracts with
 #### **Core Object Hierarchy & Relationships**
 
 ```
-DatedFuturesRegistry (Shared) ← Central futures configuration & expiration cycles
+DatedFuturesRegistry (Shared, permissionless) ← Central futures configuration & expiration cycles (anyone can create contracts, subject to minimum interval enforcement)
     ↓ manages contracts
 FuturesContract<T> (Shared) → ExpirationManager ← handles settlement & rollover
     ↓ tracks positions           ↓ automates expiration
@@ -19,10 +21,23 @@ MarginManager (Service) → PriceOracle ← TWAP/VWAP pricing
     ↓ monitors health           ↓ provides settlement prices
 SettlementEngine ← processes contract expiration
     ↓ executes via
-DeepBook Integration → AutoSwap ← asset delivery & cash settlement
+DeepBook Integration → AutoSwap ← asset delivery & cash settlement (DeepBook pool creation is permissionless)
     ↓ provides liquidity       ↓ handles conversions
 UNXV Integration → fee discounts & premium features
 ```
+
+---
+
+## Permissioning Policy
+
+- **Market/contract creation in the Dated Futures registry is permissionless (anyone can create, subject to minimum interval enforcement).**
+- **DeepBook pool creation is permissionless.**
+- **All trading, position management, and advanced order types are permissionless for users.**
+- **Minimum interval enforcement (e.g., daily) is implemented to prevent spam and ensure orderly market creation.**
+- **Off-chain bots (run by users or the CLI/server) can automate market creation, liquidation, and settlement, and are incentivized via rewards.**
+- See [MOVING_FORWARD.md](../MOVING_FORWARD.md) for the full permissioning matrix and rationale.
+
+---
 
 #### **Complete User Journey Flows**
 
