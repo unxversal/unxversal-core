@@ -1,22 +1,11 @@
 [package]
 name = "unxversal"
 version = "0.9.0"
-edition = "2024" # edition = "legacy" to use legacy (pre-2024) Move
-license = "Apache 2.0"           # e.g., "MIT", "GPL", "Apache 2.0"
+edition = "2024"
+license = "Apache 2.0"
 authors = ["Joshua Okolo (unxvjoshua@gmail.com)"]
 
 [dependencies]
-
-# For remote import, use the `{ git = "...", subdir = "...", rev = "..." }`.
-# Revision can be a branch, a tag, and a commit hash.
-# MyRemotePackage = { git = "https://some.remote/host.git", subdir = "remote/path", rev = "main" }
-
-# For local dependencies use `local = path`. Path is relative to the package root
-# Local = { local = "../path/to" }
-
-# To resolve a version conflict and force a specific version for dependency
-# override use `override = true`
-# Override = { local = "../conflicting/version", override = true }
 
 [dependencies.Pyth]
 git = "https://github.com/pyth-network/pyth-crosschain.git"
@@ -29,120 +18,28 @@ subdir = "sui/wormhole"
 rev = "sui/mainnet"
 
 [addresses]
-
-# UNXV Token
-# UNXV_ID = 
-# UNXV_TYPE =
-# UNXV_DECIMALS =
-
-# Deepbook Token
 DEEP = 0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270
-# DEEP_TYPE = 0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP
-# DEEP_DECIMALS = 6
-
-# SUI Token
 SUI = 0x0000000000000000000000000000000000000000000000000000000000000002
-# SUI_TYPE = 0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI
-# SUI_DECIMALS = 9
-
-# Native USDC Token
 USDC = 0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7
-# USDC_TYPE = 0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC
-# USDC_DECIMALS = 6
-
-# Native bridged ETH
 BETH = 0xd0e89b2af5e4910726fbcd8b8dd37bb79b29e5f83f7491bca830e94f7f226d29
-# BETH_TYPE = 0xd0e89b2af5e4910726fbcd8b8dd37bb79b29e5f83f7491bca830e94f7f226d29::eth::ETH
-# BETH_DECIMALS = 8
-
-# Wormhole USDT
 WUSDT = 0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c
-# WUSDT_TYPE = 0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN
-# WUSDT_DECIMALS = 6
-
-# AUSD Token
 AUSD = 0x2053d08c1e2bd02791056171aab0fd12bd7cd7efad2ab8f6b9c8902f14df2ff2
-# AUSD_TYPE = 0x2053d08c1e2bd02791056171aab0fd12bd7cd7efad2ab8f6b9c8902f14df2ff2::ausd::AUSD
-# AUSD_DECIMALS = 6
-
-# SEND Token
 SEND = 0xb45fcfcc2cc07ce0702cc2d229621e046c906ef14d9b25e8e4d25f6e8763fef7
-# SEND_TYPE = 0xb45fcfcc2cc07ce0702cc2d229621e046c906ef14d9b25e8e4d25f6e8763fef7::send::SEND
-# SEND_DECIMALS = 6
-
-# xBTC Token
 XBTC = 0x876a4b7bce8aeaef60464c11f4026903e9afacab79b9b142686158aa86560b50
-# XBTC_TYPE = 0x876a4b7bce8aeaef60464c11f4026903e9afacab79b9b142686158aa86560b50::xbtc::XBTC
-# XBTC_DECIMALS = 8
-
-# WAL Token
 WAL = 0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59
-# WAL_TYPE = 0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL
-# WAL_DECIMALS = 9
-
-# CELO Token
 CELO = 0xa198f3be41cda8c07b3bf3fee02263526e535d682499806979a111e88a5a8d0f
-# CELO_TYPE = 0xa198f3be41cda8c07b3bf3fee02263526e535d682499806979a111e88a5a8d0f::coin::COIN
-# CELO_DECIMALS = 18
-
-# WMATIC Token
 WMATIC = 0xdbe380b13a6d0f5cdedd58de8f04625263f113b3f9db32b3e1983f49e2841676
-# WMATIC_TYPE = 0xdbe380b13a6d0f5cdedd58de8f04625263f113b3f9db32b3e1983f49e2841676::coin::COIN
-# WMATIC_DECIMALS = 18
-
-# WBNB Token
 WBNB = 0xb848cce11ef3a8f62eccea6eb5b35a12c4c2b1ee1af7755d02d7bd6218e8226f
-# WBNB_TYPE = 0xb848cce11ef3a8f62eccea6eb5b35a12c4c2b1ee1af7755d02d7bd6218e8226f::coin::COIN
-# WBNB_DECIMALS = 18
-
-# WETH Token
 WETH = 0xaf8cd5edc19c4512f4259f0bee101a40d41ebed738ade5874359610ef8eeced5
-# WETH_TYPE = 0xaf8cd5edc19c4512f4259f0bee101a40d41ebed738ade5874359610ef8eeced5::coin::COIN
-# WETH_DECIMALS = 18
-
-# Wormhole USDC Token
 WUSDC = 0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf
-# WUSDC_TYPE = 0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN
-# WUSDC_DECIMALS = 6
-
-# Wormhole BTC
 WBTC = 0x027792d9fed7f9844eb4839566001bb6f6cb4804f66aa2da6fe1ee242d896881
-# WBTC_TYPE = 0x027792d9fed7f9844eb4839566001bb6f6cb4804f66aa2da6fe1ee242d896881::coin::COIN
-# WBTC_DECIMALS = 8
-
-# Wormhole AVAX
 WAVAX = 0x1e8b532cca6569cab9f9b9ebc73f8c13885012ade714729aa3b450e0339ac766
-# WAVAX_TYPE = 0x1e8b532cca6569cab9f9b9ebc73f8c13885012ade714729aa3b450e0339ac766::coin::COIN
-# WAVAX_DECIMALS = 18
-
-# Wrapped Fantom
 WFTM = 0x6081300950a4f1e2081580e919c210436a1bed49080502834950d31ee55a2396
-# WFTM_TYPE = 0x6081300950a4f1e2081580e919c210436a1bed49080502834950d31ee55a2396::coin::COIN
-# WFTM_DECIMALS = 18
-
-# Wrapped Glimmer (Moonbeam)
 WGLMR = 0x66f87084e49c38f76502d17f87d17f943f183bb94117561eb573e075fdc5ff75
-# WGLMR_TYPE = 0x66f87084e49c38f76502d17f87d17f943f183bb94117561eb573e075fdc5ff75::coin::COIN
-# WGLMR_DECIMALS = 18
-
-# Wrapped Solana
 WSOL = 0xb7844e289a8410e50fb3ca48d69eb9cf29e27d223ef90353fe1bd8e27ff8f3f8
-# WSOL_TYPE = 0xb7844e289a8410e50fb3ca48d69eb9cf29e27d223ef90353fe1bd8e27ff8f3f8::coin::COIN
-# WSOL_DECIMALS = 9
-
-# Wrapped Solana USDC
 USDCsol = 0xb231fcda8bbddb31f2ef02e6161444aec64a514e2c89279584ac9806ce9cf037
-# USDCsol_TYPE = 0xb231fcda8bbddb31f2ef02e6161444aec64a514e2c89279584ac9806ce9cf037::coin::COIN
-# USDCsol_DECIMALS = 6
-
-# Named addresses will be accessible in Move as `@name`. They're also exported:
-# for example, `std = "0x1"` is exported by the Standard Library.
-# alice = "0xA11CE"
 
 [dev-dependencies]
-# The dev-dependencies section allows overriding dependencies for `--test` and
-# `--dev` modes. You can introduce test-only dependencies here.
-# Local = { local = "../path/to/dev-build" }
 
 [dev-dependencies.Pyth]
 git = "https://github.com/pyth-network/pyth-crosschain.git"
@@ -155,6 +52,3 @@ subdir = "sui/wormhole"
 rev = "sui/testnet"
 
 [dev-addresses]
-# The dev-addresses section allows overwriting named addresses for the `--test`
-# and `--dev` modes.
-# alice = "0xB0B"
