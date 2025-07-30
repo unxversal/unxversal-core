@@ -13,6 +13,9 @@ use std::vec_set::VecSet;
  
 const E_INVALID_ID: u64 = 1;
  
+/// Internal unxversal function to get the price of a token from Pyth Network.
+/// It retrieves the price from the Pyth Network and checks if the price feed ID is valid.
+/// If the price feed ID is not valid, it raises an error.
 public(package) fun get_token_price(
     // Other arguments
     clock: &Clock,
@@ -30,6 +33,7 @@ public(package) fun get_token_price(
  
     // verify price feed ID
     // The complete list of feed IDs is available at https://pyth.network/developers/price-feed-ids
+    /// If the price feed ID is not in the list, raise an error.
     assert!(price_ids.contains(&price_id), E_INVALID_ID);
  
     // Extract the price, decimal, and timestamp from the price struct and use them.
@@ -37,5 +41,6 @@ public(package) fun get_token_price(
     let price_i64 = price::get_price(&price_struct);
     let _timestamp_sec = price::get_timestamp(&price_struct);
  
+    /// Return the price as an I64 value.
     price_i64
 }
