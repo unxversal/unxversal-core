@@ -6,6 +6,8 @@ license = "Apache 2.0"
 authors = ["Joshua Okolo (unxvjoshua@gmail.com)"]
 
 [dependencies]
+Sui = { override = true, local = "../../../crates/sui-framework/packages/sui-framework" }
+usdc = { git = "https://github.com/circlefin/stablecoin-sui.git", subdir = "packages/usdc", rev = "master" }
 
 [dependencies.Pyth]
 git = "https://github.com/pyth-network/pyth-crosschain.git"
@@ -38,6 +40,7 @@ WFTM = 0x6081300950a4f1e2081580e919c210436a1bed49080502834950d31ee55a2396
 WGLMR = 0x66f87084e49c38f76502d17f87d17f943f183bb94117561eb573e075fdc5ff75
 WSOL = 0xb7844e289a8410e50fb3ca48d69eb9cf29e27d223ef90353fe1bd8e27ff8f3f8
 USDCsol = 0xb231fcda8bbddb31f2ef02e6161444aec64a514e2c89279584ac9806ce9cf037
+usdc_usage = "0x0"
 
 [dev-dependencies]
 
