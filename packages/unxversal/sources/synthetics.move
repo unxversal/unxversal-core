@@ -1,10 +1,31 @@
 /// Module: unxversal_synthetics
 module unxversal::synthetics {
-
+    use sui::tx_context::TxContext;
+    use sui::transfer;
+    use sui::object;
+    use sui::package;
+    use sui::display;
+    use std::string::String;
+    use std::vec_set::VecSet;
+    use std::option::{Self, Option};
+    use std::event;
     use usdc::usdc::USDC;
+    use sui::clock::Clock;
+    use sui::types;
+    use std::table::{Self as Table, Table};
+
+    /*******************************/
+    /*  -------- STRUCTS -------- */
+    /*******************************/
+
+    /// Privileged capability that can **itself** mint/revoke ordinary
+    /// `AdminCap`s. Only one exists and is given to the deployer in `init`.
+    public struct DaddyCap has key {
+        id: UID,    // Unique identifier for the DaddyCap object
+    }
 
     /// AdminCap grants privileged access for admin operations.
-    struct AdminCap has key, store {
+    public struct AdminCap has key, store {
         id: UID,    // Unique identifier for the admin capability object
     }
 
@@ -55,6 +76,126 @@ module unxversal::synthetics {
         id: UID,                 // Unique identifier for this coin object
         balance: Balance<T>,     // The actual token balance of the synthetic asset
         synthetic_type: String,  // String identifier linking back to SyntheticAsset in registry
+    }
+
+    /*******************************/
+    /*  -------- EVENTS --------- */
+    /*******************************/
+
+    public struct AdminGranted has copy, drop {
+        admin_addr: address,
+        timestamp: u64,
+    }
+
+    public struct AdminRevoked has copy, drop {
+        admin_addr: address,
+        timestamp: u64,
+    }
+
+    public struct ParamsUpdated has copy, drop {
+        updater: address,
+        timestamp: u64,
+    }
+
+    public struct EmergencyPauseToggled has copy, drop {
+        new_state: bool,
+        by: address,
+        timestamp: u64,
+    }
+
+    /*******************************/
+    /*  -------- INIT ----------- */
+    /*******************************/
+
+    /// ────────────────────────────────────────────────────────────────────────────────
+    /// Init – runs exactly once at publish time
+    /// ────────────────────────────────────────────────────────────────────────────────
+    fun init(otw: SYNTHETICS, ctx: &mut TxContext) {
+        // Safety: enforce OTW
+        assert!(types::is_one_time_witness(&otw), 0);
+
+        // 1. Claim a Publisher for display objects
+        let publisher = package::claim(otw, ctx);
+
+        // 2. Instantiate default global parameters (placeholder numbers)
+        let params = GlobalParams {
+            min_collateral_ratio: 1_500,      // 150%
+            liquidation_threshold: 1_200,     // 120%
+            liquidation_penalty: 500,         // 5%
+            max_synthetics: 700,
+            stability_fee: 200,               // 2% APR (in basis pts)
+            bot_split: 4_000,                 // 40% of penalty
+            mint_fee: 50,                     // 0.5%
+            burn_fee: 30,                     // 0.3%
+        };
+
+        // 3. Create empty tables for synthetics & oracle feeds
+        let syn_table: Table<String, SyntheticAsset> = Table::empty();
+        let feed_table: Table<String, vector<u8>> = Table::empty();
+
+        // 4. Create the shared SynthRegistry object (paused = false initially)
+        let registry = SynthRegistry {
+            id: object::new(ctx),
+            synthetics: syn_table,
+            oracle_feeds: feed_table,
+            global_params: params,
+            paused: false,
+        };
+        transfer::share_object(registry);
+
+        // 5. Mint the DaddyCap and a first AdminCap to the deployer (ctx.sender())
+        let daddy = DaddyCap { id: object::new(ctx) };
+        let admin = AdminCap { id: object::new(ctx) };
+        transfer::transfer(daddy, ctx.sender());
+        transfer::transfer(admin, ctx.sender());
+
+        // 6. Create a Display<SynthRegistry> for UI/Wallets
+        let mut disp = display::new<SynthRegistry>(&publisher, ctx);
+        disp.add(b"name".to_string(),           b"Unxversal Synthetics Registry".to_string());
+        disp.add(b"description".to_string(),    b"This object stores all valid synthetic assets supported by Unxversal".to_string());
+        disp.add(b"image_url".to_string(),      b"{image_url}".to_string()); // placeholder
+        disp.add(b"thumbnail_url".to_string(),  b"{thumbnail_url}".to_string());
+        disp.add(b"project_url".to_string(),    b"https://unxversal.com".to_string());
+        disp.add(b"creator".to_string(),        b"Unxversal Synthetics".to_string());
+        disp.update_version();
+
+        // 7. Hand publisher & display back to deployer for future updates
+        transfer::transfer(publisher, ctx.sender());
+        transfer::transfer(disp, ctx.sender());
+    }
+
+    /// ────────────────────────────────────────────────────────────────────────────────
+    /// Admin‑cap management (only DaddyCap holder can call these)
+    /// ────────────────────────────────────────────────────────────────────────────────
+    public entry fun grant_admin(daddy: &DaddyCap, new_admin: address, ctx: &mut TxContext) {
+        // Presence of &DaddyCap proves authority → mint new AdminCap to address
+        transfer::transfer(AdminCap { id: object::new(ctx) }, new_admin);
+    }
+
+    public entry fun revoke_admin(daddy: &DaddyCap, admin_cap: AdminCap) {
+        // Destroy the supplied admin_cap – revokes privileges
+        let AdminCap { id } = admin_cap;
+        object::delete(id);
+    }
+
+    /// ────────────────────────────────────────────────────────────────────────────────
+    /// GlobalParams mutation – any AdminCap holder can call
+    /// ────────────────────────────────────────────────────────────────────────────────
+    public entry fun update_global_params(
+        _admin: &AdminCap,
+        registry: &mut SynthRegistry,
+        new_params: GlobalParams
+    ) {
+        registry.global_params = new_params;
+    }
+
+    /// Emergency pause / resume – any AdminCap holder
+    public entry fun emergency_pause(_admin: &AdminCap, registry: &mut SynthRegistry) {
+        registry.paused = true;
+    }
+
+    public entry fun resume(_admin: &AdminCap, registry: &mut SynthRegistry) {
+        registry.paused = false;
     }
 
 }
