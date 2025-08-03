@@ -75,7 +75,7 @@ module unxversal::oracle {
         // Display so wallets can label "Unxversal Oracle Config"
         let mut disp = display::new<OracleConfig>(&publisher, ctx);
         disp.add(b"name".to_string(),         b"Unxversal Oracle Config".to_string());
-        disp.add(b"description".to_string(),  b"Holds the allow-list of Pyth feeds trusted by Unxversal".to_string());
+        disp.add(b"description".to_string(),  b"Holds the allow‑list of Pyth feeds trusted by Unxversal".to_string());
         disp.add(b"project_url".to_string(),  b"https://unxversal.com".to_string());
         disp.update_version();
         transfer::public_transfer(publisher, ctx.sender());
