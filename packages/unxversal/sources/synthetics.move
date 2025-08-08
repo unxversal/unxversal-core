@@ -29,6 +29,7 @@ module unxversal::synthetics {
     use pyth::price_info::PriceInfoObject; // Pyth price object type
     use unxversal::oracle::{OracleConfig, get_latest_price};
     use unxversal::common::{FeeCollected, calculate_fee_with_discount};
+    use unxversal::treasury::{Self as TreasuryMod, Treasury};
     use unxversal::unxv::UNXV;
 
     /*******************************
@@ -123,9 +124,8 @@ module unxversal::synthetics {
         paused: bool,
         /// Addresses approved as admins (DaddyCap manages this set).
         admin_addrs: VecSet<address>,
-        /// Protocol treasury balances (collect fees, liquidation proceeds)
-        treasury_usdc: Coin<USDC>,
-        treasury_unxv: Coin<UNXV>,
+        /// Treasury reference (shared object)
+        treasury_id: ID,
         /// Count of listed synthetic assets
         num_synthetics: u64,
     }
@@ -472,6 +472,7 @@ module unxversal::synthetics {
         amount: u64,
         unxv_payment: vector<Coin<UNXV>>,
         unxv_price: &PriceInfoObject,
+        treasury: &mut Treasury,
         ctx: &mut TxContext
     ) {
         assert!(!registry.paused, 1000);
@@ -524,7 +525,9 @@ module unxversal::synthetics {
                 let have = Coin::value(&merged);
                 if (have >= unxv_needed) {
                     let exact = Coin::split(&mut merged, unxv_needed, ctx);
-                    Coin::merge(&mut registry.treasury_unxv, exact);
+                    let mut vec = vector::empty<Coin<UNXV>>();
+                    vector::push_back(&mut vec, exact);
+                    TreasuryMod::deposit_unxv(treasury, vec, b"mint".to_string(), vault.owner, ctx);
                     // refund remainder to owner
                     transfer::public_transfer(merged, vault.owner);
                     discount_applied = true;
@@ -538,7 +541,7 @@ module unxversal::synthetics {
         let usdc_fee_to_collect = if (discount_applied) { base_fee - discount_usdc } else { base_fee };
         if (usdc_fee_to_collect > 0) {
             let fee_coin = Coin::split(&mut vault.collateral, usdc_fee_to_collect, ctx);
-            Coin::merge(&mut registry.treasury_usdc, fee_coin);
+            TreasuryMod::deposit_usdc(treasury, fee_coin, b"mint".to_string(), ctx.sender(), ctx);
         };
         event::emit(FeeCollected {
             fee_type: b"mint".to_string(),
@@ -572,6 +575,7 @@ module unxversal::synthetics {
         amount: u64,
         unxv_payment: vector<Coin<UNXV>>,
         unxv_price: &PriceInfoObject,
+        treasury: &mut Treasury,
         ctx: &mut TxContext
     ) {
         assert!(!registry.paused, 1000);
@@ -608,7 +612,9 @@ module unxversal::synthetics {
                 let have = Coin::value(&merged);
                 if (have >= unxv_needed) {
                     let exact = Coin::split(&mut merged, unxv_needed, ctx);
-                    Coin::merge(&mut registry.treasury_unxv, exact);
+                    let mut vec = vector::empty<Coin<UNXV>>();
+                    vector::push_back(&mut vec, exact);
+                    TreasuryMod::deposit_unxv(treasury, vec, b"burn".to_string(), vault.owner, ctx);
                     transfer::public_transfer(merged, vault.owner);
                     discount_applied = true;
                 } else {
@@ -619,7 +625,7 @@ module unxversal::synthetics {
         let usdc_fee_to_collect = if (discount_applied) { base_fee - discount_usdc } else { base_fee };
         if (usdc_fee_to_collect > 0) {
             let fee_coin = Coin::split(&mut vault.collateral, usdc_fee_to_collect, ctx);
-            Coin::merge(&mut registry.treasury_usdc, fee_coin);
+            TreasuryMod::deposit_usdc(treasury, fee_coin, b"burn".to_string(), ctx.sender(), ctx);
         };
         event::emit(FeeCollected {
             fee_type: b"burn".to_string(),
@@ -814,22 +820,24 @@ module unxversal::synthetics {
         let usdc_fee_to_collect = if (discount_applied) { trade_fee - discount_usdc } else { trade_fee };
         if (usdc_fee_to_collect > 0 && taker_is_buyer) {
             let fee_coin = Coin::split(&mut buyer_vault.collateral, usdc_fee_to_collect, ctx);
-            Coin::merge(&mut registry.treasury_usdc, fee_coin);
+            let mut t = object::borrow_mut<Treasury>(registry.treasury_id);
+            TreasuryMod::deposit_usdc(&mut t, fee_coin, b"trade".to_string(), buyer_vault.owner, ctx);
         };
         if (usdc_fee_to_collect > 0 && !taker_is_buyer) {
             let fee_coin = Coin::split(&mut seller_vault.collateral, usdc_fee_to_collect, ctx);
-            Coin::merge(&mut registry.treasury_usdc, fee_coin);
+            let mut t = object::borrow_mut<Treasury>(registry.treasury_id);
+            TreasuryMod::deposit_usdc(&mut t, fee_coin, b"trade".to_string(), seller_vault.owner, ctx);
         };
 
         // Maker rebate
+        // Maker rebate: send from treasury to maker
         let maker_rebate = (trade_fee * registry.global_params.maker_rebate_bps) / 10_000;
         if (maker_rebate > 0) {
+            let mut t = object::borrow_mut<Treasury>(registry.treasury_id);
             if (taker_is_buyer) {
-                let rebate_coin = Coin::split(&mut registry.treasury_usdc, maker_rebate, ctx);
-                Coin::merge(&mut seller_vault.collateral, rebate_coin);
+                TreasuryMod::withdraw_usdc(&TreasuryMod::TreasuryCap { id: object::new(ctx) }, &mut t, seller_vault.owner, maker_rebate, ctx);
             } else {
-                let rebate_coin = Coin::split(&mut registry.treasury_usdc, maker_rebate, ctx);
-                Coin::merge(&mut buyer_vault.collateral, rebate_coin);
+                TreasuryMod::withdraw_usdc(&TreasuryMod::TreasuryCap { id: object::new(ctx) }, &mut t, buyer_vault.owner, maker_rebate, ctx);
             }
         }
         event::emit(FeeCollected {
@@ -976,6 +984,11 @@ module unxversal::synthetics {
         VecSet::add(&mut admins, ctx.sender());
 
         // 5️⃣ Share the SynthRegistry object
+        // For now, create a fresh Treasury and capture its ID
+        let mut t = Treasury { id: object::new(ctx), usdc: Coin::zero<USDC>(ctx), unxv: Coin::zero<UNXV>(ctx), cfg: unxversal::treasury::TreasuryCfg { unxv_burn_bps: 0 } };
+        let treasury_id_local = object::id(&t);
+        transfer::share_object(t);
+
         let registry = SynthRegistry {
             id: object::new(ctx),
             synthetics: syn_table,
@@ -983,8 +996,7 @@ module unxversal::synthetics {
             global_params: params,
             paused: false,
             admin_addrs: admins,
-            treasury_usdc: Coin::zero<USDC>(ctx),
-            treasury_unxv: Coin::zero<UNXV>(ctx),
+            treasury_id: treasury_id_local,
             num_synthetics: 0,
         };
         transfer::share_object(registry);
