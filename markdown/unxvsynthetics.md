@@ -1,88 +1,85 @@
-# UnXversal Synthetics Protocol Design
+# UnXversal Synthetics Protocol Design (Token-less, No DeepBook)
 
-> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **synthetic asset listing is permissioned (admin only), but trading/market creation for listed assets is permissionless via DeepBook.**
+> Note: This revision reflects the finalized direction: no DeepBook integration and no transferable synthetic tokens. Exposure is tracked as vault debt; all trading settles in USDC by mutating vaults atomically in a single transaction.
 
 ## System Architecture & User Flow Overview
 
 ### How All Components Work Together
 
-The UnXversal Synthetics protocol creates a sophisticated ecosystem where multiple on-chain objects, functions, and external integrations work in harmony to enable synthetic asset creation, trading, and management:
+The protocol is a vault-based CDP system where users post USDC as collateral and take exposure to synthetic assets by increasing or decreasing their vault’s synthetic debt balances. There are no on-chain CLOB pools and no minted Coin<T> synthetic tokens. Trades are settled by atomically mutating two vaults’ debt and moving USDC between them.
 
 #### **Core Object Hierarchy & Relationships**
 
 **ON-CHAIN OBJECTS:**
 ```
-SynthRegistry (Shared, admin-controlled) ← Central configuration & synthetic asset definitions
+SynthRegistry (shared, admin-controlled)  ← Central configuration & synthetic asset definitions
     ↓ manages
-SyntheticAsset configs (admin-listed only) → DeepBook Pools ← permissionless trading venues for synthetics
-    ↓ references            ↓ provides liquidity
-CollateralVault (Shared) ← individual user USDC collateral positions
-    ↓ tracks collateral
-SyntheticCoin<T> → BalanceManager ← holds user funds across protocols
-    ↓ synthetic tokens     ↓ executes trades
-PriceOracle Integration ← consumes Pyth price feeds on-chain
+SyntheticAsset configs (admin-listed only) ← Symbol, feed mapping, asset-specific risk params
+    ↓ referenced by
+CollateralVault (owned)                    ← User USDC collateral + per-symbol synthetic debt table
+    ↓ relies on
+OracleConfig (shared)                      ← Allow-listed Pyth feeds + freshness policy
 ```
 
 **OFF-CHAIN SERVICES (CLI/Server):**
 ```
-RiskMonitor Service → LiquidationBot ← automated liquidation execution
-    ↓ monitors health       ↓ triggers on-chain liquidations
-CollateralHealthService → AlertSystem ← user notifications
-    ↓ tracks ratios         ↓ warns users of risks
-DeepBookIndexer → TradingAnalytics ← market data processing
-    ↓ provides real-time data ↓ user trading insights
+RiskMonitor / Indexer      ← monitors vault health & prices; feeds UIs and bots
+Off-chain Matcher           ← maintains an order book; builds atomic txs to settle trades
+LiquidationBot              ← triggers on-chain liquidations when vaults breach thresholds
+Alerting / Analytics        ← user notifications and system telemetry
 ```
 
 #### **Complete User Journey Flows**
 
-**1. MINTING FLOW (Creating Synthetic Assets)**
+**1. MINTING FLOW (Creating Synthetic Exposure)**
 ```
-[ON-CHAIN] User → deposit USDC → CollateralVault receives deposit → 
-[ON-CHAIN] PriceOracle validates collateral ratio → 
-[ON-CHAIN] mint SyntheticCoin<T> tokens → update vault state → 
-[OFF-CHAIN] RiskMonitor begins tracking new position
+[ON-CHAIN] User deposits USDC → vault collateral increases
+[ON-CHAIN] Oracle price validated → collateral ratio checked
+[ON-CHAIN] mint_synthetic mutates vault.synthetic_debt (+amount)
+[ON-CHAIN] Protocol fees assessed (USDC and/or UNXV discount)
 ```
 
-**2. TRADING FLOW (Synthetic Asset Exchange)**
+**2. TRADING FLOW (Token-less, Off-chain Matching)**
 ```
-[ON-CHAIN] User → submit order to DeepBook → BalanceManager validates funds → 
-[ON-CHAIN] order matching engine processes → trade executes → 
-[ON-CHAIN] fees collected → UNXV fee discounts applied → 
-[OFF-CHAIN] TradingAnalytics updates market data
+[OFF-CHAIN] Orders matched off-chain when price crosses
+[ON-CHAIN] Single tx settles:
+  • Buyer: mint_synthetic (debt +X)
+  • Seller: burn_synthetic (debt –X)
+  • Move USDC buyer → seller (less fees)
+  • Emit FeeCollected and trade events
 ```
 
 **3. LIQUIDATION FLOW (Risk Management)**
 ```
-[OFF-CHAIN] RiskMonitor detects under-collateralized vault → 
-[OFF-CHAIN] LiquidationBot calculates liquidation parameters → 
-[ON-CHAIN] Bot triggers liquidation function with flash loan → 
-[ON-CHAIN] liquidate position → repay debt + penalty → 
-[ON-CHAIN] distribute remaining collateral to vault owner
+[OFF-CHAIN] RiskMonitor detects under-collateralized vault
+[OFF-CHAIN] LiquidationBot computes profitable tranche
+[ON-CHAIN] Bot calls liquidate_vault:
+  • Repay portion of debt
+  • Seize USDC collateral + penalty
+  • Distribute bot rewards per policy
 ```
 
 #### **Key System Interactions**
 
 **ON-CHAIN COMPONENTS:**
-- **SynthRegistry**: Central configuration hub managing synthetic asset definitions, oracle mappings, and global risk parameters
-- **CollateralVault**: Individual user vaults holding USDC collateral and tracking minted synthetic positions
-- **SyntheticCoin<T>**: Fungible tokens representing synthetic assets (sBTC, sETH, etc.) with standard Coin interface
-- **PriceOracle Integration**: On-chain consumption of Pyth Network feeds for real-time price validation
-- **DeepBook Integration**: Direct integration for order book trading and flash loan access
-- **BalanceManager**: Sui's native fund management system holding user assets across all operations
+- **SynthRegistry**: Central configuration for listed assets, oracle mappings, and global risk/fee params
+- **CollateralVault**: Owned object storing USDC collateral and per-asset synthetic debt balances
+- **Oracle Integration**: Pyth price validation with allow-listed feed IDs and staleness policy
+- **UNXV Fee Engine**: Optional fee discount when paying protocol fees in UNXV
 
 **OFF-CHAIN SERVICES:**
-- **RiskMonitor**: Continuously monitors collateral ratios and health factors across all user positions
-- **LiquidationBot**: Automated service that triggers on-chain liquidations when positions become under-collateralized
-- **CollateralHealthService**: Real-time health tracking with user alerting for margin calls
-- **TradingAnalytics**: Market data processing and user trading insights using DeepBook indexer
+- **RiskMonitor**: Monitors collateral ratios and surfaces liquidation candidates
+- **Off-chain Matcher**: Maintains orderbook and submits settlement txs
+- **LiquidationBot**: Executes on-chain liquidation calls
+- **Analytics**: Price, fee, and health dashboards
 
 #### **Critical Design Patterns**
 
-1. **Atomic Operations**: All minting, trading, and liquidation operations are atomic - they either complete fully or revert entirely
-2. **Flash Loan Integration**: Liquidations use DeepBook flash loans to ensure zero-capital liquidations with immediate debt repayment
-3. **Oracle Integration**: Real-time price feeds from Pyth Network ensure accurate collateral valuation and liquidation triggers
-4. **Risk Isolation**: Each user's position is isolated in their own vault, preventing contagion between users
-5. **Fee Integration**: Seamless integration with UNXV tokenomics for fee discounts and protocol value accrual
+1. **Atomic Operations**: Mint, burn, trade settlement, and liquidation are single-tx atomic sequences
+2. **Token-less Exposure**: No Coin<T> synthetics; exposure lives only as vault debt
+3. **Oracle Integration**: Pyth price validation gated by allow-listed feed IDs and freshness checks
+4. **Risk Isolation**: Positions are siloed per vault; no contagion
+5. **Fee Integration**: Base fees with optional UNXV discount and burn policy
 
 #### **Data Flow & State Management**
 
@@ -94,17 +91,15 @@ DeepBookIndexer → TradingAnalytics ← market data processing
 
 #### **Integration Points with UnXversal Ecosystem**
 
-- **AutoSwap**: Automatic fee processing and UNXV burning from all trading fees
-- **DEX**: Synthetic assets become tradeable on the main DEX with cross-asset routing
-- **Lending**: Synthetic assets can be used as collateral in the lending protocol
-- **Options/Perpetuals**: Synthetic assets serve as underlying assets for derivatives
-- **Liquid Staking**: stSUI can be accepted as collateral in future versions
+- **AutoSwap (optional)**: Route fees to UNXV and burn a portion
+- **Lending/Derivatives**: Vault-based exposures can be referenced by adapters as needed
+- **Liquid Staking**: Future collateral types are possible via upgrades (current version is USDC-only)
 
 ## Overview
 
-UnXversal Synthetics enables **admin-permissioned listing** of synthetic assets (only the admin can add new synths), but **permissionless trading and DeepBook pool creation** for any listed asset. Users can mint synthetic assets by depositing USDC and trade them on DeepBook pools with automatic price feeds from Pyth Network.
+UnXversal Synthetics enables **admin-permissioned listing** of synthetic assets (only admins can add synths), and **permissionless settlement** of trades for listed assets via off-chain matching and on-chain atomic vault mutations.
 
-> **Key Policy:** Only assets listed by the admin in the SynthRegistry can be minted/traded. Anyone can create DeepBook pools for these assets, but new asset types require admin approval/listing.
+> Policy: Only assets listed by the admin in `SynthRegistry` can be minted or burned. Trading is off-chain matched and on-chain settled by calling vault functions; there is no on-chain orderbook.
 
 ### Benefits of USDC-Only Collateral
 
@@ -115,20 +110,77 @@ UnXversal Synthetics enables **admin-permissioned listing** of synthetic assets 
 5. **Unified Liquidity**: All synthetic assets trade against USDC, creating deeper liquidity pools
 6. **Easier Oracle Integration**: Only need USDC price feeds for collateral valuation (typically $1.00)
 
-## DeepBook Integration Summary
+## Decentralized Order Matching (On-chain Orders, Permissionless Matchers)
 
-**How DeepBook Works:**
-- **Pool**: Central limit order book for each trading pair (e.g., synth/USDC)
-- **BalanceManager**: Holds user funds across all pools, requires TradeProof for operations
-- **Order Matching**: Automatic matching of buy/sell orders with maker/taker fees
-- **Flash Loans**: Uncollateralized borrowing within single transaction
-- **Indexer**: Real-time data feeds for order books, trades, and volumes
+We avoid a centralized server by representing orders as on-chain shared objects and letting anyone act as a matcher. Discovery is off-chain and decentralized (any node can listen to events and index orders), but placement, cancellation, and settlement are on-chain and permissionless.
 
-**Our Integration:**
-- Create DeepBook pools for each synthetic asset vs collateral pairs
-- Use flash loans for atomic liquidations and arbitrage
-- Leverage indexer for real-time pricing and risk management
-- Integrate with existing fee structure while adding UNXV discounts
+### Order Model
+
+Orders are shared objects created by users. They reference the owner’s `CollateralVault` and encode immutable intent parameters.
+
+```move
+struct Order has key, store {
+  id: UID,
+  owner: address,            // order owner; only owner can cancel/amend
+  vault_id: ID,              // owner’s CollateralVault to settle against
+  symbol: String,            // e.g., "sBTC"
+  side: u8,                  // 0 = buy (increase debt), 1 = sell (decrease debt)
+  price: u64,                // limit price in quote units (USDC per 1 unit), scaled (e.g., 1e6)
+  size: u64,                 // original size in synthetic units
+  remaining: u64,            // unfilled size (decreases as it fills)
+  created_at_ms: u64,        // for time-priority off-chain
+  expiry_ms: u64,            // optional TTL; 0 = GTC
+}
+```
+
+Key properties:
+- Orders are visible on-chain and discoverable via events. Any node can index them.
+- Anyone can call `match_orders` to fill crossing orders. Settlement is atomic and permissionless.
+- Time/price priority is coordinated socially by indexers and UIs; the chain enforces correctness and solvency (ratios, balances), not priority fairness.
+
+### Order Lifecycle
+
+- place_limit_order: Owner posts a shared `Order`. Emits `OrderPlaced`.
+- cancel_order: Owner cancels; can only be called by `order.owner`. Emits `OrderCancelled`.
+- match_orders: Anyone matches crossing orders and settles atomically:
+  - Validate crossing (buy.price ≥ sell.price) and non-expired.
+  - Choose trade price (maker’s price or midpoint; policy is module-configurable).
+  - Compute fill size = min(buy.remaining, sell.remaining).
+  - Settle:
+    - Buyer: `mint_synthetic` on buyer vault (+debt)
+    - Seller: `burn_synthetic` on seller vault (−debt)
+    - Move USDC from buyer vault → seller vault for notional value
+    - Process protocol fees (USDC or UNXV discount) and emit `FeeCollected`
+  - Decrease `remaining` on both; emit `OrderMatched` (with price, size, taker)
+
+All checks run on-chain:
+- Collateral ratio for buyer after mint must be ≥ min required
+- Seller must have sufficient debt to burn
+- Registry not paused; asset listed and active
+- Oracle staleness and allowed-feed checks
+
+### Events
+
+```move
+struct OrderPlaced has copy, drop {
+  order_id: ID, owner: address, symbol: String, side: u8,
+  price: u64, size: u64, remaining: u64, created_at_ms: u64, expiry_ms: u64,
+}
+
+struct OrderCancelled has copy, drop { order_id: ID, owner: address, timestamp: u64 }
+
+struct OrderMatched has copy, drop {
+  buy_order_id: ID, sell_order_id: ID,
+  symbol: String, price: u64, size: u64,
+  buyer: address, seller: address,
+  timestamp: u64,
+}
+```
+
+### MEV and Fairness
+- Anyone can be a matcher; this decentralizes operation but allows competition for matches.
+- Mitigations (optional, can be added later): frequent batch auctions, commit-reveal for match sets, max slippage constraints on orders, or match proofs.
+- Priority (price-time) is coordinated by indexers/UIs and not enforced in the Move module beyond correctness.
 
 ## Core Architecture
 
@@ -141,7 +193,8 @@ struct SynthRegistry has key {
     synthetics: Table<String, SyntheticAsset>,    // Maps asset symbols to their metadata (e.g., "sBTC" -> SyntheticAsset)
     oracle_feeds: Table<String, vector<u8>>,      // Maps asset symbols to Pyth price feed IDs for price lookups
     global_params: GlobalParams,                  // System-wide risk parameters that apply to all synthetic assets
-    admin_cap: Option<AdminCap>,                  // Optional admin capability for initial setup, destroyed after deployment
+    paused: bool,                                 // Circuit breaker; blocks state-changing ops when true
+    admin_addrs: VecSet<address>,                 // Allow-list of admin addresses (managed by DaddyCap)
 }
 
 struct GlobalParams has store {
@@ -168,7 +221,6 @@ struct SyntheticAsset has store {
     pyth_feed_id: vector<u8>,         // Pyth Network price feed identifier for real-time price data
     min_collateral_ratio: u64,        // Asset-specific minimum collateral ratio (may differ from global for riskier assets)
     total_supply: u64,                // Total amount of this synthetic asset minted across all users
-    deepbook_pool_id: Option<ID>,     // DeepBook pool ID for trading this synthetic against USDC
     is_active: bool,                  // Whether minting/burning is currently enabled (emergency pause capability)
     created_at: u64,                  // Timestamp of asset creation for analytics and ordering
 }
@@ -179,21 +231,13 @@ struct SyntheticAsset has store {
 struct CollateralVault has key {
     id: UID,                                  // Unique identifier for this user's vault
     owner: address,                           // Address of the vault owner (only they can modify it)
-    collateral_balance: Balance<USDC>,        // Amount of USDC collateral deposited in this vault
+    collateral: Coin<USDC>,                   // USDC collateral held in this vault
     synthetic_debt: Table<String, u64>,       // Maps synthetic symbols to amounts owed (e.g., "sBTC" -> 50000000)
-    last_update: u64,                         // Timestamp of last vault modification for fee calculations
-    liquidation_price: Table<String, u64>,    // Cached liquidation prices per synthetic to optimize gas usage
+    last_update_ms: u64,                      // Timestamp of last modification
 }
 ```
 
-#### 4. SyntheticCoin (Transferable Asset)
-```move
-struct SyntheticCoin<phantom T> has key, store {
-    id: UID,                 // Unique identifier for this coin object
-    balance: Balance<T>,     // The actual token balance of the synthetic asset
-    synthetic_type: String,  // String identifier linking back to SyntheticAsset in registry
-}
-```
+There is no transferable `SyntheticCoin<T>` in the token-less model. If needed later, a wrapper object can be introduced without changing core accounting.
 
 ### Off-Chain Services (CLI/Server Components)
 
@@ -207,7 +251,6 @@ struct SyntheticCoin<phantom T> has key, store {
 - **Automated Liquidations**: Triggers on-chain liquidation functions when profitable
 - **Gas Optimization**: Batches liquidations and optimizes for gas efficiency
 - **Profit Calculation**: Determines optimal liquidation amounts and timing
-- **Flash Loan Integration**: Utilizes DeepBook flash loans for capital-efficient liquidations
 
 #### 3. Market Creation Service
 - **DeepBook Pool Creation**: Automatically creates pools for new synthetic assets
@@ -224,7 +267,6 @@ struct SyntheticAssetCreated has copy, drop {
     asset_symbol: String,       // Trading symbol for identification in UIs and trading
     pyth_feed_id: vector<u8>,   // Price feed ID for price tracking and validation
     creator: address,           // Address that created this asset (initially admin, later community)
-    deepbook_pool_id: ID,       // DeepBook pool ID for immediate trading capability
     timestamp: u64,             // Creation time for chronological ordering and analytics
 }
 
@@ -299,9 +341,8 @@ public fun create_synthetic_asset(
     asset_symbol: String,               // Trading symbol (e.g., "sBTC") for identification
     pyth_feed_id: vector<u8>,           // Pyth price feed ID for real-time price data
     min_collateral_ratio: u64,          // Minimum collateral ratio specific to this asset's risk profile
-    deepbook_registry: &mut Registry,   // DeepBook registry for creating trading pools
     ctx: &mut TxContext,                // Transaction context for object creation and events
-): ID // Returns DeepBook pool ID for immediate trading setup
+)
 ```
 
 ### 2. Collateral Management
@@ -324,51 +365,41 @@ public fun withdraw_collateral(
 
 ### 3. Synthetic Minting/Burning
 ```move
-public fun mint_synthetic<T>(
+public fun mint_synthetic(
     vault: &mut CollateralVault,        // User's vault providing collateral for minting
-    synthetic_type: String,             // Type of synthetic to mint (e.g., "sBTC")
+    synthetic_symbol: String,           // Type of synthetic to mint (e.g., "sBTC")
     amount: u64,                        // Amount of synthetic tokens to mint
-    registry: &SynthRegistry,           // Registry for asset parameters and validation
-    price_info: &PriceInfoObject,       // Current price data for collateral ratio calculation
-    clock: &Clock,                      // Sui clock for fee calculations and validation
-    ctx: &mut TxContext,                // Transaction context for object creation and events
-): SyntheticCoin<T>  // Returns newly minted synthetic tokens
+    registry: &mut SynthRegistry,       // Registry for asset parameters and validation
+    oracle_cfg: &OracleConfig,          // Oracle configuration (allowed feeds & max age)
+    clock: &Clock,                      // Sui clock for staleness checks
+    price: &PriceInfoObject,            // Price data for collateral ratio calculation
+    ctx: &mut TxContext                 // Transaction context for events
+)
 
-public fun burn_synthetic<T>(
+public fun burn_synthetic(
     vault: &mut CollateralVault,        // User's vault to reduce debt and potentially release collateral
-    synthetic_coin: SyntheticCoin<T>,   // Synthetic tokens being burned to reduce debt
-    registry: &SynthRegistry,           // Registry for asset parameters and fee calculations
-    price_info: &PriceInfoObject,       // Current price data for collateral calculations
-    clock: &Clock,                      // Sui clock for fee calculations
-    ctx: &mut TxContext,                // Transaction context for events
-): Option<Coin<USDC>>  // Returns USDC collateral if any is released
+    registry: &mut SynthRegistry,       // Registry for asset parameters and fee calculations
+    oracle_cfg: &OracleConfig,          // Oracle configuration (allowed feeds & max age)
+    clock: &Clock,                      // Sui clock for staleness checks (optional in burn)
+    price: &PriceInfoObject,            // Price data (optional in burn)
+    synthetic_symbol: String,           // Type of synthetic burned (e.g., "sBTC")
+    amount: u64,                        // Amount burned
+    ctx: &mut TxContext                 // Transaction context for events
+)
 ```
 
 ### 4. Liquidation
 ```move
-public fun liquidate_vault<T>(
+public fun liquidate_vault(
     vault: &mut CollateralVault,        // Undercollateralized vault being liquidated
-    synthetic_type: String,             // Type of synthetic debt being repaid
+    registry: &mut SynthRegistry,       // Registry for liquidation parameters and penalties
+    oracle_cfg: &OracleConfig,          // Oracle configuration
+    clock: &Clock,                      // Sui clock
+    price: &PriceInfoObject,            // Price data
+    synthetic_symbol: String,           // Type of synthetic debt being repaid
     liquidation_amount: u64,            // Amount of debt to repay (limited by vault debt and max liquidation)
-    registry: &SynthRegistry,           // Registry for liquidation parameters and penalties
-    price_info: &PriceInfoObject,       // Current price data for liquidation calculations
-    clock: &Clock,                      // Sui clock for timestamp validation
-    ctx: &mut TxContext,                // Transaction context for events
-): (SyntheticCoin<T>, Coin<USDC>)  // Returns (debt repaid as synthetic tokens, USDC collateral seized)
-```
-
-### 5. Flash Loan Integration
-```move
-public fun flash_mint_arbitrage<BaseAsset, QuoteAsset>(
-    pool: &mut Pool<BaseAsset, QuoteAsset>,  // DeepBook pool for executing arbitrage trades
-    vault: &mut CollateralVault,             // Vault to temporarily mint synthetics for arbitrage
-    synthetic_type: String,                  // Type of synthetic to flash mint
-    arbitrage_amount: u64,                   // Amount to flash mint for arbitrage opportunity
-    registry: &SynthRegistry,                // Registry for synthetic asset parameters
-    price_info: &PriceInfoObject,            // Price data for arbitrage calculations
-    clock: &Clock,                           // Sui clock for validation
-    ctx: &mut TxContext,                     // Transaction context
-): FlashLoan  // Returns hot potato that must be repaid in same transaction
+    ctx: &mut TxContext                 // Transaction context for events
+)
 ```
 
 ## Fee Structure with UNXV Integration
@@ -395,16 +426,9 @@ public fun calculate_fee_with_discount(
 ): FeeCalculation  // Returns fee breakdown with discount calculations
 ```
 
-### Auto-swap Integration
-```move
-public fun process_fee_payment(
-    fee_amount: u64,                        // Amount of fee to be paid
-    payment_asset: String,                  // Asset type being used for payment
-    user_balance_manager: &mut BalanceManager,  // User's DeepBook balance manager for asset access
-    autoswap_contract: &mut AutoSwapContract,   // Contract for converting assets to UNXV
-    ctx: &mut TxContext,                    // Transaction context
-)
-```
+### Fee Processing Hooks
+
+Fee processing is integrated at call sites (mint, burn, liquidation). The flow computes base fees from value, applies UNXV discount if chosen and covered, then transfers/burns accordingly. If an AutoSwap is used to convert fees into UNXV, it should be a small adapter called by the synthetics module.
 
 ## Risk Management
 
@@ -432,9 +456,11 @@ public fun validate_price_feed(
 ### 3. System Stability Checks
 ```move
 public fun check_system_stability(
-    registry: &SynthRegistry,               // Registry containing all synthetic assets and parameters
-    price_feeds: vector<PriceInfoObject>,   // Current price data for all tracked assets
-    clock: &Clock,                          // Sui clock for calculations
+    vaults: vector<&CollateralVault>,       // Sample of vaults (or all if feasible)
+    registry: &SynthRegistry,               // Registry containing params
+    oracle_cfg: &OracleConfig,              // Oracle config
+    clocks: vector<&Clock>,                 // Clocks per vault (or one shared)
+    prices: vector<&PriceInfoObject>,       // Price objects aligned to vaults
 ): SystemHealth  // Returns comprehensive system health metrics
 
 struct SystemHealth has drop {
@@ -446,31 +472,46 @@ struct SystemHealth has drop {
 }
 ```
 
-## DeepBook Pool Management
+## Matching & Settlement
 
-### 1. Automatic Pool Creation
-```move
-public fun create_deepbook_pool_for_synthetic(
-    synthetic_type: String,             // Synthetic asset symbol to create pool for
-    registry: &mut SynthRegistry,       // Registry to store the pool ID reference
-    deepbook_registry: &mut Registry,   // DeepBook registry for pool creation
-    creation_fee: Coin<DEEP>,           // DEEP tokens required for pool creation fee
-    ctx: &mut TxContext,                // Transaction context
-): ID  // Returns newly created pool ID for synthetic/USDC trading pair
-```
+- Off-chain: Maintain order books and generate settlement candidates.
+- On-chain: A single programmable transaction performs vault mutations, USDC transfer between vaults, and fee processing. No synthetic tokens are minted or transferred.
 
-### 2. Liquidity Incentives
-```move
-public fun provide_initial_liquidity<BaseAsset, QuoteAsset>(
-    pool: &mut Pool<BaseAsset, QuoteAsset>,  // DeepBook pool to provide liquidity to
-    synthetic_amount: u64,                   // Amount of synthetic asset to provide as liquidity
-    collateral_amount: u64,                  // Amount of USDC collateral to provide as liquidity
-    price_range: PriceRange,                 // Price range for concentrated liquidity provision
-    balance_manager: &mut BalanceManager,    // User's balance manager for asset access
-    trade_proof: &TradeProof,                // Proof of authorization for DeepBook operations
-    ctx: &mut TxContext,                     // Transaction context
-)
-```
+## Display Metadata (Wallet / Explorer UX)
+
+These objects will have `Display<T>` metadata so wallets/explorers can render human-friendly views. Displays are created during object initialization (or order placement) and transferred to the owner or stored with the shared object as appropriate.
+
+- SynthRegistry
+  - When: during `synthetics::init`
+  - Suggested keys: `name`, `description`, `image_url`, `thumbnail_url`, `project_url`, `creator`
+  - Example values: "Unxversal Synthetics Registry", "Central registry storing all synthetic assets listed by Unxversal", project URL, creator name
+
+- SyntheticAsset
+  - When: upon `create_synthetic_asset`
+  - Suggested keys: `name`, `description`, `image_url`, `thumbnail_url`, `project_url`, `creator`
+  - Placeholders: `{name}`, `{symbol}`
+  - Example description: "Synthetic {name} provided by Unxversal"
+
+- CollateralVault
+  - When: upon `create_vault`
+  - Suggested keys: `name`, `description`, `image_url`, `thumbnail_url`, `creator`
+  - Example name: "UNXV Synth Collateral Vault"
+
+- OracleConfig
+  - When: upon `oracle::init`
+  - Suggested keys: `name`, `description`, `project_url`
+  - Example name: "Unxversal Oracle Config"; description: "Holds the allow‑list of Pyth feeds trusted by Unxversal"
+
+- Order
+  - When: upon `place_limit_order`
+  - Suggested keys: `name`, `description`, `symbol`, `side`, `price`, `size`, `remaining`, `created_at_ms`, `expiry_ms`
+  - Placeholders referencing order fields: `{symbol}`, `{side}`, `{price}`, `{size}`, `{remaining}`
+  - Example name: "Order: {symbol} {side} {size} @ {price}"
+
+Notes:
+- Displays are optional but recommended for the above types to improve wallet and explorer UX.
+- Placeholders must correspond to fields present on the underlying struct.
+- For shared objects (e.g., `SynthRegistry`, `OracleConfig`), create the `Display<T>` once at init and hand the `Display` object to the deployer or appropriate admin account.
 
 ## Indexer Integration
 
@@ -490,11 +531,6 @@ public fun provide_initial_liquidity<BaseAsset, QuoteAsset>(
 /api/v1/synthetics/liquidations    // Liquidation opportunities
 /api/v1/synthetics/fees            // Fee analytics
 /api/v1/synthetics/prices          // Price feeds with oracle data
-
-// DeepBook integration
-/api/v1/deepbook/pools/synthetic   // Synthetic asset pools
-/api/v1/deepbook/volume/synthetic  // Trading volumes
-/api/v1/deepbook/liquidity/synthetic // Liquidity metrics
 ```
 
 ## CLI/Server Components
@@ -556,10 +592,9 @@ class VaultManager {
 - Fee calculator with UNXV discounts
 
 ### 2. Trading Interface
-- DeepBook order book integration
+- Off-chain order book + settlement composer
 - Price charts with oracle feeds
-- Liquidity provision tools
-- Arbitrage opportunities
+- Fee preview & UNXV discount UX
 
 ### 3. Risk Management
 - System health monitoring
@@ -570,7 +605,7 @@ class VaultManager {
 ## Permissioning & Market Creation
 
 - **Asset Listing:** Only the admin (holding AdminCap) can add new synthetic assets to the registry. This is a permissioned operation for risk management and protocol consistency.
-- **Market Creation/Trading:** Anyone can create DeepBook pools and trade any listed synthetic asset. Trading, liquidity provision, and pool creation are permissionless for assets already listed by the admin.
+- **Trading:** Anyone can trade listed assets by participating in off-chain matching. Settlement is permissionless (no admin required) and occurs by calling the on-chain vault functions atomically.
 - **On-Chain/Off-Chain Split:**
   - On-chain: All minting, burning, collateral, and trading logic; admin listing of assets; event emission.
   - Off-chain: Indexing, liquidation bots, price monitoring, and user-facing automation.
@@ -626,8 +661,8 @@ public fun transfer_admin_to_burn(admin_cap: AdminCap, ctx: &mut TxContext) {
 ## Deployment Strategy
 
 - **Phase 1:** Deploy registry, admin lists initial assets (sUSD, sBTC, sETH, etc.)
-- **Phase 2:** Permissionless DeepBook pool creation and trading for listed assets
-- **Phase 3:** Admin can add new assets as needed, but users cannot list new assets directly
+- **Phase 2:** Trading via off-chain matching + on-chain settlement; integrate fee engine
+- **Phase 3:** Liquidations and bot rewards; optional AutoSwap-to-UNXV flows
 
 ## UNXV Tokenomics Integration
 
@@ -659,7 +694,7 @@ This creates a sustainable flywheel where protocol usage drives UNXV demand and 
 
 ---
 
-## On-Chain Objects/Interfaces for Bots
+## On-Chain Objects/Interfaces for Bots (optional extensions)
 
 ```move
 struct LiquidationRequest has store {
