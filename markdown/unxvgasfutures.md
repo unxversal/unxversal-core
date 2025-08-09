@@ -1,46 +1,28 @@
-# UnXversal Gas Futures Protocol Design
+# UnXversal Gas Futures – Final Architecture (Aligned with Core Protocols)
 
-> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **market/contract creation is permissionless (with a minimum interval restriction, e.g., daily as the smallest interval); anyone can create new gas futures contracts. DeepBook pool creation is also permissionless.**
+This document reflects the production architecture implemented in `packages/unxversal/sources/gas_futures.move`. It follows the same design principles as `dex`, `options`, and `futures`:
+
+- Admin-permissioned parameters via `synthetics::SynthRegistry` (single source of truth).
+- Permissionless market listing with cooldowns.
+- Off-chain orderbook/matching; on-chain record/settlement with fees routed to central `treasury`.
+- Oracle-normalized, fixed-point math (micro-USD scale) and strict pause/guard rails.
 
 ## System Architecture & User Flow Overview
 
-### How All Components Work Together
+## What we hedge
 
-The UnXversal Gas Futures protocol creates the world's first blockchain gas price derivatives market, enabling sophisticated hedging of operational costs and speculative trading on Sui network gas prices through innovative ML-powered prediction and settlement mechanisms:
+- Unit of account: micro-USD per gas unit.
+- Settlement price source: on-chain Reference Gas Price (RGP, MIST/gas) multiplied by SUI/USD (micro-USD per SUI) from Pyth.
+- On-chain function to compute instantaneous micro-USD per gas for sanity checks is provided.
 
 #### **Core Object Hierarchy & Relationships**
 
-**ON-CHAIN OBJECTS:**
-```
-GasFuturesRegistry (Shared, permissionless) ← Central gas market configuration for sponsored transaction era (anyone can create contracts, subject to minimum interval enforcement)
-    ↓ manages contracts
-GasFuturesContract (Shared) → GasPosition (individual) ← gas station & sponsor hedging
-    ↓ tracks contract terms     ↓ tracks hedging exposure
-SettlementEngine ← processes gas-based settlement using TWAP
-    ↓ executes settlement
-AutoSwap Integration ← handles settlement payments & UNXV conversions (DeepBook pool creation is permissionless)
-```
+**On-chain objects:**
+- `GasFuturesRegistry` (shared): global fee params (trade/settlement fees, UNXV discount, maker rebate, bot reward split), listing throttle, dispute window, `treasury_id`.
+- `GasFuturesContract` (shared): symbol, contract size (gas units/contract), tick size (micro-USD per gas), expiry, status flags, and metrics (open interest, volume, last trade price).
+- `GasPosition` (owned): position with real `Coin<USDC>` margin, side/size, average price, accumulated PnL.
 
-**OFF-CHAIN SERVICES (CLI/Server):**
-```
-GasPriceOracle → GasStationAnalytics ← sponsored transaction volume tracking
-    ↓ monitors Sui gas prices   ↓ analyzes gas station costs
-ML Prediction Engine → SponsorRiskProfiler ← risk assessment for sponsorship models
-    ↓ forecasts gas trends      ↓ calculates optimal hedging
-EnterpriseHedgingService → ContractCreationBot ← automated market creation (off-chain bots can automate market creation and are incentivized)
-    ↓ manages corporate hedging ↓ creates gas futures contracts
-```
-
----
-
-## Permissioning Policy
-
-- **Market/contract creation in the Gas Futures registry is permissionless (anyone can create, subject to minimum interval enforcement).**
-- **DeepBook pool creation is permissionless.**
-- **All trading, position management, and advanced order types are permissionless for users.**
-- **Minimum interval enforcement (e.g., daily) is implemented to prevent spam and ensure orderly market creation.**
-- **Off-chain bots (run by users or the CLI/server) can automate market creation, liquidation, and settlement, and are incentivized via rewards.**
-- See [MOVING_FORWARD.md](../MOVING_FORWARD.md) for the full permissioning matrix and rationale.
+Listing is permissionless (cooldown enforced). Trading/settlement is permissionless.
 
 ---
 
@@ -126,11 +108,14 @@ UnXversal Gas Futures introduces a revolutionary derivatives product for hedging
 - **Educational Platforms**: Stable gas budgets for learning and tutorial transactions
 - **Enterprise Applications**: Corporate gas cost management for employee and customer transactions
 
-## Sponsored Transaction Integration
+## Sponsored Transactions – how it ties together
 
-### Why Sponsored Transactions Change Everything
+Sponsored transactions are built by the client (user + sponsor signatures). Gas Futures does not handle gas payments; it hedges their cost:
 
-Sui's sponsored transactions create a **fundamental shift in gas cost risk distribution**. Instead of individual users bearing gas costs, **gas stations and sponsors now assume concentrated gas price exposure**. This creates new categories of market participants who desperately need gas price hedging:
+1. The sponsor estimates gas exposure and opens long positions sized in contracts (gas units/contract × contracts).
+2. They continue to sponsor user transactions; they pay SUI gas coins as usual.
+3. As gas prices rise, futures PnL is positive; after expiry, they call `settle_gas_position` to realize USDC proceeds, offsetting the SUI outlay. If prices fall, the margin absorbs losses.
+4. Any transaction (including opens) may be sponsored; we emit the sponsor address for analytics. All money movement (margin, fees, settlement) is enforced by the contract; bots can submit transactions, but no trust is required.
 
 #### **New Risk Profiles Created by Sponsored Transactions:**
 
