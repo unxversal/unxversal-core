@@ -1,6 +1,6 @@
 # UnXversal Options Protocol Design
 
-> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **market listing/creation is permissioned (admin only); only the admin can add new option markets to the protocol. DeepBook itself is permissionless, but the Options registry is permissioned.**
+> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **market listing/creation is permissioned (admin only); only the admin can add new option markets to the protocol. Options execution routes through the internal DEX/AutoSwap; the Options registry remains permissioned.**
 
 ## System Architecture & User Flow Overview
 
@@ -21,7 +21,7 @@ CollateralManager (Service) → PriceOracle ← Pyth price feeds
     ↓ monitors margins         ↓ provides pricing
 SettlementEngine ← handles expiration & exercise
     ↓ executes via
-DEX Integration → AutoSwap ← asset conversions (DeepBook pool creation is permissionless, but Options registry listing is admin-only)
+Internal DEX / AutoSwap ← asset conversions (Options registry listing is admin-only)
     ↓ enables hedging         ↓ handles settlements
 UNXV Integration → fee discounts & premium features
 ```
@@ -30,9 +30,10 @@ UNXV Integration → fee discounts & premium features
 
 ## Permissioning Policy
 
-- **Market listing/creation in the Options registry is permissioned (admin only).**
-- **DeepBook pool creation is permissionless, but only pools/markets added by the admin are recognized by the Options registry.**
-- **All trading, position management, and advanced order types are permissionless for users, but only on markets listed by the admin.**
+- **Admin‑whitelisted underlyings only:** The admin configures which underlyings (native coins or synthetics) are eligible for options trading, and their oracle feeds/settlement prefs.
+- **Permissionless market instances:** Anyone can create specific option contracts (strike, expiry, CALL/PUT, settlement type) as long as the underlying is admin‑whitelisted. Created markets are recognized by the Options registry.
+- **Options execution uses the internal DEX/AutoSwap router.**
+- **All trading, position management, and advanced order types are permissionless for users on whitelisted underlyings.**
 - See [MOVING_FORWARD.md](../MOVING_FORWARD.md) for the full permissioning matrix and rationale.
 
 ---
@@ -81,8 +82,8 @@ maintain delta neutrality
 - **GreeksCalculator**: Real-time calculation of option Greeks (delta, gamma, theta, vega, rho) for risk management and pricing
 - **CollateralManager**: Sophisticated margin system managing collateral requirements for option writers and complex strategies
 - **SettlementEngine**: Automated settlement system handling option exercise, assignment, and expiration processes
-- **PriceOracle**: Real-time price feeds from Pyth Network ensuring accurate underlying asset pricing for options
-- **DEX Integration**: Seamless integration with spot DEX for delta hedging, physical settlement, and arbitrage
+- **PriceOracle**: Real-time price feeds from Pyth Network ensuring accurate underlying asset pricing for options (normalized to micro-USD as in the core Oracle module)
+- **DEX Integration**: Seamless integration with the internal spot DEX/AutoSwap for delta hedging, physical settlement, and arbitrage
 
 #### **Critical Design Patterns**
 
@@ -183,12 +184,12 @@ UnXversal Options is a comprehensive decentralized options trading protocol that
 ```move
 struct OptionsRegistry has key {
     id: UID,
-    supported_underlyings: Table<String, UnderlyingAsset>,
+    supported_underlyings: Table<String, UnderlyingAsset>,   // admin‑whitelisted underlyings
     option_markets: Table<String, ID>,           // "BTC-CALL-50000-DEC2024" -> market_id
     pricing_models: Table<String, PricingModel>,
     risk_parameters: RiskParameters,
     settlement_parameters: SettlementParameters,
-    oracle_feeds: Table<String, vector<u8>>,     // Pyth price feed IDs
+    oracle_feeds: Table<String, vector<u8>>,     // Pyth price feed IDs (micro‑USD scale)
     volatility_feeds: Table<String, ID>,         // Volatility oracle IDs
     admin_cap: Option<AdminCap>,
 }
@@ -196,12 +197,13 @@ struct OptionsRegistry has key {
 struct UnderlyingAsset has store {
     asset_name: String,
     asset_type: String,                          // "NATIVE", "SYNTHETIC", "WRAPPED"
+    oracle_feed: vector<u8>,                     // Pyth feed bytes (normalized by Oracle module)
     min_strike_price: u64,
     max_strike_price: u64,
     strike_increment: u64,                       // Minimum strike price increment
     min_expiry_duration: u64,                    // Minimum time to expiry (ms)
     max_expiry_duration: u64,                    // Maximum time to expiry (ms)
-    settlement_type: String,                     // "CASH", "PHYSICAL", "BOTH"
+    default_settlement_type: String,             // "CASH", "PHYSICAL", "BOTH"
     is_active: bool,
 }
 
@@ -261,7 +263,7 @@ struct OptionMarket has key {
     margin_requirements: MarginRequirements,
     
     // Integration
-    deepbook_pool_id: Option<ID>,               // For options trading
+    router_pool_id: Option<ID>,                 // For options trading via internal DEX/AutoSwap
     synthetic_asset_id: Option<ID>,             // If synthetic underlying
 }
 
@@ -435,7 +437,7 @@ struct OptionMarketCreated has copy, drop {
     timestamp: u64,
 }
 
-// When option is bought or sold
+// When option is bought or sold (fees routed to Unxversal Treasury; optional UNXV discount at source)
 struct OptionTraded has copy, drop {
     market_id: ID,
     position_id: ID,
@@ -628,8 +630,8 @@ public fun create_option_market(
     expiry_timestamp: u64,
     settlement_type: String,                    // "CASH" or "PHYSICAL"
     exercise_style: String,                     // "EUROPEAN" or "AMERICAN"
-    deepbook_registry: &mut Registry,
-    creation_fee: Coin<DEEP>,
+    dex_registry: &mut DEXRegistry,
+    creation_fee: Coin<USDC>,
     ctx: &mut TxContext,
 ): ID // Returns market ID
 
@@ -796,7 +798,7 @@ public fun close_option_position(
     max_price: u64,                            // For buying back positions
     balance_manager: &mut BalanceManager,
     trade_proof: &TradeProof,
-    deepbook_pool: &mut Pool,
+    dex_pool: &mut Pool,
     price_feeds: vector<PriceInfoObject>,
     clock: &Clock,
     ctx: &mut TxContext,
@@ -870,7 +872,7 @@ public fun process_physical_settlement(
     synthetic_registry: &SyntheticsRegistry,
     balance_manager: &mut BalanceManager,
     trade_proof: &TradeProof,
-    deepbook_pools: vector<Pool>,
+    dex_pools: vector<Pool>,
     ctx: &mut TxContext,
 ): PhysicalSettlementResult
 
@@ -1539,6 +1541,88 @@ class SettlementManager {
 The UnXversal Options Protocol creates sophisticated derivatives infrastructure while providing clear utility and value accrual for UNXV token holders through innovative staking mechanisms and comprehensive ecosystem integration. 
 
 ---
+
+## Implementation Notes (Updated)
+
+This section documents the current on-chain design and key operational details implemented in `packages/unxversal/sources/options.move`.
+
+### USDC-Premium Model
+
+- Premiums, fees, and accounting are in USDC for all markets.
+- UNXV discounts: Admin-configurable via registry (oracle-priced UNXV at time of charge where implemented).
+- Close/offset fees: Taker-only with admin-configurable maker rebate (`maker_rebate_bps_close`).
+- Bot rewards: Admin-configurable splits from taker/settlement fees (`close_bot_reward_bps`, `settlement_bot_reward_bps`, plus `liq_bot_reward_bps` for liquidations). These are routed to the treasury under tagged sources for downstream distribution.
+
+### Cash Settlement vs Coin-Physical CALLs
+
+- Cash settlement (trustless):
+  - At/after expiry, anyone can settle using the verified Pyth price. The contract pays intrinsic to the long from the short’s collateral, minus settlement fee. No user-provided price.
+  - American exercise (cash) is supported and uses live oracle price.
+
+- Coin-physical CALLs:
+  - Writers post typed, coin-escrowed short offers that lock the deliverable underlying (e.g., `Coin<Base>`) in a per-position escrow.
+  - Matching creates a standard long position and a short position plus a `ShortUnderlyingEscrow<Base>` tied to the short.
+  - At exercise/expiry, a trustless on-chain function `exercise_physical_call<Base>` transfers the escrowed underlying to the long and decrements open interest. No swap required.
+  - Intent events (`PhysicalDeliveryRequested`/`PhysicalDeliveryCompleted`) are emitted to coordinate off-chain DEX order placement if the protocol/bots want to pre-hedge or arrange delivery via the orderbook; not required for escrow-based delivery.
+
+### Admin-Configurable Parameters
+
+- Market-level: `exercise_style`, `tick_size`, `contract_size`, `init_margin_bps_short`, `maint_margin_bps_short`, per-user cap (`max_oi_per_user`), market cap (`max_open_contracts_market`), per-market fee overrides.
+- Registry-level: `trade_fee_bps`, `settlement_fee_bps`, `unxv_discount_bps`, `maker_rebate_bps_close`, `close_bot_reward_bps`, `settlement_bot_reward_bps`, `liq_bot_reward_bps`.
+- Pause guards at registry and per-market.
+- Oracle safety: Settlement/exercise must use the exact whitelisted Pyth feed ID for the underlying.
+
+### Events and Intents for Bots/Indexers
+
+- Trading: `OptionMatched`, `OptionOpened`, `OptionClosed`.
+- Risk/Settlement: `EarlyExercised`, `OptionMarketSettled`, `OptionSettled`, `MarginCallTriggered`, `ShortLiquidated`.
+- Physical intents: `PhysicalDeliveryRequested` (long/short) and `PhysicalDeliveryCompleted` (bot confirms finalization for observability).
+
+### Indexer/Bot Responsibilities
+
+- Discovery: Index `ShortOffer`, `PremiumEscrow`, `CoinShortOffer<Base>`, `ShortUnderlyingEscrow<Base>` shared objects and events to reconstruct order flows and positions.
+- Physical orchestration (optional):
+  - Monitor `PhysicalDeliveryRequested` and place/cancel orders on the internal orderbook (`dex.move`) per intent bounds.
+  - Upon delivery execution, emit `PhysicalDeliveryCompleted` and/or call the on-chain physical exercise (`exercise_physical_call<Base>`) where applicable.
+- Settlement queue: Queue expiring markets, wait dispute window, and trigger cash settlement calls.
+- Liquidations: Detect undercollateralized shorts and call liquidation entrypoints.
+
+### Enforcement & Caps
+
+- `tick_size` and `contract_size` enforced on match and close.
+- Per-user and per-market open interest caps enforced during matching. Per-user OI tracked and decremented on close/exercise/liquidation/settlement.
+
+## Suggested Tests (Unit/Integration)
+
+1. Admin & Params
+   - Add/remove underlying, set market params/overrides, pause/resume (registry and market).
+
+2. Order Matching (USDC)
+   - Place `ShortOffer` and `PremiumEscrow`; match within tick/size; assert OI, fees, rebate, and bot-reward splits.
+   - Close/offset: enforce tick/size; verify taker fee, maker rebate (bps), bot reward split, collateral refund to short, OI/user-OI decrement.
+
+3. American Exercise (Cash)
+   - Exercise using live oracle price; verify payout, fees, OI and user-OI decrement.
+
+4. Expiry Cash Settlement
+   - Settlement queue flow; enforce Pyth feed ID; verify intrinsic payout, settlement fee split, OI and user-OI decrement.
+
+5. Liquidations
+   - Force maintenance breach; liquidate; verify intrinsic payment, liquidation bonus, bot rewards (if configured), and OI/user-OI decrement.
+
+6. Coin-Physical CALLs
+   - Place `CoinShortOffer<Base>` and match; verify escrow object created and premium transfer.
+   - `exercise_physical_call<Base>`: deliver underlying from escrow, decrement OI/user-OI, delete escrow when empty.
+   - Emit/consume physical intent events for observability.
+
+7. Oracle Safety
+   - Attempt settlement/exercise with wrong feed ID must fail.
+
+8. Caps & Guards
+   - Per-user and per-market OI cap enforcement; pause guards block state changes.
+
+These tests should be backed by integration harnesses that simulate oracle updates and DEX order placement (for physical intents), plus unit tests for fee math and splits.
+
 
 ## Required Bots and Automation
 
