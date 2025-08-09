@@ -21,8 +21,8 @@ CollateralManager (Service) → PriceOracle ← real-time valuations
     ↓ monitors health          ↓ provides pricing
 LiquidationEngine ← processes liquidations
     ↓ executes via
-DeepBook Flash Loans → AutoSwap ← asset conversions
-    ↓ enables atomic liquidation
+Internal DEX / AutoSwap Router ← asset conversions
+    ↓ enables atomic liquidation without external flash loans
 UNXV Integration → fee discounts & yield bonuses
 ```
 
@@ -57,9 +57,8 @@ AutoSwap handles cross-asset operations → settle trades
 ```
 CollateralManager detects under-collateralization → 
 LiquidationEngine calculates liquidation amount → 
-DeepBook flash loan for liquidation capital → 
-repay user debt + penalty → liquidate collateral via DEX → 
-repay flash loan → distribute liquidation bonus → 
+settle debt and convert collateral via internal DEX/AutoSwap → 
+distribute liquidation bonus → 
 update all affected positions
 ```
 
@@ -69,14 +68,14 @@ update all affected positions
 - **LendingPool<T>**: Individual asset pools that handle deposits, withdrawals, interest accrual, and liquidity management for each supported asset
 - **CollateralManager**: Sophisticated risk management system that monitors collateral health, calculates borrowing capacity, and triggers liquidations
 - **InterestRateModel**: Dynamic interest rate calculation engine that adjusts rates based on supply/demand, utilization, and market conditions
-- **LiquidationEngine**: Automated liquidation system using DeepBook flash loans for capital-efficient liquidations
+- **LiquidationEngine**: Automated liquidation system using internal DEX/AutoSwap routing for capital-efficient liquidations (no external flash loans)
 - **PriceOracle**: Real-time price feeds ensuring accurate collateral valuation and liquidation triggers
 - **UNXV Integration**: Comprehensive tokenomics integration providing fee discounts, yield bonuses, and protocol value accrual
 
 #### **Critical Design Patterns**
 
 1. **Isolated Pool Architecture**: Each asset has its own lending pool, preventing cross-asset contagion while enabling precise risk management
-2. **Flash Loan Liquidations**: Zero-capital liquidations using DeepBook flash loans ensure system solvency without requiring liquidator capital
+2. **Internal Routing Liquidations**: Capital-efficient liquidations executed via internal DEX/AutoSwap paths
 3. **Dynamic Interest Rates**: Interest rates automatically adjust based on supply/demand to maintain optimal utilization
 4. **Cross-Protocol Collateral**: Synthetic assets and staked assets can be used as collateral, maximizing capital efficiency
 5. **Automated Risk Management**: Continuous monitoring and automated liquidations prevent protocol insolvency
@@ -94,7 +93,7 @@ update all affected positions
 
 - **Variable Interest Rates**: Dynamic rate adjustment based on utilization curves and market conditions
 - **Collateral Factor Management**: Sophisticated LTV ratios based on asset volatility and liquidity
-- **Flash Loan Integration**: Native flash loan support for arbitrage, liquidations, and strategy execution
+- **Internal Routing**: Native internal DEX/AutoSwap support for liquidations and conversions
 - **Cross-Asset Borrowing**: Borrow any supported asset against any approved collateral
 - **Liquidation Protection**: Multiple safety mechanisms including grace periods and partial liquidations
 - **Yield Farming Integration**: Automatic yield farming opportunities for deposited assets
@@ -139,9 +138,8 @@ UnXversal Lending is a robust lending protocol with **admin-permissioned asset a
 - **Cross-Protocol Liquidations**: Liquidate undercollateralized positions using synthetic asset pools
 
 ### Spot DEX Integration  
-- **Leveraged Trading**: Borrow assets directly for trading on the DEX
-- **Flash Loan Arbitrage**: Utilize DeepBook flash loans for liquidation arbitrage
-- **Automatic Liquidations**: Execute liquidations through optimal DEX routing
+- **Leveraged Trading**: Borrow assets directly for trading on the internal DEX
+- **Automatic Liquidations**: Execute liquidations through internal routing (no external flash loans)
 
 ### UNXV Tokenomics
 - **Interest Rate Discounts**: UNXV holders get reduced borrowing rates
@@ -224,7 +222,7 @@ struct LendingPool<phantom T> has key {
     utilization_rate: u64,                     // Current utilization
     
     // Integration objects
-    deepbook_pool_id: Option<ID>,              // For liquidations
+    router_pool_id: Option<ID>,                // Internal DEX/AutoSwap routing reference
     synthetic_registry_id: Option<ID>,         // If synthetic asset
 }
 ```
@@ -289,8 +287,7 @@ struct LiquidationEngine has key {
     max_liquidation_amount: u64,               // Per transaction limit
     
     // Integration with other protocols
-    spot_dex_registry: ID,                     // For optimal liquidation routing
-    flash_loan_providers: VecSet<ID>,          // Available flash loan sources
+    spot_dex_registry: ID,                     // For internal routing during liquidation
     
     // Performance tracking
     total_liquidations: u64,
@@ -701,21 +698,7 @@ struct LiquidationResult has drop {
 }
 ```
 
-#### Flash Loan Liquidation
-```move
-public fun flash_liquidate_position(
-    liquidation_engine: &mut LiquidationEngine,
-    borrower_account: &mut UserAccount,
-    debt_asset: String,
-    collateral_asset: String,
-    flash_loan_provider: &mut Pool,
-    dex_registry: &DEXRegistry,
-    lending_pools: vector<LendingPool>,
-    price_feeds: vector<PriceInfoObject>,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): (FlashLoan, LiquidationResult) // Hot potato + result
-```
+// Flash loan liquidation removed: internal routing handles conversions without external flash loans
 
 ### 5. Interest Rate Management
 
@@ -812,38 +795,18 @@ public fun calculate_pending_rewards(
 ): u64
 ```
 
-### 7. Flash Loans
+### 7. Routing & Conversions
 
-#### Flash Loan Provision
 ```move
-public fun initiate_flash_loan<T>(
-    pool: &mut LendingPool<T>,
-    registry: &LendingRegistry,
-    loan_amount: u64,
-    ctx: &mut TxContext,
-): (Coin<T>, FlashLoan) // Hot potato pattern
-
-public fun repay_flash_loan<T>(
-    pool: &mut LendingPool<T>,
-    registry: &LendingRegistry,
-    loan_repayment: Coin<T>,
-    flash_loan: FlashLoan,
-    ctx: &mut TxContext,
-)
-```
-
-#### Flash Loan Arbitrage
-```move
-public fun flash_arbitrage_lending_rates(
-    source_pool: &mut LendingPool,
-    target_pool: &mut LendingPool,
-    arbitrage_amount: u64,
+// Internal routing for conversions required during liquidation/trading
+public fun route_and_convert(
     dex_registry: &DEXRegistry,
-    balance_manager: &mut BalanceManager,
-    trade_proof: &TradeProof,
-    clock: &Clock,
+    from_asset: String,
+    to_asset: String,
+    amount_in: u64,
+    min_out: u64,
     ctx: &mut TxContext,
-): ArbitrageResult
+): u64 // amount_out
 ```
 
 ## Advanced Features
@@ -1177,14 +1140,14 @@ class YieldStrategyEngine {
 }
 ```
 
-### 5. Flash Loan Arbitrage Bot
+### 5. Routing Arbitrage Bot (optional, internal liquidity)
 ```typescript
-class FlashLoanArbitrageBot {
+class RoutingArbitrageBot {
     private arbitrageScanner: ArbitrageScanner;
     private executionEngine: ExecutionEngine;
     
     async scanArbitrageOpportunities(): Promise<ArbitrageOpportunity[]>;
-    async executeFlashLoanArbitrage(opportunity: ArbitrageOpportunity): Promise<void>;
+    async executeRouteArbitrage(opportunity: ArbitrageOpportunity): Promise<void>;
     async calculateProfitability(rates: InterestRates[]): Promise<number>;
     async monitorCrossProtocolRates(): Promise<void>;
 }

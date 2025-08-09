@@ -33,6 +33,8 @@ module unxversal::oracle {
     const E_INVALID_FEED: u64   = 1;   // Price‑feed ID not allowed
     const E_STALE_PRICE: u64    = 2;   // Price older than `max_age`
     const E_NOT_ADMIN: u64      = 3;   // Caller lacks admin rights
+    const E_BAD_PRICE: u64      = 4;   // Non‑positive price
+    const E_OVERFLOW: u64       = 5;   // Overflow during scaling
 
     /*******************************
     * OracleConfig – shared object storing the allow‑list
@@ -128,5 +130,43 @@ module unxversal::oracle {
 
         // Return price as signed‑64 integer (Pyth expo already encoded)
         price::get_price(&price_struct)
+    }
+
+    /*******************************
+     * Fixed‑point normalization helpers
+     *******************************/
+    const SCALE_POW10_1E6: u64 = 6; // micro‑USD
+
+    fun pow10_u128(mut n: u64): u128 {
+        let mut acc: u128 = 1u128;
+        while (n > 0) {
+            acc = acc * 10u128;
+            n = n - 1;
+        };
+        acc
+    }
+
+    /// Returns price scaled to 1e6 (micro‑USD) as u64 (uses u128 internally)
+    public fun get_price_scaled_1e6(
+        cfg: &OracleConfig,
+        clock: &Clock,
+        price_info_object: &PriceInfoObject
+    ): u64 {
+        let price_struct = pyth::get_price_no_older_than(price_info_object, clock, cfg.max_age_sec);
+        let raw_price_i64 = price::get_price(&price_struct);
+        let expo_i64 = price::get_expo(&price_struct);
+        assert!(raw_price_i64 > 0, E_BAD_PRICE);
+
+        let raw_u128 = (raw_price_i64 as u128);
+        let adj_i64 = (SCALE_POW10_1E6 as i64) + expo_i64;
+        let scaled_u128 = if (adj_i64 >= 0) {
+            let mul = pow10_u128(adj_i64 as u64);
+            raw_u128 * mul
+        } else {
+            let div = pow10_u128((-adj_i64) as u64);
+            raw_u128 / div
+        };
+        assert!(scaled_u128 <= (u64::MAX as u128), E_OVERFLOW);
+        scaled_u128 as u64
     }
 }
