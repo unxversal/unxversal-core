@@ -334,7 +334,8 @@ module unxversal::futures {
             maker_rebate_bps: 100,
             unxv_discount_bps: 0,
             trade_bot_reward_bps: 0,
-            dispute_window_ms: 60_000,
+            // dispute_window_ms: 60_000,
+            dispute_window_ms: 0, // no dispute window for now
             last_list_ms: Table::new<String, u64>(ctx),
             treasury_id: object::id(&Treasury { id: object::new(ctx), usdc: sui::coin::Coin::zero<usdc::usdc::USDC>(ctx), unxv: sui::coin::Coin::zero<unxversal::unxv::UNXV>(ctx), cfg: unxversal::treasury::TreasuryCfg { unxv_burn_bps: 0 } }),
         };
