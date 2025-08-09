@@ -1,6 +1,6 @@
-# UnXversal Dated Futures Protocol Design
+# UnXversal Dated Futures Protocol Design (Updated)
 
-> **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **market/contract creation is permissionless (with a minimum interval restriction, e.g., daily as the smallest interval); anyone can create new futures contracts. DeepBook pool creation is also permissionless.**
+> Note: Architecture aligned with Options/Lending. Underlying asset listing is admin-permissioned; specific dated futures instances on whitelisted underlyings are permissionless (subject to cadence/cooldown). Execution uses the internal on-chain orderbook (no AMM/AutoSwap). Cash settlement is trustless via Pyth.
 
 ## System Architecture & User Flow Overview
 
@@ -19,23 +19,20 @@ FuturesPosition (individual) ← user contracts & P&L
     ↓ validates margin
 MarginManager (Service) → PriceOracle ← TWAP/VWAP pricing
     ↓ monitors health           ↓ provides settlement prices
-SettlementEngine ← processes contract expiration
-    ↓ executes via
-DeepBook Integration → AutoSwap ← asset delivery & cash settlement (DeepBook pool creation is permissionless)
-    ↓ provides liquidity       ↓ handles conversions
-UNXV Integration → fee discounts & premium features
+SettlementEngine ← processes contract expiration (cash-settled via oracle)
+Internal DEX (orderbook) ← execution/hedging (off-chain orchestrated)
+USDC Accounting ← margin/PnL/fees
+UNXV Integration → fee discounts, maker rebates, bot-reward splits
 ```
 
 ---
 
 ## Permissioning Policy
 
-- **Market/contract creation in the Dated Futures registry is permissionless (anyone can create, subject to minimum interval enforcement).**
-- **DeepBook pool creation is permissionless.**
-- **All trading, position management, and advanced order types are permissionless for users.**
-- **Minimum interval enforcement (e.g., daily) is implemented to prevent spam and ensure orderly market creation.**
-- **Off-chain bots (run by users or the CLI/server) can automate market creation, liquidation, and settlement, and are incentivized via rewards.**
-- See [MOVING_FORWARD.md](../MOVING_FORWARD.md) for the full permissioning matrix and rationale.
+- Underlying listing is admin-permissioned (aligns with Options).
+- Dated futures contract instances on whitelisted underlyings are permissionless (subject to minimum interval/cooldown to prevent spam).
+- Trading and position management are permissionless for users.
+- Off-chain bots/CLI automate cadence, liquidations, and settlement; rewards are funded via configurable bot-reward fee splits.
 
 ---
 
@@ -1134,21 +1131,8 @@ struct ArbitrageResult has drop {
 }
 ```
 
-### 4. Autoswap Integration
-```move
-public fun process_futures_fees(
-    fee_processor: &mut FeeProcessor,
-    autoswap_unxv: &mut AutoSwapUNXV,
-    trading_fees: Table<String, u64>,              // Contract -> fees
-    settlement_fees: Table<String, u64>,
-    margin_call_fees: Table<String, u64>,
-    futures_treasury: address,
-    balance_manager: &mut BalanceManager,
-    trade_proof: &TradeProof,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): ProtocolFeeResult
-```
+### 4. Fee Processing & UNXV
+Fees are denominated in USDC and routed to the central treasury (`treasury.move`), with optional UNXV discounts, maker rebates, and bot-reward splits (settlement/liquidation) configured by admin. Any conversions are handled off-chain.
 
 ## UNXV Tokenomics Integration
 
@@ -1281,11 +1265,11 @@ struct AlgorithmRiskLimits has store {
 
 ## Deployment Strategy
 
-### Phase 1: Core Futures (Month 1-2)
+### Phase 1: Core Futures
 - Deploy futures registry and basic contracts (sBTC-DEC24, sETH-DEC24)
 - Implement position management and daily settlement
 - Launch calendar spread trading
-- Integrate with autoswap for fee processing
+- Integrate with central treasury fee routing, UNXV discounts, and bot-reward splits
 
 ### Phase 2: Advanced Settlement (Month 3-4)
 - Deploy sophisticated settlement engine with dispute resolution
