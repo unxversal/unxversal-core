@@ -6,14 +6,14 @@
 
 ### How All Components Work Together
 
-The UnXversal Lending protocol creates a sophisticated credit system that seamlessly integrates with the entire ecosystem, enabling efficient capital allocation, leveraged trading, and yield generation through intelligent asset management:
+The UnXversal Lending protocol creates a sophisticated credit system that seamlessly integrates with the entire ecosystem, enabling efficient capital allocation, leveraged trading, and yield generation through intelligent asset management. It supports both base coins (e.g., SUI, USDC, major tokens) and synthetic assets listed in the Synthetics protocol:
 
 #### **Core Object Hierarchy & Relationships**
 
 ```
 LendingRegistry (Shared, admin-controlled) ← Central lending configuration & risk parameters
     ↓ manages pools
-LendingPool<T> (Shared, admin-created) → InterestRateModel ← dynamic rate calculation
+LendingPool<T> (Shared, admin-created; coins & synths) → InterestRateModel ← dynamic rate calculation
     ↓ tracks liquidity         ↓ calculates APR/APY
 UserPosition (individual) ← collateral & debt tracking
     ↓ validates safety
@@ -57,6 +57,7 @@ AutoSwap handles cross-asset operations → settle trades
 ```
 CollateralManager detects under-collateralization → 
 LiquidationEngine calculates liquidation amount → 
+optionally source capital via protocol flash loan → 
 settle debt and convert collateral via internal DEX/AutoSwap → 
 distribute liquidation bonus → 
 update all affected positions
@@ -65,7 +66,7 @@ update all affected positions
 #### **Key System Interactions**
 
 - **LendingRegistry**: Central command center managing all lending pools, risk parameters, supported assets, and system-wide configurations
-- **LendingPool<T>**: Individual asset pools that handle deposits, withdrawals, interest accrual, and liquidity management for each supported asset
+- **LendingPool<T>**: Individual asset pools (coins & synths) that handle deposits, withdrawals, interest accrual, liquidity management, and protocol flash loans per pool
 - **CollateralManager**: Sophisticated risk management system that monitors collateral health, calculates borrowing capacity, and triggers liquidations
 - **InterestRateModel**: Dynamic interest rate calculation engine that adjusts rates based on supply/demand, utilization, and market conditions
 - **LiquidationEngine**: Automated liquidation system using internal DEX/AutoSwap routing for capital-efficient liquidations (no external flash loans)
@@ -139,7 +140,7 @@ UnXversal Lending is a robust lending protocol with **admin-permissioned asset a
 
 ### Spot DEX Integration  
 - **Leveraged Trading**: Borrow assets directly for trading on the internal DEX
-- **Automatic Liquidations**: Execute liquidations through internal routing (no external flash loans)
+- **Automatic Liquidations**: Execute liquidations through internal routing (pools can optionally provide flash loans)
 
 ### UNXV Tokenomics
 - **Interest Rate Discounts**: UNXV holders get reduced borrowing rates
@@ -809,6 +810,40 @@ public fun route_and_convert(
 ): u64 // amount_out
 ```
 
+### 8. Flash Loans
+
+#### Flash Loan Provision
+```move
+public fun initiate_flash_loan<T>(
+    pool: &mut LendingPool<T>,
+    registry: &LendingRegistry,
+    loan_amount: u64,
+    ctx: &mut TxContext,
+): (Coin<T>, FlashLoan) // Hot potato pattern
+
+public fun repay_flash_loan<T>(
+    pool: &mut LendingPool<T>,
+    registry: &LendingRegistry,
+    loan_repayment: Coin<T>,
+    flash_loan: FlashLoan,
+    ctx: &mut TxContext,
+)
+```
+
+#### Flash Loan Arbitrage (optional)
+```move
+public fun flash_arbitrage_lending_rates(
+    source_pool: &mut LendingPool,
+    target_pool: &mut LendingPool,
+    arbitrage_amount: u64,
+    dex_registry: &DEXRegistry,
+    balance_manager: &mut BalanceManager,
+    trade_proof: &TradeProof,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): ArbitrageResult
+```
+
 ## Advanced Features
 
 ### 1. Credit Delegation
@@ -1140,7 +1175,7 @@ class YieldStrategyEngine {
 }
 ```
 
-### 5. Routing Arbitrage Bot (optional, internal liquidity)
+### 5. Arbitrage Bots (optional)
 ```typescript
 class RoutingArbitrageBot {
     private arbitrageScanner: ArbitrageScanner;
@@ -1148,6 +1183,15 @@ class RoutingArbitrageBot {
     
     async scanArbitrageOpportunities(): Promise<ArbitrageOpportunity[]>;
     async executeRouteArbitrage(opportunity: ArbitrageOpportunity): Promise<void>;
+    async calculateProfitability(rates: InterestRates[]): Promise<number>;
+    async monitorCrossProtocolRates(): Promise<void>;
+}
+class FlashLoanArbitrageBot {
+    private arbitrageScanner: ArbitrageScanner;
+    private executionEngine: ExecutionEngine;
+    
+    async scanArbitrageOpportunities(): Promise<ArbitrageOpportunity[]>;
+    async executeFlashLoanArbitrage(opportunity: ArbitrageOpportunity): Promise<void>;
     async calculateProfitability(rates: InterestRates[]): Promise<number>;
     async monitorCrossProtocolRates(): Promise<void>;
 }
