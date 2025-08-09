@@ -26,6 +26,14 @@ module unxversal::lending {
     use std::vector;
     use std::time;
 
+    // Synthetics integration
+    use pyth::price_info::PriceInfoObject;
+    use unxversal::oracle::{OracleConfig, get_price_scaled_1e6};
+    use unxversal::treasury::Treasury;
+    use unxversal::unxv::UNXV;
+    use unxversal::synthetics::{Self as Synth, SynthRegistry, CollateralVault};
+    use usdc::usdc::USDC;
+
     /*******************************
     * Errors
     *******************************/
@@ -37,6 +45,9 @@ module unxversal::lending {
     const E_NOT_OWNER: u64 = 6;
     const E_UNKNOWN_ASSET: u64 = 7;
     const E_OVER_REPAY: u64 = 8;
+    const E_NO_COLLATERAL: u64 = 9;
+    const E_BAD_PRICE: u64 = 10;
+    const E_VIOLATION: u64 = 11; // LTV or health violation
 
     /*******************************
     * One-Time Witness for init()
@@ -68,6 +79,9 @@ module unxversal::lending {
         is_collateral: bool,
         is_borrowable: bool,
         reserve_factor_bps: u64,   // overrides global if > 0
+        ltv_bps: u64,              // max borrow against this collateral (e.g., 8000 = 80%)
+        liq_threshold_bps: u64,    // below this, position can be liquidated (e.g., 8500)
+        liq_penalty_bps: u64,      // extra seized on liquidation (bonus source)
     }
 
     /*******************************
@@ -76,10 +90,22 @@ module unxversal::lending {
     public struct LendingRegistry has key, store {
         id: UID,
         supported_assets: Table<String, AssetConfig>,
+        coin_oracle_feeds: Table<String, vector<u8>>, // optional mapping for coins
         lending_pools: Table<String, ID>,
         interest_rate_models: Table<String, InterestRateModel>,
         global_params: GlobalParams,
         admin_addrs: VecSet<address>,
+        synth_markets: Table<String, SynthMarket>,
+        paused: bool,
+    }
+
+    /// Minimal per-synthetic market config/stats (Phase 1)
+    public struct SynthMarket has store {
+        symbol: String,
+        reserve_factor_bps: u64,
+        total_borrow_units: u64,
+        total_liquidity_usdc: u64,
+        reserve_units: u64,
     }
 
     /*******************************
@@ -91,6 +117,12 @@ module unxversal::lending {
     public struct DebtRepaid has copy, drop { user: address, asset: String, amount: u64, remaining_debt: u64, timestamp: u64 }
     public struct FlashLoanInitiated has copy, drop { asset: String, amount: u64, fee: u64, borrower: address, timestamp: u64 }
     public struct FlashLoanRepaid has copy, drop { asset: String, amount: u64, fee: u64, repayer: address, timestamp: u64 }
+    public struct SynthFlashLoanInitiated has copy, drop { symbol: String, amount_units: u64, fee_units: u64, borrower: address, timestamp: u64 }
+    public struct SynthFlashLoanRepaid has copy, drop { symbol: String, amount_units: u64, fee_units: u64, repayer: address, timestamp: u64 }
+    public struct RateUpdated has copy, drop { asset: String, utilization_bps: u64, borrow_rate_bps: u64, supply_rate_bps: u64, timestamp: u64 }
+    public struct InterestAccrued has copy, drop { asset: String, dt_ms: u64, new_borrow_index: u64, new_supply_index: u64, delta_borrows: u64, reserves_added: u64, timestamp: u64 }
+    public struct SynthAccrued has copy, drop { symbol: String, delta_units: u64, reserve_units: u64, timestamp: u64 }
+    public struct SynthLiquidated has copy, drop { symbol: String, repay_units: u64, usdc_seized: u64, bot_reward: u64, liquidator: address, timestamp: u64 }
 
     /*******************************
     * User account
@@ -100,6 +132,8 @@ module unxversal::lending {
         owner: address,
         supply_balances: Table<String, u64>, // principal units per asset
         borrow_balances: Table<String, u64>, // principal units per asset
+        synth_liquidity_usdc: Table<String, u64>, // per-synth supplied USDC liquidity
+        synth_borrow_units: Table<String, u64>,   // per-synth borrow units
         last_update_ms: u64,
     }
 
@@ -113,17 +147,39 @@ module unxversal::lending {
         total_borrows: u64,
         total_reserves: u64,
         cash: Balance<T>,
-        supply_index: u64,
-        borrow_index: u64,
+        supply_index: u64,   // scaled by 1e6
+        borrow_index: u64,   // scaled by 1e6
         last_update_ms: u64,
         current_supply_rate_bps: u64,
         current_borrow_rate_bps: u64,
     }
 
+    const INDEX_SCALE: u64 = 1_000_000; // 1e6 fixed-point for indexes
+
+    fun units_from_scaled(scaled: u64, index: u64): u64 {
+        if (index == 0) { return 0; };
+        let num = (scaled as u128) * (index as u128);
+        let den = INDEX_SCALE as u128;
+        let v = num / den;
+        if (v > (u64::MAX as u128)) { u64::MAX } else { v as u64 }
+    }
+
+    fun scaled_from_units(units: u64, index: u64): u64 {
+        if (index == 0) { return 0; };
+        let num = (units as u128) * (INDEX_SCALE as u128);
+        let den = index as u128;
+        let v = num / den;
+        if (v > (u64::MAX as u128)) { u64::MAX } else { v as u64 }
+    }
+
     /*******************************
     * FlashLoan proof object
     *******************************/
-    public struct FlashLoan<phantom T> has drop { amount: u64, fee: u64, asset: String }
+    // Hot potato for coin flash loans (no abilities)
+    public struct FlashLoan<phantom T> { amount: u64, fee: u64, asset: String }
+
+    // Hot potato for synthetic flash loans (no abilities) – must be consumed in same tx
+    public struct SynthFlashLoan { symbol: String, amount_units: u64, fee_units: u64 }
 
     /*******************************
     * Admin helper
@@ -144,10 +200,13 @@ module unxversal::lending {
         let reg = LendingRegistry {
             id: object::new(ctx),
             supported_assets: Table::new::<String, AssetConfig>(ctx),
+            coin_oracle_feeds: Table::new::<String, vector<u8>>(ctx),
             lending_pools: Table::new::<String, ID>(ctx),
             interest_rate_models: Table::new::<String, InterestRateModel>(ctx),
             global_params: gp,
             admin_addrs: admins,
+            synth_markets: Table::new::<String, SynthMarket>(ctx),
+            paused: false,
         };
         transfer::share_object(reg);
 
@@ -177,23 +236,48 @@ module unxversal::lending {
         VecSet::remove(&mut reg.admin_addrs, bad);
     }
 
-    public entry fun add_supported_asset(_admin: &LendingAdminCap, reg: &mut LendingRegistry, symbol: String, is_collateral: bool, is_borrowable: bool, reserve_factor_bps: u64, irm: InterestRateModel, ctx: &TxContext) {
+    public entry fun add_supported_asset(_admin: &LendingAdminCap, reg: &mut LendingRegistry, symbol: String, is_collateral: bool, is_borrowable: bool, reserve_factor_bps: u64, ltv_bps: u64, liq_threshold_bps: u64, liq_penalty_bps: u64, irm: InterestRateModel, ctx: &TxContext) {
         assert_is_admin(reg, ctx.sender());
+        assert!(!reg.paused, 1000);
         assert!(!Table::contains(&reg.supported_assets, &symbol), E_ASSET_EXISTS);
-        Table::insert(&mut reg.supported_assets, symbol.clone(), AssetConfig { symbol: symbol.clone(), is_collateral, is_borrowable, reserve_factor_bps });
+        Table::insert(&mut reg.supported_assets, symbol.clone(), AssetConfig { symbol: symbol.clone(), is_collateral, is_borrowable, reserve_factor_bps, ltv_bps, liq_threshold_bps, liq_penalty_bps });
         Table::insert(&mut reg.interest_rate_models, symbol, irm);
     }
 
-    public entry fun set_global_params(_admin: &LendingAdminCap, reg: &mut LendingRegistry, gp: GlobalParams, ctx: &TxContext) {
+    public entry fun set_asset_params(
+        _admin: &LendingAdminCap,
+        reg: &mut LendingRegistry,
+        symbol: String,
+        is_collateral: bool,
+        is_borrowable: bool,
+        reserve_factor_bps: u64,
+        ltv_bps: u64,
+        liq_threshold_bps: u64,
+        liq_penalty_bps: u64,
+        ctx: &TxContext
+    ) {
         assert_is_admin(reg, ctx.sender());
-        reg.global_params = gp;
+        assert!(!reg.paused, 1000);
+        let mut a = Table::borrow_mut(&mut reg.supported_assets, &symbol);
+        a.is_collateral = is_collateral;
+        a.is_borrowable = is_borrowable;
+        a.reserve_factor_bps = reserve_factor_bps;
+        a.ltv_bps = ltv_bps;
+        a.liq_threshold_bps = liq_threshold_bps;
+        a.liq_penalty_bps = liq_penalty_bps;
     }
+
+    public entry fun pause(_admin: &LendingAdminCap, reg: &mut LendingRegistry, ctx: &TxContext) { assert_is_admin(reg, ctx.sender()); reg.paused = true; }
+    public entry fun resume(_admin: &LendingAdminCap, reg: &mut LendingRegistry, ctx: &TxContext) { assert_is_admin(reg, ctx.sender()); reg.paused = false; }
+
+    public entry fun set_global_params(_admin: &LendingAdminCap, reg: &mut LendingRegistry, gp: GlobalParams, ctx: &TxContext) { assert_is_admin(reg, ctx.sender()); assert!(!reg.paused, 1000); reg.global_params = gp; }
 
     /*******************************
     * Pool lifecycle (admin-only)
     *******************************/
     public entry fun create_pool<T>(_admin: &LendingAdminCap, reg: &mut LendingRegistry, asset_symbol: String, ctx: &mut TxContext) {
         assert_is_admin(reg, ctx.sender());
+        assert!(!reg.paused, 1000);
         assert!(Table::contains(&reg.supported_assets, &asset_symbol), E_UNKNOWN_ASSET);
         assert!(!Table::contains(&reg.lending_pools, &asset_symbol), E_POOL_EXISTS);
         let pool = LendingPool<T> {
@@ -228,7 +312,15 @@ module unxversal::lending {
     * User Account lifecycle
     *******************************/
     public entry fun open_account(ctx: &mut TxContext) {
-        let acct = UserAccount { id: object::new(ctx), owner: ctx.sender(), supply_balances: Table::new::<String, u64>(ctx), borrow_balances: Table::new::<String, u64>(ctx), last_update_ms: time::now_ms() };
+        let acct = UserAccount {
+            id: object::new(ctx),
+            owner: ctx.sender(),
+            supply_balances: Table::new::<String, u64>(ctx),
+            borrow_balances: Table::new::<String, u64>(ctx),
+            synth_liquidity_usdc: Table::new::<String, u64>(ctx),
+            synth_borrow_units: Table::new::<String, u64>(ctx),
+            last_update_ms: time::now_ms()
+        };
         transfer::share_object(acct);
         // Display for account
         let publisher = package::claim(package::Publisher { id: object::new(ctx) }, ctx);
@@ -244,8 +336,10 @@ module unxversal::lending {
     * Core operations: supply / withdraw
     *******************************/
     public entry fun supply<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, acct: &mut UserAccount, mut coins: Coin<T>, amount: u64, ctx: &mut TxContext) {
+        assert!(!reg.paused, 1000);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
         assert!(amount > 0, E_ZERO_AMOUNT);
+        accrue_pool_interest(pool);
         let have = Coin::value(&coins);
         assert!(have >= amount, E_ZERO_AMOUNT);
         let exact = Coin::split(&mut coins, amount, ctx);
@@ -255,72 +349,395 @@ module unxversal::lending {
         BalanceMod::join(&mut pool.cash, bal);
         pool.total_supply = pool.total_supply + amount;
         let sym = pool.asset.clone();
-        let cur = if Table::contains(&acct.supply_balances, &sym) { *Table::borrow(&acct.supply_balances, &sym) } else { 0 };
-        let newb = cur + amount;
-        Table::insert(&mut acct.supply_balances, sym.clone(), newb);
+        // store scaled balance: scaled += amount / supply_index
+        let cur_scaled = if Table::contains(&acct.supply_balances, &sym) { *Table::borrow(&acct.supply_balances, &sym) } else { 0 };
+        let delta_scaled = scaled_from_units(amount, pool.supply_index);
+        let new_scaled = cur_scaled + delta_scaled;
+        Table::insert(&mut acct.supply_balances, sym.clone(), new_scaled);
         acct.last_update_ms = time::now_ms();
-        event::emit(AssetSupplied { user: ctx.sender(), asset: sym, amount, new_balance: newb, timestamp: time::now_ms() });
+        let new_units = units_from_scaled(new_scaled, pool.supply_index);
+        event::emit(AssetSupplied { user: ctx.sender(), asset: sym, amount, new_balance: new_units, timestamp: time::now_ms() });
     }
 
-    public entry fun withdraw<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, acct: &mut UserAccount, amount: u64, ctx: &mut TxContext): Coin<T> {
+    public entry fun withdraw<T>(
+        reg: &LendingRegistry,
+        pool: &mut LendingPool<T>,
+        acct: &mut UserAccount,
+        amount: u64,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        price_self: &PriceInfoObject,
+        symbols: vector<String>,
+        prices: vector<&PriceInfoObject>,
+        ctx: &mut TxContext
+    ): Coin<T> {
+        assert!(!reg.paused, 1000);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
         assert!(amount > 0, E_ZERO_AMOUNT);
+        accrue_pool_interest(pool);
         let sym = pool.asset.clone();
         assert!(Table::contains(&acct.supply_balances, &sym), E_UNKNOWN_ASSET);
-        let cur = *Table::borrow(&acct.supply_balances, &sym);
-        assert!(cur >= amount, E_ZERO_AMOUNT);
+        let cur_scaled = *Table::borrow(&acct.supply_balances, &sym);
+        let cur_units = units_from_scaled(cur_scaled, pool.supply_index);
+        assert!(cur_units >= amount, E_ZERO_AMOUNT);
         // ensure liquidity
         let cash = BalanceMod::value(&pool.cash);
         assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
         let out_bal = BalanceMod::split(&mut pool.cash, amount);
         let out = Coin::from_balance(out_bal, ctx);
-        let newb = cur - amount;
-        Table::insert(&mut acct.supply_balances, sym.clone(), newb);
+        let new_units = cur_units - amount;
+        let new_scaled = scaled_from_units(new_units, pool.supply_index);
+        Table::insert(&mut acct.supply_balances, sym.clone(), new_scaled);
         pool.total_supply = pool.total_supply - amount;
+        // Enforce LTV after withdrawal if asset is collateral
+        if (Table::contains(&reg.supported_assets, &sym)) {
+            let a = Table::borrow(&reg.supported_assets, &sym);
+            if (a.is_collateral) {
+                // compute current totals
+                let (tot_coll, tot_debt, _) = check_account_health_coins(acct, reg, oracle_cfg, clock, symbols.clone(), prices.clone());
+                let px_self = get_price_scaled_1e6(oracle_cfg, clock, price_self) as u128;
+                let reduce_cap = ((amount as u128) * px_self * (a.ltv_bps as u128)) / 10_000u128;
+                let new_capacity = if (tot_coll > reduce_cap) { tot_coll - reduce_cap } else { 0 };
+                assert!(tot_debt <= new_capacity, E_VIOLATION);
+            }
+        }
         acct.last_update_ms = time::now_ms();
-        event::emit(AssetWithdrawn { user: ctx.sender(), asset: sym, amount, remaining_balance: newb, timestamp: time::now_ms() });
+        event::emit(AssetWithdrawn { user: ctx.sender(), asset: sym, amount, remaining_balance: new_units, timestamp: time::now_ms() });
         out
     }
 
     /*******************************
     * Core operations: borrow / repay
     *******************************/
-    public entry fun borrow<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, acct: &mut UserAccount, amount: u64, ctx: &mut TxContext): Coin<T> {
+    public entry fun borrow<T>(
+        reg: &LendingRegistry,
+        pool: &mut LendingPool<T>,
+        acct: &mut UserAccount,
+        amount: u64,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        price_debt: &PriceInfoObject,
+        symbols: vector<String>,
+        prices: vector<&PriceInfoObject>,
+        ctx: &mut TxContext
+    ): Coin<T> {
+        assert!(!reg.paused, 1000);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
         assert!(amount > 0, E_ZERO_AMOUNT);
+        accrue_pool_interest(pool);
         // check pool liquidity
         let cash = BalanceMod::value(&pool.cash);
         assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
-        // update borrow
+        // LTV guard: ensure new debt <= capacity
+        let cap = compute_ltv_capacity_usd(acct, reg, oracle_cfg, clock, symbols.clone(), prices.clone());
+        let (_, tot_debt, _) = check_account_health_coins(acct, reg, oracle_cfg, clock, symbols.clone(), prices.clone());
+        let px = get_price_scaled_1e6(oracle_cfg, clock, price_debt) as u128;
+        let new_debt = tot_debt + (amount as u128) * px;
+        assert!(new_debt <= cap, E_VAULT_NOT_HEALTHY);
+        // update borrow scaled
         let sym = pool.asset.clone();
-        let cur = if Table::contains(&acct.borrow_balances, &sym) { *Table::borrow(&acct.borrow_balances, &sym) } else { 0 };
-        let newb = cur + amount;
-        Table::insert(&mut acct.borrow_balances, sym.clone(), newb);
+        // store scaled debt: scaled += amount / borrow_index
+        let cur_scaled = if Table::contains(&acct.borrow_balances, &sym) { *Table::borrow(&acct.borrow_balances, &sym) } else { 0 };
+        let delta_scaled = scaled_from_units(amount, pool.borrow_index);
+        let new_scaled = cur_scaled + delta_scaled;
+        Table::insert(&mut acct.borrow_balances, sym.clone(), new_scaled);
         pool.total_borrows = pool.total_borrows + amount;
         acct.last_update_ms = time::now_ms();
         // transfer out
         let out_bal = BalanceMod::split(&mut pool.cash, amount);
         let out = Coin::from_balance(out_bal, ctx);
-        event::emit(AssetBorrowed { user: ctx.sender(), asset: sym, amount, new_borrow_balance: newb, timestamp: time::now_ms() });
+        let new_units = units_from_scaled(new_scaled, pool.borrow_index);
+        event::emit(AssetBorrowed { user: ctx.sender(), asset: sym, amount, new_borrow_balance: new_units, timestamp: time::now_ms() });
         out
     }
 
     public entry fun repay<T>(_reg: &LendingRegistry, pool: &mut LendingPool<T>, acct: &mut UserAccount, payment: Coin<T>, ctx: &mut TxContext) {
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
+        accrue_pool_interest(pool);
         let amount = Coin::value(&payment);
         assert!(amount > 0, E_ZERO_AMOUNT);
         let sym = pool.asset.clone();
         assert!(Table::contains(&acct.borrow_balances, &sym), E_UNKNOWN_ASSET);
-        let cur = *Table::borrow(&acct.borrow_balances, &sym);
-        assert!(amount <= cur, E_OVER_REPAY);
+        let cur_scaled = *Table::borrow(&acct.borrow_balances, &sym);
+        let cur_units = units_from_scaled(cur_scaled, pool.borrow_index);
+        assert!(amount <= cur_units, E_OVER_REPAY);
         // move into pool cash
         let bal = Coin::into_balance(payment);
         BalanceMod::join(&mut pool.cash, bal);
-        let newb = cur - amount;
-        Table::insert(&mut acct.borrow_balances, sym.clone(), newb);
+        let new_units = cur_units - amount;
+        let new_scaled = scaled_from_units(new_units, pool.borrow_index);
+        Table::insert(&mut acct.borrow_balances, sym.clone(), new_scaled);
         pool.total_borrows = pool.total_borrows - amount;
         acct.last_update_ms = time::now_ms();
-        event::emit(DebtRepaid { user: ctx.sender(), asset: sym, amount, remaining_debt: newb, timestamp: time::now_ms() });
+        event::emit(DebtRepaid { user: ctx.sender(), asset: sym, amount, remaining_debt: new_units, timestamp: time::now_ms() });
+    }
+
+    /*******************************
+    * Rate model and interest accrual (coins)
+    *******************************/
+    fun get_reserve_factor_bps(reg: &LendingRegistry, sym: &String): u64 {
+        if (Table::contains(&reg.supported_assets, sym)) {
+            let a = Table::borrow(&reg.supported_assets, sym);
+            if (a.reserve_factor_bps > 0) { return a.reserve_factor_bps; };
+        };
+        reg.global_params.reserve_factor_bps
+    }
+
+    fun utilization_bps<T>(pool: &LendingPool<T>): u64 {
+        let cash = BalanceMod::value(&pool.cash);
+        let denom = cash + pool.total_borrows;
+        if (denom == 0) { return 0; };
+        (pool.total_borrows * 10_000) / denom
+    }
+
+    public entry fun update_pool_rates<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>) {
+        assert!(!reg.paused, 1000);
+        let u_bps = utilization_bps(pool);
+        let irm = Table::borrow(&reg.interest_rate_models, &pool.asset);
+        let borrow_rate = irm.base_rate_bps + (irm.slope_bps * u_bps) / 10_000;
+        pool.current_borrow_rate_bps = borrow_rate;
+        // supply rate ≈ borrow_rate * utilization * (1 - reserve_factor)
+        let rf = get_reserve_factor_bps(reg, &pool.asset);
+        let supply_rate = (borrow_rate * u_bps * (10_000 - rf)) / (10_000 * 10_000);
+        pool.current_supply_rate_bps = supply_rate;
+        event::emit(RateUpdated { asset: pool.asset.clone(), utilization_bps: u_bps, borrow_rate_bps: borrow_rate, supply_rate_bps: supply_rate, timestamp: time::now_ms() });
+    }
+
+    public entry fun accrue_pool_interest<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>) {
+        let now = time::now_ms();
+        if (now <= pool.last_update_ms) { return; };
+        let dt = now - pool.last_update_ms;
+        let year_ms = 31_536_000_000; // 365 days
+        // interest factor in 1e6 scale: factor = (rate_bps/10k) * dt/year
+        let borrow_factor = (pool.current_borrow_rate_bps as u128) * (dt as u128) / (10_000u128 * (year_ms as u128));
+        let supply_factor = (pool.current_supply_rate_bps as u128) * (dt as u128) / (10_000u128 * (year_ms as u128));
+        // update indexes: idx = idx * (1 + factor)
+        let bi = (pool.borrow_index as u128) + ((pool.borrow_index as u128) * borrow_factor);
+        let si = (pool.supply_index as u128) + ((pool.supply_index as u128) * supply_factor);
+        pool.borrow_index = if (bi > (u64::MAX as u128)) { u64::MAX } else { bi as u64 };
+        pool.supply_index = if (si > (u64::MAX as u128)) { u64::MAX } else { si as u64 };
+        // update totals: total_borrows += total_borrows * borrow_factor
+        let old_tb = pool.total_borrows as u128;
+        let tb = old_tb + (old_tb * borrow_factor);
+        let delta_borrows = if tb > old_tb { tb - old_tb } else { 0 };
+        // reserve factor portion
+        let rf_bps = get_reserve_factor_bps(reg, &pool.asset) as u128;
+        let reserves_added = (delta_borrows * rf_bps) / 10_000u128;
+        pool.total_borrows = if (tb > (u64::MAX as u128)) { u64::MAX } else { tb as u64 };
+        if (reserves_added > 0) {
+            let add = if (reserves_added > (u64::MAX as u128)) { u64::MAX } else { reserves_added as u64 };
+            pool.total_reserves = pool.total_reserves + add;
+        };
+        pool.last_update_ms = now;
+        let emitted_delta = if (delta_borrows > (u64::MAX as u128)) { u64::MAX } else { delta_borrows as u64 };
+        let emitted_res = if (reserves_added > (u64::MAX as u128)) { u64::MAX } else { reserves_added as u64 };
+        event::emit(InterestAccrued { asset: pool.asset.clone(), dt_ms: dt, new_borrow_index: pool.borrow_index, new_supply_index: pool.supply_index, delta_borrows: emitted_delta, reserves_added: emitted_res, timestamp: now });
+    }
+
+    /*******************************
+    * Aggregate capacity helper: sum(collateral_value * LTV)
+    *******************************/
+    public fun compute_ltv_capacity_usd(
+        acct: &UserAccount,
+        reg: &LendingRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        symbols: vector<String>,
+        prices: vector<&PriceInfoObject>
+    ): u128 {
+        let mut cap: u128 = 0;
+        let mut i = 0;
+        while (i < vector::length(&symbols)) {
+            let sym = *vector::borrow(&symbols, i);
+            if (Table::contains(&acct.supply_balances, &sym) && Table::contains(&reg.supported_assets, &sym)) {
+                let a = Table::borrow(&reg.supported_assets, &sym);
+                if (a.is_collateral) {
+                    let units = *Table::borrow(&acct.supply_balances, &sym) as u128;
+                    let p = *vector::borrow(&prices, i);
+                    let px = get_price_scaled_1e6(oracle_cfg, clock, p) as u128;
+                    cap = cap + (units * px * (a.ltv_bps as u128)) / 10_000u128;
+                }
+            };
+            i = i + 1;
+        };
+        cap
+    }
+
+    /*******************************
+    * Account health check (coins) – off-chain should pass matching symbols/prices
+    *******************************/
+    public fun check_account_health_coins(
+        acct: &UserAccount,
+        reg: &LendingRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        symbols: vector<String>,
+        prices: vector<&PriceInfoObject>
+    ): (u128, u128, bool) {
+        let mut total_coll: u128 = 0;
+        let mut total_debt: u128 = 0;
+        let mut i = 0;
+        while (i < vector::length(&symbols)) {
+            let sym = *vector::borrow(&symbols, i);
+            let p = *vector::borrow(&prices, i);
+            let px = get_price_scaled_1e6(oracle_cfg, clock, p) as u128; // micro-USD
+            if (Table::contains(&acct.supply_balances, &sym)) {
+                let units = *Table::borrow(&acct.supply_balances, &sym) as u128;
+                // only count as collateral if allowed
+                if (Table::contains(&reg.supported_assets, &sym)) {
+                    let a = Table::borrow(&reg.supported_assets, &sym);
+                    if (a.is_collateral) { total_coll = total_coll + units * px; };
+                }
+            };
+            if (Table::contains(&acct.borrow_balances, &sym)) {
+                let units = *Table::borrow(&acct.borrow_balances, &sym) as u128;
+                total_debt = total_debt + units * px;
+            };
+            i = i + 1;
+        };
+        (total_coll, total_debt, total_coll >= total_debt)
+    }
+
+    /*******************************
+    * Read-only helpers (for bots/indexers)
+    *******************************/
+    public fun list_supported_assets(reg: &LendingRegistry): vector<String> { Table::keys(&reg.supported_assets) }
+
+    public fun get_asset_config(reg: &LendingRegistry, symbol: &String): &AssetConfig { Table::borrow(&reg.supported_assets, symbol) }
+
+    public fun list_pools(reg: &LendingRegistry): vector<String> { Table::keys(&reg.lending_pools) }
+
+    public fun get_coin_oracle_feed(reg: &LendingRegistry, symbol: &String): vector<u8> {
+        if (Table::contains(&reg.coin_oracle_feeds, symbol)) { Table::borrow(&reg.coin_oracle_feeds, symbol).clone() } else { b"".to_string().into_bytes() }
+    }
+
+    public fun list_coin_oracle_feeds(reg: &LendingRegistry): vector<(String, vector<u8>)> {
+        let syms = Table::keys(&reg.coin_oracle_feeds);
+        let mut out = vector::empty<(String, vector<u8>)>();
+        let mut i = 0;
+        while (i < vector::length(&syms)) {
+            let s = *vector::borrow(&syms, i);
+            let f = Table::borrow(&reg.coin_oracle_feeds, s).clone();
+            vector::push_back(&mut out, (s.clone(), f));
+            i = i + 1;
+        };
+        out
+    }
+
+    public fun protocol_metrics(reg: &LendingRegistry, pools_usdc: vector<&LendingPool<USDC>>): (u128, u128, u128) {
+        let mut total_supply_usdc: u128 = 0;
+        let mut total_borrows_usdc: u128 = 0;
+        let mut total_reserves_usdc: u128 = 0;
+        let mut i = 0;
+        while (i < vector::length(&pools_usdc)) {
+            let p = *vector::borrow(&pools_usdc, i);
+            total_supply_usdc = total_supply_usdc + (p.total_supply as u128);
+            total_borrows_usdc = total_borrows_usdc + (p.total_borrows as u128);
+            total_reserves_usdc = total_reserves_usdc + (p.total_reserves as u128);
+            i = i + 1;
+        };
+        (total_supply_usdc, total_borrows_usdc, total_reserves_usdc)
+    }
+
+    /*******************************
+    * Liquidation (coins): liquidator repays debtor's debt asset and seizes collateral
+    *******************************/
+    public entry fun liquidate_coin_position<Debt, Coll>(
+        reg: &LendingRegistry,
+        debt_pool: &mut LendingPool<Debt>,
+        coll_pool: &mut LendingPool<Coll>,
+        debtor: &mut UserAccount,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        debt_price: &PriceInfoObject,
+        coll_price: &PriceInfoObject,
+        mut payment: Coin<Debt>,
+        repay_amount: u64,
+        // Optional internal routing flags could be added here
+        ctx: &mut TxContext
+    ): Coin<Coll> {
+        // Enforce same-asset liquidations: debt and collateral symbols must match
+        assert!(debt_pool.asset == coll_pool.asset, E_SYMBOL_MISMATCH);
+        assert!(repay_amount > 0, E_ZERO_AMOUNT);
+        let have = Coin::value(&payment);
+        assert!(have >= repay_amount, E_INSUFFICIENT_LIQUIDITY);
+        // Position must be below liquidation threshold for chosen collateral
+        let (tot_coll, tot_debt, _) = check_account_health_coins(
+            debtor,
+            reg,
+            oracle_cfg,
+            clock,
+            // caller should pass full symbols/prices set off-chain; for simplicity, require two here
+            vector::empty<String>(),
+            vector::empty<&PriceInfoObject>()
+        );
+        if (tot_debt > 0) {
+            let ratio_bps = ((tot_coll * 10_000u128) / tot_debt) as u64;
+            let coll_sym = coll_pool.asset.clone();
+            let coll_cfg = Table::borrow(&reg.supported_assets, &coll_sym);
+            assert!(ratio_bps < coll_cfg.liq_threshold_bps, E_VIOLATION);
+        };
+        // debtor must have outstanding debt in this asset
+        let debt_sym = debt_pool.asset.clone();
+        assert!(Table::contains(&debtor.borrow_balances, &debt_sym), E_UNKNOWN_ASSET);
+        let cur_debt = *Table::borrow(&debtor.borrow_balances, &debt_sym);
+        assert!(repay_amount <= cur_debt, E_OVER_REPAY);
+        // apply payment into pool
+        let exact_pay = Coin::split(&mut payment, repay_amount, ctx);
+        let pay_bal = Coin::into_balance(exact_pay);
+        BalanceMod::join(&mut debt_pool.cash, pay_bal);
+        // refund leftover to liquidator
+        transfer::public_transfer(payment, ctx.sender());
+        debt_pool.total_borrows = debt_pool.total_borrows - repay_amount;
+        let new_debt = cur_debt - repay_amount;
+        Table::insert(&mut debtor.borrow_balances, debt_sym.clone(), new_debt);
+        // compute seize amount in collateral units
+        let pd = get_price_scaled_1e6(oracle_cfg, clock, debt_price) as u128;
+        let pc = get_price_scaled_1e6(oracle_cfg, clock, coll_price) as u128;
+        assert!(pd > 0 && pc > 0, E_BAD_PRICE);
+        let repay_val = (repay_amount as u128) * pd;
+        let coll_sym = coll_pool.asset.clone();
+        let coll_cfg = Table::borrow(&reg.supported_assets, &coll_sym);
+        let bonus_bps = coll_cfg.liq_penalty_bps as u128;
+        let seize_val = repay_val + (repay_val * bonus_bps) / 10_000u128;
+        let mut seize_units = seize_val / pc;
+        if (seize_units * pc < seize_val) { seize_units = seize_units + 1; } // ceil
+        let seize_u64 = if (seize_units > (u64::MAX as u128)) { u64::MAX } else { seize_units as u64 };
+        // check debtor has collateral in this asset
+        assert!(Table::contains(&debtor.supply_balances, &coll_sym), E_NO_COLLATERAL);
+        let cur_coll = *Table::borrow(&debtor.supply_balances, &coll_sym);
+        assert!(cur_coll >= seize_u64, E_INSUFFICIENT_LIQUIDITY);
+        // ensure pool has liquidity to deliver
+        let cash_coll = BalanceMod::value(&coll_pool.cash);
+        assert!(cash_coll >= seize_u64, E_INSUFFICIENT_LIQUIDITY);
+        // update balances
+        let new_coll = cur_coll - seize_u64;
+        Table::insert(&mut debtor.supply_balances, coll_sym.clone(), new_coll);
+        coll_pool.total_supply = coll_pool.total_supply - seize_u64;
+        // send seized collateral to liquidator
+        let out_bal = BalanceMod::split(&mut coll_pool.cash, seize_u64);
+        let out = Coin::from_balance(out_bal, ctx);
+        out
+    }
+
+    /*******************************
+    * Reserve skim to Treasury (USDC-only)
+    *******************************/
+    public entry fun skim_reserves_to_treasury_usdc(
+        _reg: &LendingRegistry,
+        pool_usdc: &mut LendingPool<USDC>,
+        treasury: &mut Treasury,
+        amount: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        let cash = BalanceMod::value(&pool_usdc.cash);
+        assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
+        assert!(pool_usdc.total_reserves >= amount, E_INSUFFICIENT_LIQUIDITY);
+        let out_bal = BalanceMod::split(&mut pool_usdc.cash, amount);
+        let out = Coin::from_balance(out_bal, ctx);
+        unxversal::treasury::deposit_usdc(treasury, out, b"lending_reserve".to_string(), ctx.sender(), ctx);
+        pool_usdc.total_reserves = pool_usdc.total_reserves - amount;
     }
 
     /*******************************
@@ -350,6 +767,321 @@ module unxversal::lending {
         let principal_bal = Coin::into_balance(principal);
         BalanceMod::join(&mut pool.cash, principal_bal);
         event::emit(FlashLoanRepaid { asset: proof.asset, amount: proof.amount, fee: proof.fee, repayer: ctx.sender(), timestamp: time::now_ms() });
+    }
+
+    /*******************************
+    * Synthetic Flash Loans – mint & burn within same tx (hot potato)
+    *******************************/
+    public entry fun initiate_synth_flash_loan(
+        reg: &LendingRegistry,
+        synth_reg: &mut SynthRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        price_info: &PriceInfoObject,
+        vault: &mut CollateralVault,
+        symbol: String,
+        amount_units: u64,
+        unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &PriceInfoObject,
+        treasury: &mut Treasury,
+        ctx: &mut TxContext
+    ): SynthFlashLoan {
+        assert!(amount_units > 0, E_ZERO_AMOUNT);
+        // mint debt units to the borrower's vault (exposure)
+        Synth::mint_synthetic(
+            vault,
+            synth_reg,
+            oracle_cfg,
+            clock,
+            price_info,
+            symbol.clone(),
+            amount_units,
+            unxv_payment,
+            unxv_price,
+            treasury,
+            ctx
+        );
+        let fee_units = (amount_units * reg.global_params.flash_loan_fee_bps) / 10_000;
+        event::emit(SynthFlashLoanInitiated { symbol: symbol.clone(), amount_units, fee_units, borrower: ctx.sender(), timestamp: time::now_ms() });
+        SynthFlashLoan { symbol, amount_units, fee_units }
+    }
+
+    public entry fun repay_synth_flash_loan(
+        _reg: &LendingRegistry,
+        synth_reg: &mut SynthRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        price_info: &PriceInfoObject,
+        vault: &mut CollateralVault,
+        loan: SynthFlashLoan,
+        unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &PriceInfoObject,
+        treasury: &mut Treasury,
+        ctx: &mut TxContext
+    ) {
+        let SynthFlashLoan { symbol, amount_units, fee_units } = loan;
+        let total_burn = amount_units + fee_units;
+        // burn exactly amount + fee units from the vault exposure
+        Synth::burn_synthetic(
+            vault,
+            synth_reg,
+            oracle_cfg,
+            clock,
+            price_info,
+            symbol.clone(),
+            total_burn,
+            unxv_payment,
+            unxv_price,
+            treasury,
+            ctx
+        );
+        event::emit(SynthFlashLoanRepaid { symbol, amount_units, fee_units, repayer: ctx.sender(), timestamp: time::now_ms() });
+    }
+
+    /*******************************
+    * Synth liquidity and durable borrow/repay (vault-managed)
+    *******************************/
+    public entry fun create_synth_market(
+        _admin: &LendingAdminCap,
+        reg: &mut LendingRegistry,
+        symbol: String,
+        reserve_factor_bps: u64,
+        ctx: &TxContext
+    ) {
+        assert_is_admin(reg, ctx.sender());
+        assert!(!Table::contains(&reg.synth_markets, &symbol), E_ASSET_EXISTS);
+        let m = SynthMarket { symbol: symbol.clone(), reserve_factor_bps, total_borrow_units: 0, total_liquidity_usdc: 0, reserve_units: 0 };
+        Table::insert(&mut reg.synth_markets, symbol, m);
+        // Display for SynthMarket
+        let publisher = package::claim(package::Publisher { id: object::new(ctx) }, ctx);
+        let mut disp = display::new<SynthMarket>(&publisher, ctx);
+        disp.add(b"name".to_string(), b"Unxversal Synth Market".to_string());
+        disp.add(b"symbol".to_string(), b"{symbol}".to_string());
+        disp.add(b"reserve_factor_bps".to_string(), b"{reserve_factor_bps}".to_string());
+        disp.add(b"total_borrow_units".to_string(), b"{total_borrow_units}".to_string());
+        disp.add(b"total_liquidity_usdc".to_string(), b"{total_liquidity_usdc}".to_string());
+        disp.update_version();
+        transfer::public_transfer(disp, ctx.sender());
+        transfer::public_transfer(publisher, ctx.sender());
+    }
+
+    public entry fun supply_synth_liquidity(
+        reg: &LendingRegistry,
+        market_symbol: String,
+        pool_usdc: &mut LendingPool<USDC>,
+        acct: &mut UserAccount,
+        mut usdc: Coin<USDC>,
+        amount: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(!reg.paused, 1000);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        assert!(Table::contains(&reg.synth_markets, &market_symbol), E_UNKNOWN_ASSET);
+        let have = Coin::value(&usdc);
+        assert!(have >= amount, E_ZERO_AMOUNT);
+        let exact = Coin::split(&mut usdc, amount, ctx);
+        transfer::public_transfer(usdc, ctx.sender());
+        let bal = Coin::into_balance(exact);
+        BalanceMod::join(&mut pool_usdc.cash, bal);
+        pool_usdc.total_supply = pool_usdc.total_supply + amount;
+        let cur = if Table::contains(&acct.synth_liquidity_usdc, &market_symbol) { *Table::borrow(&acct.synth_liquidity_usdc, &market_symbol) } else { 0 };
+        let newb = cur + amount;
+        Table::insert(&mut acct.synth_liquidity_usdc, market_symbol.clone(), newb);
+        let mut m = Table::borrow_mut(&mut (reg as &LendingRegistry).synth_markets, &market_symbol);
+        m.total_liquidity_usdc = m.total_liquidity_usdc + amount;
+        acct.last_update_ms = time::now_ms();
+        event::emit(SynthLiquiditySupplied { user: ctx.sender(), symbol: market_symbol, amount_usdc: amount, new_balance_usdc: newb, timestamp: time::now_ms() });
+    }
+
+    public entry fun withdraw_synth_liquidity(
+        reg: &LendingRegistry,
+        market_symbol: String,
+        pool_usdc: &mut LendingPool<USDC>,
+        acct: &mut UserAccount,
+        amount: u64,
+        ctx: &mut TxContext
+    ): Coin<USDC> {
+        assert!(!reg.paused, 1000);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
+        assert!(Table::contains(&acct.synth_liquidity_usdc, &market_symbol), E_UNKNOWN_ASSET);
+        let cur = *Table::borrow(&acct.synth_liquidity_usdc, &market_symbol);
+        assert!(cur >= amount, E_INSUFFICIENT_LIQUIDITY);
+        let cash = BalanceMod::value(&pool_usdc.cash);
+        assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
+        let out_bal = BalanceMod::split(&mut pool_usdc.cash, amount);
+        let out = Coin::from_balance(out_bal, ctx);
+        let newb = cur - amount;
+        Table::insert(&mut acct.synth_liquidity_usdc, market_symbol.clone(), newb);
+        pool_usdc.total_supply = pool_usdc.total_supply - amount;
+        let mut m = Table::borrow_mut(&mut (reg as &LendingRegistry).synth_markets, &market_symbol);
+        m.total_liquidity_usdc = m.total_liquidity_usdc - amount;
+        acct.last_update_ms = time::now_ms();
+        event::emit(SynthLiquidityWithdrawn { user: ctx.sender(), symbol: market_symbol, amount_usdc: amount, remaining_balance_usdc: newb, timestamp: time::now_ms() });
+        out
+    }
+
+    public entry fun borrow_synth(
+        synth_reg: &mut SynthRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        price_info: &PriceInfoObject,
+        vault: &mut CollateralVault,
+        reg: &mut LendingRegistry,
+        acct: &mut UserAccount,
+        symbol: String,
+        units: u64,
+        unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &PriceInfoObject,
+        treasury: &mut Treasury,
+        ctx: &mut TxContext
+    ) {
+        assert!(!reg.paused, 1000);
+        assert!(units > 0, E_ZERO_AMOUNT);
+        assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
+        assert!(Table::contains(&reg.synth_markets, &symbol), E_UNKNOWN_ASSET);
+        // Health gate: use synthetics check to ensure vault is healthy before minting
+        // (delegate to synthetics' own ratio checks inside mint_synthetic)
+        Synth::mint_synthetic(
+            vault,
+            synth_reg,
+            oracle_cfg,
+            clock,
+            price_info,
+            symbol.clone(),
+            units,
+            unxv_payment,
+            unxv_price,
+            treasury,
+            ctx
+        );
+        let cur = if Table::contains(&acct.synth_borrow_units, &symbol) { *Table::borrow(&acct.synth_borrow_units, &symbol) } else { 0 };
+        let newb = cur + units;
+        Table::insert(&mut acct.synth_borrow_units, symbol.clone(), newb);
+        let mut m = Table::borrow_mut(&mut reg.synth_markets, &symbol);
+        m.total_borrow_units = m.total_borrow_units + units;
+        acct.last_update_ms = time::now_ms();
+        event::emit(SynthBorrowed { user: ctx.sender(), symbol, units, new_borrow_units: newb, timestamp: time::now_ms() });
+    }
+
+    public entry fun repay_synth(
+        synth_reg: &mut SynthRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        price_info: &PriceInfoObject,
+        vault: &mut CollateralVault,
+        reg: &mut LendingRegistry,
+        acct: &mut UserAccount,
+        symbol: String,
+        units: u64,
+        unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &PriceInfoObject,
+        treasury: &mut Treasury,
+        ctx: &mut TxContext
+    ) {
+        assert!(!reg.paused, 1000);
+        assert!(units > 0, E_ZERO_AMOUNT);
+        assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
+        assert!(Table::contains(&acct.synth_borrow_units, &symbol), E_UNKNOWN_ASSET);
+        let cur = *Table::borrow(&acct.synth_borrow_units, &symbol);
+        assert!(units <= cur, E_OVER_REPAY);
+        Synth::burn_synthetic(
+            vault,
+            synth_reg,
+            oracle_cfg,
+            clock,
+            price_info,
+            symbol.clone(),
+            units,
+            unxv_payment,
+            unxv_price,
+            treasury,
+            ctx
+        );
+        let newb = cur - units;
+        Table::insert(&mut acct.synth_borrow_units, symbol.clone(), newb);
+        let mut m = Table::borrow_mut(&mut reg.synth_markets, &symbol);
+        m.total_borrow_units = m.total_borrow_units - units;
+        acct.last_update_ms = time::now_ms();
+        event::emit(SynthRepaid { user: ctx.sender(), symbol, units, remaining_borrow_units: newb, timestamp: time::now_ms() });
+    }
+
+    /*******************************
+    * Accrual for synth borrows (simple linear accrual on call)
+    *******************************/
+    public entry fun accrue_synth_market(
+        reg: &mut LendingRegistry,
+        symbol: String,
+        dt_ms: u64,
+        apr_bps: u64
+    ) {
+        assert!(!reg.paused, 1000);
+        let mut m = Table::borrow_mut(&mut reg.synth_markets, &symbol);
+        if (m.total_borrow_units == 0 || dt_ms == 0 || apr_bps == 0) { return; };
+        let year_ms = 31_536_000_000u128;
+        let delta = ((m.total_borrow_units as u128) * (apr_bps as u128) * (dt_ms as u128)) / (10_000u128 * year_ms);
+        if (delta == 0) { return; };
+        let rf = m.reserve_factor_bps as u128;
+        let to_reserve = (delta * rf) / 10_000u128;
+        let to_debt = delta - to_reserve;
+        m.total_borrow_units = m.total_borrow_units + (to_debt as u64);
+        m.reserve_units = m.reserve_units + (to_reserve as u64);
+        event::emit(SynthAccrued { symbol, delta_units: delta as u64, reserve_units: to_reserve as u64, timestamp: time::now_ms() });
+    }
+
+    /*******************************
+    * Liquidation for synth borrows (vault-based): repay units and seize USDC from market
+    *******************************/
+    public entry fun liquidate_synth(
+        reg: &mut LendingRegistry,
+        synth_reg: &mut SynthRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        price_synth: &PriceInfoObject,
+        price_usdc: &PriceInfoObject,
+        vault: &mut CollateralVault,
+        pool_usdc: &mut LendingPool<USDC>,
+        debtor: &mut UserAccount,
+        symbol: String,
+        repay_units: u64,
+        bonus_bps: u64,
+        ctx: &mut TxContext
+    ): Coin<USDC> {
+        assert!(!reg.paused, 1000);
+        assert!(repay_units > 0, E_ZERO_AMOUNT);
+        assert!(Table::contains(&debtor.synth_borrow_units, &symbol), E_UNKNOWN_ASSET);
+        let cur = *Table::borrow(&debtor.synth_borrow_units, &symbol);
+        assert!(repay_units <= cur, E_OVER_REPAY);
+        // Burn exposure on debtor
+        Synth::burn_synthetic(
+            vault,
+            synth_reg,
+            oracle_cfg,
+            clock,
+            price_synth,
+            symbol.clone(),
+            repay_units,
+            vector::empty<Coin<UNXV>>(),
+            price_usdc,
+            &mut *(&mut (object::borrow_mut::<Treasury>(reg as &LendingRegistry as &LendingRegistry) ) ),
+            ctx
+        );
+        let newb = cur - repay_units;
+        Table::insert(&mut debtor.synth_borrow_units, symbol.clone(), newb);
+        let mut m = Table::borrow_mut(&mut reg.synth_markets, &symbol);
+        m.total_borrow_units = m.total_borrow_units - repay_units;
+        // Determine USDC to seize (value + bonus) from synth market liquidity
+        let px = get_price_scaled_1e6(oracle_cfg, clock, price_synth) as u128; // micro-USD per unit
+        let val = (repay_units as u128) * px;
+        let seize_val = val + (val * (bonus_bps as u128)) / 10_000u128;
+        let seize_units = if (seize_val > (u64::MAX as u128)) { u64::MAX } else { seize_val as u64 };
+        // Ensure pool has USDC liquidity
+        let cash = BalanceMod::value(&pool_usdc.cash);
+        assert!(cash >= seize_units, E_INSUFFICIENT_LIQUIDITY);
+        let out_bal = BalanceMod::split(&mut pool_usdc.cash, seize_units);
+        let out = Coin::from_balance(out_bal, ctx);
+        event::emit(SynthLiquidated { symbol, repay_units, usdc_seized: seize_units, bot_reward: ((seize_units as u128) - val) as u64, liquidator: ctx.sender(), timestamp: time::now_ms() });
+        out
     }
 }
 

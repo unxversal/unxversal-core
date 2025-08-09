@@ -1020,6 +1020,42 @@ module unxversal::synthetics {
     }
 
     /*******************************
+    * Read-only helpers (bots/indexers)
+    *******************************/
+    /// List all listed synthetic symbols
+    public fun list_synthetics(registry: &SynthRegistry): vector<String> { Table::keys(&registry.synthetics) }
+
+    /// Get read-only reference to a listed synthetic asset
+    public fun get_synthetic(registry: &SynthRegistry, symbol: &String): &SyntheticAsset { Table::borrow(&registry.synthetics, symbol) }
+
+    /// Get oracle feed id bytes for a symbol (empty if missing)
+    public fun get_oracle_feed_bytes(registry: &SynthRegistry, symbol: &String): vector<u8> {
+        if (Table::contains(&registry.oracle_feeds, symbol)) { Table::borrow(&registry.oracle_feeds, symbol).clone() } else { b"".to_string().into_bytes() }
+    }
+
+    /// Compute collateral/debt values for a vault and return ratio bps
+    public fun get_vault_values(
+        vault: &CollateralVault,
+        registry: &SynthRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        price: &PriceInfoObject
+    ): (u64, u64, u64) {
+        let collateral_value = Coin::value(&vault.collateral); // USDC units
+        let keys = Table::keys(&vault.synthetic_debt);
+        if 0 == vector::length(&keys) { return (collateral_value, 0, u64::MAX); };
+        let sym = *vector::borrow(&keys, 0);
+        let debt_units = *Table::borrow(&vault.synthetic_debt, sym);
+        let px = get_latest_price(oracle_cfg, clock, price) as u64;
+        let debt_value = debt_units * px;
+        let ratio = if debt_value == 0 { u64::MAX } else { (collateral_value * 10_000) / debt_value };
+        (collateral_value, debt_value, ratio)
+    }
+
+    /// Get registry treasury ID
+    public fun get_treasury_id(registry: &SynthRegistry): ID { registry.treasury_id }
+
+    /*******************************
     * Liquidation – seize collateral when ratio < threshold
     *******************************/
     public entry fun liquidate_vault(

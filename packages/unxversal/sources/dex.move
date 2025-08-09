@@ -257,6 +257,17 @@ module unxversal::dex {
         event::emit(CoinOrderMatched { buy_order_id: object::id(buy), sell_order_id: object::id(sell), price: trade_price, size_base: fill, taker_is_buyer, fee_paid_usdc: usdc_fee_to_collect, unxv_discount_applied: discount_applied, maker_rebate_usdc: maker_rebate, timestamp: time::now_ms() });
     }
 
+    /*******************************
+    * Read-only helpers (bots/indexers)
+    *******************************/
+    public fun get_config_treasury_id(cfg: &DexConfig): ID { cfg.treasury_id }
+
+    public fun get_config_fees(cfg: &DexConfig): (u64, u64, u64, bool) { (cfg.trade_fee_bps, cfg.unxv_discount_bps, cfg.maker_rebate_bps, cfg.paused) }
+
+    public fun order_buy_info<Base>(o: &CoinOrderBuy<Base>): (address, u64, u64, u64, u64, u64) { (o.owner, o.price, o.remaining_base, o.created_at_ms, o.expiry_ms, Coin::value(&o.escrow_usdc)) }
+
+    public fun order_sell_info<Base>(o: &CoinOrderSell<Base>): (address, u64, u64, u64, u64, u64) { (o.owner, o.price, o.remaining_base, o.created_at_ms, o.expiry_ms, Coin::value(&o.escrow_base)) }
+
 }
 
 
