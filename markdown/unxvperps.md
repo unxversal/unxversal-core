@@ -1,4 +1,76 @@
-# UnXversal Perpetuals Protocol Design
+# UnXversal Perpetuals – Final Architecture (Aligned with Core Protocols)
+
+This revision aligns Perpetuals with the production patterns used in `synthetics`, `dex`, `options`, `futures`, and `gas_futures`:
+
+- Centralized admin via `synthetics::SynthRegistry` (single source of truth; admin setters require `AdminCap` and `ctx.sender()` allow-list).
+- Off-chain orderbook and matching; on-chain trustless enforcement (no AMMs/DeepBook logic on-chain).
+- Minimal shared objects and owned position objects; no large on-chain maps or O(N) sweeps.
+- Fees to central `treasury`, with admin-configurable UNXV discount (oracle-priced), maker rebate, and bot reward splits.
+- Oracle-normalized pricing (micro-USD fixed-point). Pause guards at registry/market level.
+
+## Objects and Permissioning
+
+- `PerpsRegistry` (shared):
+  - Fees/config: `trade_fee_bps`, `maker_rebate_bps`, `unxv_discount_bps`, `trade_bot_reward_bps`.
+  - Funding config: `funding_interval_ms`, `max_funding_rate_bps`, `premium_weight_bps` (admin-set).
+  - Listing throttle: `min_list_interval_ms`.
+  - Pause: `paused` and `treasury_id`.
+  - Admin setters update all of the above.
+
+- `PerpMarket` (shared per market):
+  - Fields: `symbol`, `underlying`, `tick_size_micro_usd`, `paused`.
+  - Funding state: `last_funding_ms`, `funding_rate_bps` (current), lightweight metrics `(open_interest, volume_usdc, last_price)`.
+  - Admin setters for per-market overrides (optional), and pause/resume.
+
+- `PerpPosition` (owned by user):
+  - `side` (0 long, 1 short), `size`, `avg_entry_price_micro_usd`, `margin: Coin<USDC>`, `accumulated_pnl`, `last_funding_ms`, `funding_accumulator_i64`.
+
+Permissioning: Admin-whitelisted underlyings; market listing is permissionless with cooldown by default (you can choose admin-only listing by toggling policy in the registry config).
+
+## Trading and Funding Flow
+
+1) Off-chain matching → `record_fill` on-chain:
+   - Inputs: `price`, `size`, `taker_is_buyer`, `maker`, `min_price`, `max_price`, UNXV/USD price object.
+   - Asserts tick and slippage bounds, updates metrics, applies trade fees with oracle-priced UNXV discount, maker rebate, and bot reward split; deposits net to `treasury`.
+
+2) Open/close positions:
+   - `open_position`: locks USDC margin Coin based on initial margin bps from market/registry; refunds remainder; emits `PositionOpened` (includes `ctx.sponsor()` if present).
+   - `close_position`: realizes variation PnL on the closed portion, refunds proportional margin, applies a close fee to `treasury`, emits `VariationMarginApplied` and `PositionClosed`.
+
+3) Funding (perpetuals’ special sauce):
+   - A funding bot periodically calls `apply_funding_for_position` (or batch variant) with index price (oracle) and market last price/premium.
+   - Funding rate is bounded by `max_funding_rate_bps` and computed from premium × `premium_weight_bps` over `funding_interval_ms`.
+   - For each position, funding is accrued to `funding_accumulator_i64` and applied to margin (credit/debit). Events emitted for transparency.
+
+4) Liquidation:
+   - If position equity < maintenance margin bps, a bot calls `liquidate_position`. The position’s margin is seized; a slice goes to the bot as reward; remainder to `treasury`; OI reduced; events emitted.
+
+No expiration or batch settlement (perps are perpetual). All funding/variation margin is continuous via bot calls, identical trust model as Options/Futures.
+
+## Pricing & Oracle
+
+- Index price: Pyth index feed for `underlying` → normalized to micro-USD via core `oracle` module.
+- Mark/trade price: last fill price from `record_fill` (micro-USD) stored in market metrics.
+- All math is integer fixed-point (micro-USD) with u128 intermediates in oracle helpers.
+
+## Fees & UNXV
+
+- `trade_fee_bps` with maker rebate and `unxv_discount_bps` can be used in `record_fill`.
+- UNXV discount is priced by UNXV/USD oracle (micro-USD), paying the exact UNXV amount; remainder refunded; net fee to `treasury`.
+- Funding carries no fee by default, but you can configure a small `trade_bot_reward_bps` for clearers.
+
+## Events & Read-only
+
+- Events: `MarketListed`, `FillRecorded`, `PositionOpened`, `PositionClosed`, `VariationMarginApplied`, `FundingApplied`, `MarginCall`, `Liquidated`, `PausedToggled`.
+- Read-only: registry fee/funding params, market metrics, position info.
+
+## Sponsored Transactions
+
+- Sponsoring is off-chain (dual-signed). Positions can be opened in sponsored txs; we emit the sponsor address in `PositionOpened` for analytics. The hedge and all transfers remain trustless on-chain.
+
+---
+
+Legacy/expanded design content follows (kept for reference). The final on-chain implementation will follow the architecture above (orderbook off-chain; trustless on-chain fills, funding, margin, liquidation, and fees routed to treasury).
 
 > **Note:** For the latest permissioning, architecture, and on-chain/off-chain split, see [MOVING_FORWARD.md](../MOVING_FORWARD.md). This document has been updated to reflect the current policy: **market listing/creation is permissioned (admin only); only the admin can add new perpetual markets to the protocol. DeepBook itself is permissionless, but the Perpetuals registry is permissioned.**
 

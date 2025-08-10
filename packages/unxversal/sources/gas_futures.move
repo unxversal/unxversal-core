@@ -46,6 +46,8 @@ module unxversal::gas_futures {
         settlement_bot_reward_bps: u64,
         min_list_interval_ms: u64,
         dispute_window_ms: u64,
+        default_init_margin_bps: u64,
+        default_maint_margin_bps: u64,
         last_list_ms: Table<String, u64>,
         treasury_id: ID,
     }
@@ -64,6 +66,8 @@ module unxversal::gas_futures {
         is_expired: bool,
         settlement_price_micro_usd_per_gas: u64,
         settled_at_ms: u64,
+        init_margin_bps: u64,
+        maint_margin_bps: u64,
         // Metrics
         open_interest: u64,
         volume_premium_usdc: u64,
@@ -114,6 +118,8 @@ module unxversal::gas_futures {
             settlement_bot_reward_bps: 0,
             min_list_interval_ms: 60_000,
             dispute_window_ms: 60_000,
+            default_init_margin_bps: 1_000,
+            default_maint_margin_bps: 600,
             last_list_ms: Table::new<String, u64>(ctx),
             treasury_id: object::id(&Treasury { id: object::new(ctx), usdc: Coin::zero<usdc::usdc::USDC>(ctx), unxv: Coin::zero<unxversal::unxv::UNXV>(ctx), cfg: unxversal::treasury::TreasuryCfg { unxv_burn_bps: 0 } }),
         };
@@ -143,7 +149,7 @@ module unxversal::gas_futures {
     /*******************************
     * Listing (permissionless with cooldown)
     *******************************/
-    public entry fun list_gas_futures(reg: &mut GasFuturesRegistry, symbol: String, contract_size_gas_units: u64, tick_size_micro_usd_per_gas: u64, expiry_ms: u64, ctx: &mut TxContext) {
+    public entry fun list_gas_futures(reg: &mut GasFuturesRegistry, symbol: String, contract_size_gas_units: u64, tick_size_micro_usd_per_gas: u64, expiry_ms: u64, init_margin_bps: u64, maint_margin_bps: u64, ctx: &mut TxContext) {
         assert!(!reg.paused, E_PAUSED);
         let now = time::now_ms();
         let last = if (Table::contains(&reg.last_list_ms, &symbol)) { *Table::borrow(&reg.last_list_ms, &symbol) } else { 0 };
@@ -161,6 +167,8 @@ module unxversal::gas_futures {
             is_expired: false,
             settlement_price_micro_usd_per_gas: 0,
             settled_at_ms: 0,
+            init_margin_bps: if (init_margin_bps > 0) { init_margin_bps } else { reg.default_init_margin_bps },
+            maint_margin_bps: if (maint_margin_bps > 0) { maint_margin_bps } else { reg.default_maint_margin_bps },
             open_interest: 0,
             volume_premium_usdc: 0,
             last_trade_premium_micro_usd_per_gas: 0,
@@ -173,6 +181,12 @@ module unxversal::gas_futures {
 
     public entry fun pause_gas_contract(_admin: &AdminCap, synth_reg: &SynthRegistry, market: &mut GasFuturesContract, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); market.paused = true; }
     public entry fun resume_gas_contract(_admin: &AdminCap, synth_reg: &SynthRegistry, market: &mut GasFuturesContract, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); market.paused = false; }
+
+    public entry fun set_contract_margins(_admin: &AdminCap, synth_reg: &SynthRegistry, market: &mut GasFuturesContract, init_margin_bps: u64, maint_margin_bps: u64, ctx: &TxContext) {
+        assert_is_admin(synth_reg, ctx.sender());
+        market.init_margin_bps = init_margin_bps;
+        market.maint_margin_bps = maint_margin_bps;
+    }
 
     /*******************************
     * Price math – convert RGP×SUI → micro‑USD per gas
@@ -212,8 +226,7 @@ module unxversal::gas_futures {
         assert!(size > 0, E_MIN_INTERVAL);
         // Initial margin as % of notional: notional = size * contract_size_gas_units * price
         let notional = size * market.contract_size_gas_units * entry_price_micro_usd_per_gas;
-        // Use 10% init by default via external risk policy? Keep 10% implicit here; bots enforce off‑chain if needed.
-        let init_req = notional / 10; // 10% in micro‑USD units ≈ USDC micro‑USD, scale match
+        let init_req = (notional * market.init_margin_bps) / 10_000;
         assert!(Coin::value(&margin) >= init_req, E_MIN_INTERVAL);
         let locked = Coin::split(&mut margin, init_req, ctx);
         transfer::public_transfer(margin, ctx.sender());
@@ -268,31 +281,47 @@ module unxversal::gas_futures {
         maker: address,
         mut unxv_payment: vector<Coin<unxversal::unxv::UNXV>>,
         sui_usd_price: &PriceInfoObject,
+        unxv_usd_price: &PriceInfoObject,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         treasury: &mut Treasury,
         oi_increase: bool,
+        min_price_micro_usd_per_gas: u64,
+        max_price_micro_usd_per_gas: u64,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused && market.is_active && !market.paused, E_PAUSED);
         assert!(size > 0, E_MIN_INTERVAL);
         // Enforce tick
         assert!(price_micro_usd_per_gas % market.tick_size_micro_usd_per_gas == 0, E_MIN_INTERVAL);
+        // Slippage bounds
+        assert!(price_micro_usd_per_gas >= min_price_micro_usd_per_gas && price_micro_usd_per_gas <= max_price_micro_usd_per_gas, E_MIN_INTERVAL);
         let notional = size * market.contract_size_gas_units * price_micro_usd_per_gas;
         // Fees
         let trade_fee = (notional * reg.trade_fee_bps) / 10_000;
         let discount_usdc = (trade_fee * reg.unxv_discount_bps) / 10_000;
         let mut discount_applied = false;
         if (discount_usdc > 0 && vector::length(&unxv_payment) > 0) {
-            let sui_price = get_price_scaled_1e6(oracle_cfg, clock, sui_usd_price);
-            if (sui_price > 0) {
-                // price of UNXV in micro‑USD must be passed via separate feed for precision; here we accept UNXV amount as micro‑USD via discount_usdc using UNXV/USD feed in future. For now accept payment and deposit to treasury.
+        let sui_price = get_price_scaled_1e6(oracle_cfg, clock, sui_usd_price);
+        let unxv_price_feed = get_price_scaled_1e6(oracle_cfg, clock, unxv_usd_price);
+        if (sui_price > 0) {
+            let unxv_price = if (unxv_price_feed > 0) { unxv_price_feed } else { sui_price };
+            if (unxv_price > 0) {
+                let unxv_needed = (discount_usdc + unxv_price - 1) / unxv_price;
                 let mut merged = Coin::zero<unxversal::unxv::UNXV>(ctx);
                 let mut i = 0; while (i < vector::length(&unxv_payment)) { let c = vector::pop_back(&mut unxv_payment); Coin::merge(&mut merged, c); i = i + 1; };
-                // deposit all UNXV as discount coverage; indexers can value it off‑chain
                 let have = Coin::value(&merged);
-                if (have > 0) { let mut vecu = vector::empty<Coin<unxversal::unxv::UNXV>>(); vector::push_back(&mut vecu, merged); TreasuryMod::deposit_unxv(treasury, vecu, b"gas_trade".to_string(), ctx.sender(), ctx); discount_applied = true; }
+                if (have >= unxv_needed) {
+                    let exact = Coin::split(&mut merged, unxv_needed, ctx);
+                    let mut vecu = vector::empty<Coin<unxversal::unxv::UNXV>>(); vector::push_back(&mut vecu, exact);
+                    TreasuryMod::deposit_unxv(treasury, vecu, b"gas_trade".to_string(), ctx.sender(), ctx);
+                    transfer::public_transfer(merged, ctx.sender());
+                    discount_applied = true;
+                } else {
+                    transfer::public_transfer(merged, ctx.sender());
+                }
             }
+        }
         };
         let usdc_fee_after_discount = if (discount_applied) { if (discount_usdc <= trade_fee) { trade_fee - discount_usdc } else { 0 } } else { trade_fee };
         let maker_rebate = (trade_fee * reg.maker_rebate_bps) / 10_000;
@@ -385,6 +414,20 @@ module unxversal::gas_futures {
     public fun gas_position_info(p: &GasPosition): (address, ID, u8, u64, u64, u64, i64, u64) { (p.owner, p.contract_id, p.side, p.size, p.avg_price_micro_usd_per_gas, Coin::value(&p.margin), p.accumulated_pnl, p.opened_at_ms) }
     public fun gas_registry_trade_fee_params(reg: &GasFuturesRegistry): (u64, u64, u64, u64) { (reg.trade_fee_bps, reg.maker_rebate_bps, reg.unxv_discount_bps, reg.trade_bot_reward_bps) }
     public fun gas_registry_settlement_params(reg: &GasFuturesRegistry): (u64, u64, u64, u64) { (reg.settlement_fee_bps, reg.settlement_bot_reward_bps, reg.min_list_interval_ms, reg.dispute_window_ms) }
+
+    /// Consolidated runtime config for bots/clients
+    public fun gas_registry_runtime_config(reg: &GasFuturesRegistry): (u64, u64, u64, u64, u64, u64, u64, u64) {
+        (
+            reg.trade_fee_bps,
+            reg.maker_rebate_bps,
+            reg.unxv_discount_bps,
+            reg.trade_bot_reward_bps,
+            reg.settlement_fee_bps,
+            reg.settlement_bot_reward_bps,
+            reg.default_init_margin_bps,
+            reg.default_maint_margin_bps
+        )
+    }
 
     /*******************************
     * Displays
