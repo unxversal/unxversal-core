@@ -743,12 +743,12 @@ module unxversal::synthetics {
                 let mut i = 0;
                 while (i < vector::length(&unxv_payment)) {
                     let c = vector::pop_back(&mut unxv_payment);
-                    coin::merge(&mut merged, c);
+                    coin::join(&mut merged, c);
                     i = i + 1;
                 };
                 let have = coin::value(&merged);
                 if (have >= unxv_needed) {
-                    let exact = coin::split(&mut merged, unxv_needed);
+                    let exact = coin::split(&mut merged, unxv_needed, ctx);
                     let mut vec = vector::empty<Coin<UNXV>>();
                     vector::push_back(&mut vec, exact);
                     TreasuryMod::deposit_unxv(treasury, vec, b"mint".to_string(), vault.owner, ctx);
@@ -825,12 +825,12 @@ module unxversal::synthetics {
                 let mut i = 0;
                 while (i < vector::length(&unxv_payment)) {
                     let c = vector::pop_back(&mut unxv_payment);
-                    coin::merge(&mut merged, c);
+                    coin::join(&mut merged, c);
                     i = i + 1;
                 };
                 let have = coin::value(&merged);
                 if (have >= unxv_needed) {
-                    let exact = coin::split(&mut merged, unxv_needed);
+                    let exact = coin::split(&mut merged, unxv_needed, ctx);
                     let mut vec = vector::empty<Coin<UNXV>>();
                     vector::push_back(&mut vec, exact);
                     TreasuryMod::deposit_unxv(treasury, vec, b"burn".to_string(), vault.owner, ctx);
@@ -1066,12 +1066,12 @@ module unxversal::synthetics {
                 let mut i = 0;
                 while (i < vector::length(&unxv_payment)) {
                     let c = vector::pop_back(&mut unxv_payment);
-                    coin::merge(&mut merged, c);
+                    coin::join(&mut merged, c);
                     i = i + 1;
                 };
                 let have = coin::value(&merged);
                 if (have >= unxv_needed) {
-                    let exact = coin::split(&mut merged, unxv_needed);
+                    let exact = coin::split(&mut merged, unxv_needed, ctx);
                     let mut vec_unxv = vector::empty<Coin<UNXV>>();
                     vector::push_back(&mut vec_unxv, exact);
                     TreasuryMod::deposit_unxv(treasury, vec_unxv, b"trade".to_string(), buyer_vault.owner, ctx);
