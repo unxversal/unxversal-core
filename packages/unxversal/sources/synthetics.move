@@ -47,6 +47,18 @@ module unxversal::synthetics {
         string::utf8(dst_bytes)
     }
 
+    fun copy_vector_u8(src: &vector<u8>): vector<u8> {
+        let len = vector::length(src);
+        let mut dst = vector::empty<u8>();
+        let mut i = 0;
+        while (i < len) {
+            let b_ref = vector::borrow(src, i);
+            vector::push_back(&mut dst, *b_ref);
+            i = i + 1;
+        };
+        dst
+    }
+
     // Local price scaling helper (micro-USD), avoids dependency cycle with oracle module
     const DEFAULT_MAX_AGE_SEC: u64 = 60;
     fun get_price_scaled_1e6(clock: &Clock, price_info_object: &PriceInfoObject, max_age_sec: u64): u64 {
@@ -167,6 +179,12 @@ module unxversal::synthetics {
         burn_fee_bps: u64,
     }
 
+    /// Keyed per-asset info wrapper to enable Display for SyntheticAsset
+    public struct SyntheticAssetInfo has key, store {
+        id: UID,
+        asset: SyntheticAsset,
+    }
+
     /*******************************
     * Core shared object – **SynthRegistry**
     *******************************/
@@ -213,6 +231,12 @@ module unxversal::synthetics {
         pyth_feed_id: vector<u8>,
         creator:      address,
         timestamp:    u64,
+    }
+
+    /// Emitted when SyntheticAssetInfo is created for display
+    public struct SyntheticAssetInfoCreated has copy, drop {
+        symbol: String,
+        timestamp: u64,
     }
 
     public struct SyntheticMinted has copy, drop {
@@ -325,10 +349,11 @@ module unxversal::synthetics {
 
     fun init_vault_display<C>(publisher: &Publisher, ctx: &mut TxContext) {
         let mut disp = display::new<CollateralVault<C>>(publisher, ctx);
-        disp.add(b"name".to_string(),          b"UNXV Synth Collateral Vault".to_string());
-        disp.add(b"description".to_string(),   b"User-owned vault holding protocol collateral".to_string());
-        disp.add(b"image_url".to_string(),     b"{image_url}".to_string());
-        disp.add(b"thumbnail_url".to_string(), b"{thumbnail_url}".to_string());
+        // Use concrete, non-placeholder templates from on-chain fields
+        disp.add(b"name".to_string(),          b"Vault {id}".to_string());
+        disp.add(b"description".to_string(),   b"Collateral vault owned by {owner}".to_string());
+        disp.add(b"link".to_string(),          b"https://unxversal.com/vault/{id}".to_string());
+        disp.add(b"project_url".to_string(),   b"https://unxversal.com".to_string());
         disp.add(b"creator".to_string(),       b"Unxversal Synthetics".to_string());
         disp.update_version();
         transfer::public_transfer(disp, ctx.sender());
@@ -359,7 +384,7 @@ module unxversal::synthetics {
             name: clone_string(&asset_name),
             symbol: clone_string(&asset_symbol),
             decimals,
-            pyth_feed_id: std::vector::copy(&pyth_feed_id),
+            pyth_feed_id: copy_vector_u8(&pyth_feed_id),
             min_collateral_ratio: min_coll_ratio,
             total_supply: 0,
             is_active: true,
@@ -371,15 +396,19 @@ module unxversal::synthetics {
             burn_fee_bps: 0,
         };
 
+        // Create display-enabled info wrapper for this asset
+        let asset_info = SyntheticAssetInfo { id: object::new(ctx), asset: asset };
+        let asset_for_table = asset_info.asset; // move out for table storage
+
         // store metadata + oracle mapping
         let sym_for_synth = clone_string(&asset_symbol);
-        table::add(&mut registry.synthetics, sym_for_synth, asset);
+        table::add(&mut registry.synthetics, sym_for_synth, asset_for_table);
         let sym_for_oracle = clone_string(&asset_symbol);
         table::add(&mut registry.oracle_feeds, sym_for_oracle, pyth_feed_id);
         registry.num_synthetics = registry.num_synthetics + 1;
         assert!(registry.num_synthetics <= registry.global_params.max_synthetics, E_ASSET_EXISTS);
 
-        // emit event
+        // emit events
         event::emit(SyntheticAssetCreated {
             asset_name,
             asset_symbol,
@@ -387,6 +416,10 @@ module unxversal::synthetics {
             creator: ctx.sender(),
             timestamp: sui::tx_context::epoch_timestamp_ms(ctx),
         });
+        event::emit(SyntheticAssetInfoCreated { symbol: clone_string(&asset_symbol), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+
+        // share the info object so wallets/explorers can resolve Display
+        transfer::share_object(asset_info);
 
         // optional: add Display metadata (publisher lives with deployer)
         // (Skip for brevity – could call init_synth_display here)
@@ -1271,19 +1304,17 @@ module unxversal::synthetics {
         order_disp.update_version();
         transfer::public_transfer(order_disp, ctx.sender());
 
-        // 9️⃣ Register type display for SyntheticAsset (CollateralVault display is type-parametric)
-        /* No SyntheticAsset display (no 'key')
-        let _ = (&publisher, &SyntheticAsset {
-            name: b"{name}".to_string(),
-            symbol: b"{symbol}".to_string(),
-            decimals: 9,
-            pyth_feed_id: b"".to_string().into_bytes(),
-            min_collateral_ratio: 0,
-            total_supply: 0,
-            is_active: true,
-            created_at: 0,
-        }, ctx);
-        */
+        // 9️⃣ Register Display for SyntheticAssetInfo (keyed wrapper)
+        let mut synth_disp = display::new<SyntheticAssetInfo>(&publisher, ctx);
+        synth_disp.add(b"name".to_string(),         b"{asset.symbol} — {asset.name}".to_string());
+        synth_disp.add(b"description".to_string(),  b"UNXV Synthetic: {asset.name} ({asset.symbol}), decimals {asset.decimals}".to_string());
+        synth_disp.add(b"image_url".to_string(),    b"https://unxversal.com/assets/{asset.symbol}.png".to_string());
+        synth_disp.add(b"thumbnail_url".to_string(),b"https://unxversal.com/assets/{asset.symbol}_thumb.png".to_string());
+        synth_disp.add(b"project_url".to_string(),  b"https://unxversal.com".to_string());
+        synth_disp.add(b"creator".to_string(),      b"Unxversal Synthetics".to_string());
+        synth_disp.update_version();
+        transfer::public_transfer(synth_disp, ctx.sender());
+
         // Collateral vault display requires a concrete collateral type C
 
         // 🔟 Optional: OracleConfig display created here using publisher
