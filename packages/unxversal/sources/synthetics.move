@@ -28,7 +28,7 @@ module unxversal::synthetics {
     use pyth::price_info::PriceInfoObject; // Pyth price object type
     use sui::sui::SUI;                     // default treasury coin to avoid external deps
     use unxversal::oracle::{OracleConfig, get_latest_price, get_price_scaled_1e6};
-    use unxversal::common::{FeeCollected, calculate_fee_with_discount};
+    use unxversal::common::FeeCollected;
     use unxversal::treasury::{Self as TreasuryMod, Treasury};
     use unxversal::unxv::UNXV;
 

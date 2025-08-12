@@ -21,7 +21,7 @@ module unxversal::oracle {
     use pyth::price_identifier;
     use pyth::price;
     use pyth::price_info::PriceInfoObject;
-    use pyth::i64::I64;
+    use pyth::i64::{Self as I64Mod, I64};
     use pyth::pyth;                 // get_price_no_older_than
 
     /// Refer to admin allow‑list & caps from synthetics module
@@ -146,6 +146,12 @@ module unxversal::oracle {
         acc
     }
 
+    /// Convert Pyth I64 (signed) to non‑negative u64 magnitude. Aborts if negative.
+    fun i64_to_u64_non_negative(x: &I64): u64 {
+        assert!(!I64Mod::get_is_negative(x), E_BAD_PRICE);
+        I64Mod::get_magnitude_if_positive(x)
+    }
+
     /// Returns price scaled to 1e6 (micro‑USD) as u64 (uses u128 internally)
     public fun get_price_scaled_1e6(
         cfg: &OracleConfig,
@@ -153,17 +159,40 @@ module unxversal::oracle {
         price_info_object: &PriceInfoObject
     ): u64 {
         let price_struct = pyth::get_price_no_older_than(price_info_object, clock, cfg.max_age_sec);
-        let raw_price_i64 = price::get_price(&price_struct);
-        let expo_i64 = price::get_expo(&price_struct);
-        assert!(raw_price_i64 > 0, E_BAD_PRICE);
+        // Raw price is signed I64
+        let raw_i64 = price::get_price(&price_struct);
+        // Abort if negative or zero
+        let raw_mag = i64_to_u64_non_negative(&raw_i64);
+        assert!(raw_mag > 0, E_BAD_PRICE);
 
-        let raw_u128 = (raw_price_i64 as u128);
-        let adj_i64 = (SCALE_POW10_1E6 as i64) + expo_i64;
-        let scaled_u128 = if (adj_i64 >= 0) {
-            let mul = pow10_u128(adj_i64 as u64);
+        // Exponent is signed I64
+        let expo = price::get_expo(&price_struct);
+        let expo_is_neg = I64Mod::get_is_negative(&expo);
+        let expo_mag = if (expo_is_neg) { I64Mod::get_magnitude_if_negative(&expo) } else { I64Mod::get_magnitude_if_positive(&expo) };
+
+        // Compute adjustment: adj = 6 (micro‑USD) + expo
+        // Represent as sign + magnitude without relying on signed ints
+        let mut adj_is_neg = false;
+        let mut adj_mag: u64 = 0;
+        if (expo_is_neg) {
+            if (expo_mag > SCALE_POW10_1E6) {
+                adj_is_neg = true;
+                adj_mag = expo_mag - SCALE_POW10_1E6;
+            } else {
+                adj_is_neg = false;
+                adj_mag = SCALE_POW10_1E6 - expo_mag;
+            }
+        } else {
+            adj_is_neg = false;
+            adj_mag = SCALE_POW10_1E6 + expo_mag;
+        };
+
+        let raw_u128 = (raw_mag as u128);
+        let scaled_u128 = if (!adj_is_neg) {
+            let mul = pow10_u128(adj_mag);
             raw_u128 * mul
         } else {
-            let div = pow10_u128((-adj_i64) as u64);
+            let div = pow10_u128(adj_mag);
             raw_u128 / div
         };
         assert!(scaled_u128 <= (u64::MAX as u128), E_OVERFLOW);
