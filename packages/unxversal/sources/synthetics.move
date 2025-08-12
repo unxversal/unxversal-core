@@ -7,16 +7,13 @@
 /// > Later phases will extend this module with asset‑listing, vaults,
 /// > mint/burn logic, liquidation flows, DeepBook integration, etc.
 module unxversal::synthetics {
-    /*******************************
-    * Imports & std aliases
-    *******************************/
+    /// Imports & std aliases
     use sui::package;                      // claim Publisher via OTW
     use sui::package::Publisher;           // Display helpers expect Publisher
     use sui::display;                      // Object‑Display metadata helpers
     use sui::types;                        // is_one_time_witness check
     use sui::event;                        // emit events
     use std::string::{Self as string, String};
-    use std::vector::{Self as vector};
     use sui::vec_set::{Self as vec_set, VecSet};
     use sui::table::{Self as table, Table};
     use sui::clock::Clock;                 // clock for oracle staleness checks
@@ -27,11 +24,6 @@ module unxversal::synthetics {
     use pyth::price;                       // price/expo accessors
     use pyth::i64::{Self as I64Mod};
     use unxversal::treasury::{Self as TreasuryMod, Treasury};
-    use sui::object;
-    use sui::object::ID;
-    use sui::transfer;
-    use sui::tx_context::TxContext;
-    use std::option::{Self as option, Option};
     use unxversal::unxv::UNXV;
 
     fun clone_string(s: &String): String {
@@ -95,9 +87,7 @@ module unxversal::synthetics {
         scaled_u128 as u64
     }
 
-    /*******************************
-    * Error codes (0‑99 reserved for general)
-    *******************************/
+    /// Error codes (0‑99 reserved for general)
     const E_NOT_ADMIN: u64 = 1;            // Caller not in admin allow‑list
     const E_ASSET_EXISTS: u64 = 2;
     const E_UNKNOWN_ASSET: u64 = 3;
@@ -112,15 +102,11 @@ module unxversal::synthetics {
     const E_COLLATERAL_NOT_SET: u64 = 13;
     const E_WRONG_COLLATERAL_CFG: u64 = 14;
 
-    /*******************************
-    * One‑Time Witness (OTW)
-    * Guarantees `init` executes exactly once when the package is published.
-    *******************************/
+    /// One‑Time Witness (OTW)
+    /// Guarantees `init` executes exactly once when the package is published.
     public struct SYNTHETICS has drop {}
 
-    /*******************************
-    * Capability & authority objects
-    *******************************/
+    /// Capability & authority objects
     /// **DaddyCap** – the root capability.  Only one exists.
     /// Possession allows minting / revoking admin rights by modifying the
     /// `admin_addrs` allow‑list inside `SynthRegistry`.
@@ -133,9 +119,7 @@ module unxversal::synthetics {
     /// AdminCap tokens that address still holds become inert.
     public struct AdminCap has key, store { id: UID }
 
-    /*******************************
-    * Global‑parameter struct (basis‑points units for ratios/fees)
-    *******************************/
+    /// Global‑parameter struct (basis‑points units for ratios/fees)
     public struct GlobalParams has store, drop {
         /// Minimum collateral‑ratio across the system (e.g. **150% = 1500 bps**)
         min_collateral_ratio: u64,
@@ -159,10 +143,8 @@ module unxversal::synthetics {
         maker_rebate_bps: u64,
     }
 
-    /*******************************
-    * Synthetic‑asset placeholder (filled out in Phase‑2)
-    * NOTE: only minimal fields kept for now so the table type is defined.
-    *******************************/
+    /// Synthetic‑asset placeholder (filled out in Phase‑2)
+    /// NOTE: only minimal fields kept for now so the table type is defined.
     public struct SyntheticAsset has store {
         name: String,
         symbol: String,
@@ -186,9 +168,7 @@ module unxversal::synthetics {
         asset: SyntheticAsset,
     }
 
-    /*******************************
-    * Core shared object – **SynthRegistry**
-    *******************************/
+    /// Core shared object – SynthRegistry
     public struct SynthRegistry has key, store {
         /// UID so we can share the object on-chain.
         id: UID,
@@ -212,9 +192,7 @@ module unxversal::synthetics {
         collateral_cfg_id: Option<ID>,
     }
 
-    /*******************************
-    * Event structs for indexers / UI
-    *******************************/
+    /// Event structs for indexers / UI
     public struct AdminGranted has copy, drop { admin_addr: address, timestamp: u64 }
     public struct AdminRevoked has copy, drop { admin_addr: address, timestamp: u64 }
     public struct ParamsUpdated has copy, drop { updater: address, timestamp: u64 }
@@ -223,9 +201,7 @@ module unxversal::synthetics {
     public struct CollateralDeposited has copy, drop { vault_id: ID, amount: u64, depositor: address, timestamp: u64 }
     public struct CollateralWithdrawn has copy, drop { vault_id: ID, amount: u64, withdrawer: address, timestamp: u64 }
 
-    /*******************************
-    * Phase‑2 – new events
-    *******************************/
+    /// Phase‑2 – new events
     public struct SyntheticAssetCreated has copy, drop {
         asset_name:   String,
         asset_symbol: String,
@@ -303,9 +279,7 @@ module unxversal::synthetics {
     }
     public struct StabilityAccrued has copy, drop { vault_id: ID, synthetic_type: String, delta_units: u64, from_ms: u64, to_ms: u64 }
 
-     /*******************************
-    * Phase‑2 – collateral vault
-    *******************************/
+    /// Phase‑2 – collateral vault
     public struct CollateralVault<phantom C> has key, store {
         id: UID,
         owner: address,
@@ -326,9 +300,7 @@ module unxversal::synthetics {
         assert!(option::is_some(cfg_opt) && *option::borrow(cfg_opt) == cfg_id, E_WRONG_COLLATERAL_CFG);
     }
 
-    /*******************************
-    * Orders – decentralized matching (shared objects)
-    *******************************/
+    /// Orders – decentralized matching (shared objects)
     /// side: 0 = buy (mint debt), 1 = sell (burn debt)
     public struct Order has key, store {
         id: UID,
@@ -343,12 +315,9 @@ module unxversal::synthetics {
         expiry_ms: u64,
     }
 
-    /*******************************
-    * Phase‑2 – Display helpers
-    *******************************/
     // No display for SyntheticAsset (lacks 'key')
-
-    fun init_vault_display<C>(publisher: &Publisher, ctx: &mut TxContext) {
+    /// Phase‑2 – Display helpers
+    public fun init_vault_display<C>(publisher: &Publisher, ctx: &mut TxContext) {
         let mut disp = display::new<CollateralVault<C>>(publisher, ctx);
         // Use concrete, non-placeholder templates from on-chain fields
         disp.add(b"name".to_string(),          b"Vault {id}".to_string());
@@ -360,9 +329,7 @@ module unxversal::synthetics {
         transfer::public_transfer(disp, ctx.sender());
     }
 
-    /*******************************
-    * Phase‑2 – synthetic asset listing (admin‑only)
-    *******************************/
+    /// Phase‑2 – synthetic asset listing (admin‑only)
     public fun create_synthetic_asset(
         registry: &mut SynthRegistry,
         asset_name: String,
@@ -434,13 +401,9 @@ module unxversal::synthetics {
         // share the info object so wallets/explorers can resolve Display
         transfer::share_object(asset_info);
 
-        // optional: add Display metadata (publisher lives with deployer)
-        // (Skip for brevity – could call init_synth_display here)
     }
 
-    /*******************************
-     * Per-asset parameter setters (admin-only)
-     *******************************/
+    /// Per-asset parameter setters (admin-only)
     public fun set_asset_stability_fee(
         registry: &mut SynthRegistry,
         symbol: String,
@@ -506,9 +469,7 @@ module unxversal::synthetics {
         asset.burn_fee_bps = bps;
     }
 
-    /*******************************
-    * Phase‑2 – vault lifecycle
-    *******************************/
+    /// Phase‑2 – vault lifecycle
     /// Anyone can open a fresh vault (zero‑collateral, zero‑debt).
     public fun create_vault<C>(
         cfg: &CollateralConfig<C>,
@@ -574,9 +535,7 @@ module unxversal::synthetics {
         coin_out
     }
 
-    /*******************************
-    * Phase‑2 – mint / burn flows
-    *******************************/
+    /// Phase‑2 – mint / burn flows
     fun mint_synthetic_internal<C>(
         vault: &mut CollateralVault<C>,
         registry: &mut SynthRegistry,
@@ -611,7 +570,7 @@ module unxversal::synthetics {
     fun burn_synthetic_internal<C>(
         vault: &mut CollateralVault<C>,
         registry: &mut SynthRegistry,
-        clock: &Clock,
+        _clock: &Clock,
         _price: &PriceInfoObject,
         synthetic_symbol: String,
         amount: u64,
@@ -633,9 +592,7 @@ module unxversal::synthetics {
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
     }
 
-    /*******************************
-    * Stability fee accrual – simple linear accrual per call
-    *******************************/
+    /// Stability fee accrual – simple linear accrual per call
     public fun accrue_stability<C>(
         vault: &mut CollateralVault<C>,
         registry: &mut SynthRegistry,
@@ -862,9 +819,7 @@ module unxversal::synthetics {
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
     }
 
-    /*******************************
-    * Phase‑2 – vault health helpers
-    *******************************/
+    /// Phase‑2 – vault health helpers
     /// returns (ratio_bps, is_liquidatable)
     public fun check_vault_health<C>(
         vault: &CollateralVault<C>,
@@ -894,7 +849,7 @@ module unxversal::synthetics {
         registry: &SynthRegistry,
         clock: &Clock,
         symbols: vector<String>,
-        prices: vector<&PriceInfoObject>
+        prices: vector<PriceInfoObject>
     ): (u64, bool) {
         let collateral_value = balance::value(&vault.collateral);
         let mut total_debt_value: u64 = 0;
@@ -906,8 +861,8 @@ module unxversal::synthetics {
             if (table::contains(&vault.synthetic_debt, ks)) {
                 let debt_units = *table::borrow(&vault.synthetic_debt, clone_string(&sym));
                 if (debt_units > 0) {
-                    let p = *vector::borrow(&prices, i);
-                    let px = get_price_scaled_1e6(clock, p, DEFAULT_MAX_AGE_SEC);
+                    let p_ref = vector::borrow(&prices, i);
+                    let px = get_price_scaled_1e6(clock, p_ref, DEFAULT_MAX_AGE_SEC);
                     assert!(px > 0, E_BAD_PRICE);
                     total_debt_value = total_debt_value + (debt_units * px);
                     // threshold override
@@ -923,9 +878,9 @@ module unxversal::synthetics {
         (ratio, liq)
     }
 
-    /// Helper getters for bots/indexers
     // Listing keys is not supported by sui::table; expose per-symbol APIs instead.
     // Keeping a stub that returns an empty list to avoid breaking external callers.
+    /// Helper getters for bots/indexers
     public fun list_vault_debt_symbols<C>(_vault: &CollateralVault<C>): vector<String> { vector::empty<String>() }
     public fun get_vault_debt<C>(vault: &CollateralVault<C>, symbol: &String): u64 {
         let k = clone_string(symbol);
@@ -934,11 +889,9 @@ module unxversal::synthetics {
         } else { 0 }
     }
 
-    /*******************************
-    * Vault-to-vault collateral transfer (settlement helper)
-    *******************************/
+    /// Vault-to-vault collateral transfer (settlement helper)
     public fun transfer_between_vaults<C>(
-        cfg: &CollateralConfig<C>,
+        _cfg: &CollateralConfig<C>,
         from_vault: &mut CollateralVault<C>,
         to_vault: &mut CollateralVault<C>,
         amount: u64,
@@ -953,9 +906,7 @@ module unxversal::synthetics {
         to_vault.last_update_ms = now;
     }
 
-    /*******************************
-    * Order lifecycle – place, cancel, match
-    *******************************/
+    /// Order lifecycle – place, cancel, match
     public fun place_limit_order<C>(
         registry: &SynthRegistry,
         vault: &CollateralVault<C>,
@@ -1090,7 +1041,7 @@ module unxversal::synthetics {
             let mut fee_coin_all = coin::from_balance(fee_bal_all, ctx);
             // From fee, pay maker rebate directly to maker, deposit remainder to treasury
             if (maker_rebate > 0 && maker_rebate < collateral_fee_after_discount) {
-                let to_maker = coin::split(&fee_coin_all, maker_rebate, ctx);
+                let to_maker = coin::split(&mut fee_coin_all, maker_rebate, ctx);
                 let maker_addr = if (taker_is_buyer) { seller_vault.owner } else { buyer_vault.owner };
                 transfer::public_transfer(to_maker, maker_addr);
                 event::emit(MakerRebatePaid { amount: maker_rebate, taker: if (taker_is_buyer) { buyer_vault.owner } else { seller_vault.owner }, maker: maker_addr, market: b"trade".to_string(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
@@ -1118,10 +1069,10 @@ module unxversal::synthetics {
 
     /// Very rough system‑wide stat – sums all vaults passed by caller.
     public fun check_system_stability<C>(
-        vaults: vector<&CollateralVault<C>>,
-        registry: &SynthRegistry,
-        clocks: vector<&Clock>,
-        prices: vector<&PriceInfoObject>,
+        vaults: vector<CollateralVault<C>>,
+        _registry: &SynthRegistry,
+        clocks: vector<Clock>,
+        prices: vector<PriceInfoObject>,
         symbols: vector<String>
     ): (u64, u64, u64) {
         // NOTE: off‑chain indexer will provide better aggregate stats.
@@ -1129,24 +1080,22 @@ module unxversal::synthetics {
         let mut total_debt: u64 = 0;
         let mut i = 0;
         while (i < vector::length(&vaults)) {
-            let v = *vector::borrow(&vaults, i);
+            let v = vector::borrow(&vaults, i);
             total_coll = total_coll + balance::value(&v.collateral);
             if (i < vector::length(&symbols)) {
                 let sym = *vector::borrow(&symbols, i);
                 let debt_amt = if (table::contains(&v.synthetic_debt, clone_string(&sym))) { *table::borrow(&v.synthetic_debt, clone_string(&sym)) } else { 0 };
-                let clk = *vector::borrow(&clocks, i);
-                let p = *vector::borrow(&prices, i);
+                let clk = vector::borrow(&clocks, i);
+                let p = vector::borrow(&prices, i);
                 total_debt = total_debt + debt_amt * get_price_scaled_1e6(clk, p, DEFAULT_MAX_AGE_SEC);
             };
             i = i + 1;
-        }
+        };
         let gcr = if (total_debt == 0) { U64_MAX_LITERAL } else { (total_coll * 10_000) / total_debt };
         (total_coll, total_debt, gcr)
     }
 
-    /*******************************
-    * Read-only helpers (bots/indexers)
-    *******************************/
+    /// Read-only helpers (bots/indexers)
     /// List all listed synthetic symbols
     public fun list_synthetics(_registry: &SynthRegistry): vector<String> { vector::empty<String>() }
 
@@ -1156,13 +1105,13 @@ module unxversal::synthetics {
     /// Get oracle feed id bytes for a symbol (empty if missing)
     public fun get_oracle_feed_bytes(registry: &SynthRegistry, symbol: &String): vector<u8> {
         let k = clone_string(symbol);
-        if (table::contains(&registry.oracle_feeds, k)) { vector::copy(&table::borrow(&registry.oracle_feeds, clone_string(symbol))) } else { b"".to_string().into_bytes() }
+        if (table::contains(&registry.oracle_feeds, k)) { copy_vector_u8(table::borrow(&registry.oracle_feeds, clone_string(symbol))) } else { b"".to_string().into_bytes() }
     }
 
     /// Compute collateral/debt values for a vault and return ratio bps
     public fun get_vault_values<C>(
         vault: &CollateralVault<C>,
-        registry: &SynthRegistry,
+        _registry: &SynthRegistry,
         clock: &Clock,
         price: &PriceInfoObject,
         symbol: &String
@@ -1179,9 +1128,7 @@ module unxversal::synthetics {
     /// Get registry treasury ID
     public fun get_treasury_id(registry: &SynthRegistry): ID { registry.treasury_id }
 
-    /*******************************
-    * Liquidation – seize collateral when ratio < threshold
-    *******************************/
+    /// Liquidation – seize collateral when ratio < threshold
     public fun liquidate_vault<C>(
         registry: &mut SynthRegistry,
         clock: &Clock,
@@ -1224,7 +1171,7 @@ module unxversal::synthetics {
             coin::from_balance(seized_bal, ctx)
         };
         let bot_cut = (seize * registry.global_params.bot_split) / 10_000;
-        let to_bot = coin::split(&mut seized_coin, bot_cut);
+        let to_bot = coin::split(&mut seized_coin, bot_cut, ctx);
         transfer::public_transfer(to_bot, liquidator);
         // Remainder to treasury
         TreasuryMod::deposit_collateral(treasury, seized_coin, b"liquidation".to_string(), liquidator, ctx);
@@ -1241,16 +1188,12 @@ module unxversal::synthetics {
         });
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
     }
-    /*******************************
-    * Internal helper – assert caller is in allow‑list
-    *******************************/
+    /// Internal helper – assert caller is in allow‑list
     fun assert_is_admin(registry: &SynthRegistry, addr: address) {
         assert!(vec_set::contains(&registry.admin_addrs, &addr), E_NOT_ADMIN);
     }
 
-    /*******************************
-    * INIT  – executed once on package publish
-    *******************************/
+    /// INIT – executed once on package publish
     fun init(otw: SYNTHETICS, ctx: &mut TxContext) {
         // 1️⃣ Ensure we really received the one‑time witness
         assert!(types::is_one_time_witness(&otw), 0);
@@ -1273,8 +1216,8 @@ module unxversal::synthetics {
         };
 
         // 4️⃣ Create empty tables and admin allow‑list (deployer is first admin)
-        let syn_table = table::new::<String, SyntheticAsset>(ctx);
-        let feed_table = table::new::<String, vector<u8>>(ctx);
+        let syn_table = table::new<String, SyntheticAsset>(ctx);
+        let feed_table = table::new<String, vector<u8>>(ctx);
         let mut admins = vec_set::empty<address>();
         vec_set::insert(&mut admins, ctx.sender());
 
@@ -1338,21 +1281,15 @@ module unxversal::synthetics {
         synth_disp.update_version();
         transfer::public_transfer(synth_disp, ctx.sender());
 
-        // Collateral vault display requires a concrete collateral type C
+        // Register CollateralVault display for the chosen collateral type.
+        // This init assumes a concrete C will be provided in a follow-up call from setup flows.
+        // For convenience, initialize a generic display template for a placeholder coin type (e.g., UNXV)
+        init_vault_display<UNXV>(&publisher, ctx);
 
-        // 🔟 Optional: OracleConfig display created here using publisher
-        // NOTE: Oracle shared object is created via oracle::init separately; display is type-level only
-        let mut oracle_disp = display::new<unxversal::oracle::OracleConfig>(&publisher, ctx);
-        oracle_disp.add(b"name".to_string(),        b"Unxversal Oracle Config".to_string());
-        oracle_disp.add(b"description".to_string(), b"Holds the allow-list of Pyth feeds trusted by Unxversal".to_string());
-        oracle_disp.add(b"project_url".to_string(), b"https://unxversal.com".to_string());
-        oracle_disp.update_version();
-        transfer::public_transfer(oracle_disp, ctx.sender());
+        // OracleConfig display is registered within the oracle module to avoid dependency cycles.
     }
 
-    /*******************************
-    * Daddy‑level admin management
-    *******************************/
+    /// Daddy‑level admin management
     /// Mint a new AdminCap **and** add `new_admin` to `admin_addrs`.
     /// Can only be invoked by the unique DaddyCap holder.
     public fun grant_admin(
@@ -1378,9 +1315,7 @@ module unxversal::synthetics {
         event::emit(AdminRevoked { admin_addr: bad_admin, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
-    /*******************************
-    * Parameter updates & emergency pause – gated by allow‑list
-    *******************************/
+    /// Parameter updates & emergency pause – gated by allow‑list
     /// Replace **all** global parameters. Consider granular setters in future.
     public fun update_global_params(
         registry: &mut SynthRegistry,
