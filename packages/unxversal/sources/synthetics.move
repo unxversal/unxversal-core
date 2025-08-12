@@ -31,7 +31,8 @@ module unxversal::synthetics {
     use unxversal::unxv::UNXV;
 
     fun clone_string(s: &String): String {
-        let bytes = std::string::bytes(s);
+        let bytes_ref = std::string::as_bytes(s);
+        let bytes = std::vector::copy(bytes_ref);
         std::string::utf8(bytes)
     }
 
@@ -130,8 +131,6 @@ module unxversal::synthetics {
         synthetics: Table<String, SyntheticAsset>,
         /// Map **symbol → Pyth feed bytes** for oracle lookup.
         oracle_feeds: Table<String, vector<u8>>,
-        /// Tracked list of listed symbols for enumeration
-        symbols: vector<String>,
         /// System-wide configurable risk / fee parameters.
         global_params: GlobalParams,
         /// Emergency-circuit-breaker flag.
@@ -243,8 +242,6 @@ module unxversal::synthetics {
         collateral: Coin<C>,
         /// symbol → synthetic debt amount
         synthetic_debt: Table<String, u64>,
-        /// last interacted symbol (for enumeration-lite)
-        last_symbol: Option<String>,
         last_update_ms: u64,
     }
 
@@ -316,7 +313,7 @@ module unxversal::synthetics {
             name: clone_string(&asset_name),
             symbol: clone_string(&asset_symbol),
             decimals,
-            pyth_feed_id: vector::copy(&pyth_feed_id),
+            pyth_feed_id: std::vector::copy(&pyth_feed_id),
             min_collateral_ratio: min_coll_ratio,
             total_supply: 0,
             is_active: true,
@@ -333,8 +330,6 @@ module unxversal::synthetics {
         table::add(&mut registry.synthetics, sym_for_synth, asset);
         let sym_for_oracle = clone_string(&asset_symbol);
         table::add(&mut registry.oracle_feeds, sym_for_oracle, pyth_feed_id);
-        // track symbol for enumeration
-        std::vector::push_back(&mut registry.symbols, asset_symbol.clone());
         registry.num_synthetics = registry.num_synthetics + 1;
         assert!(registry.num_synthetics <= registry.global_params.max_synthetics, E_ASSET_EXISTS);
 
@@ -414,7 +409,7 @@ module unxversal::synthetics {
         ctx: &TxContext
     ) {
         assert_is_admin(registry, ctx.sender());
-        let mut asset = table::borrow_mut(&mut registry.synthetics, clone_string(&symbol));
+        let mut asset = Table::borrow_mut(&mut registry.synthetics, &symbol);
         asset.burn_fee_bps = bps;
     }
 
@@ -438,7 +433,6 @@ module unxversal::synthetics {
             owner: ctx.sender(),
             collateral: coin_zero,
             synthetic_debt: debt_table,
-            last_symbol: option::none<String>(),
             last_update_ms: sui::tx_context::epoch_timestamp_ms(ctx),
         };
         transfer::public_share_object(vault);
@@ -511,9 +505,7 @@ module unxversal::synthetics {
         let new_ratio = if debt_usd == 0 { u64::MAX } else { (collateral_usd * 10_000) / debt_usd };
         let min_req = if asset.min_collateral_ratio > registry.global_params.min_collateral_ratio { asset.min_collateral_ratio } else { registry.global_params.min_collateral_ratio };
         assert!(new_ratio >= min_req, E_RATIO_TOO_LOW);
-        // update debt and last symbol hint
-        table::add(debt_table, synthetic_symbol.clone(), new_debt);
-        vault.last_symbol = option::some<String>(synthetic_symbol);
+        table::add(debt_table, synthetic_symbol, new_debt);
         asset.total_supply = asset.total_supply + amount;
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
     }
@@ -628,7 +620,7 @@ module unxversal::synthetics {
         assert!(new_ratio >= min_req, E_RATIO_TOO_LOW);
 
         // Update debt, supply
-        table::add(debt_table, synthetic_symbol.clone(), new_debt);
+        table::insert(debt_table, synthetic_symbol.clone(), new_debt);
         asset.total_supply = asset.total_supply + amount;
 
         // Fee for mint: allow UNXV discount; remainder in collateral (per-asset override)
@@ -702,14 +694,14 @@ module unxversal::synthetics {
     ) {
         assert!(!registry.paused, 1000);
         assert_cfg_matches(registry, cfg);
-        let mut asset = table::borrow_mut(&mut registry.synthetics, clone_string(&synthetic_symbol));
+        let mut asset = table::borrow_mut(&mut registry.synthetics, &synthetic_symbol);
         let debt_table = &mut vault.synthetic_debt;
-        assert!(table::contains(debt_table, clone_string(&synthetic_symbol)), E_UNKNOWN_ASSET);
+        assert!(table::contains(debt_table, &synthetic_symbol), E_UNKNOWN_ASSET);
 
-        let old_debt = *table::borrow(debt_table, clone_string(&synthetic_symbol));
+        let old_debt = *table::borrow(debt_table, &synthetic_symbol);
         assert!(amount <= old_debt, 2000);
         let new_debt = old_debt - amount;
-        table::add(debt_table, synthetic_symbol.clone(), new_debt);
+        table::insert(debt_table, synthetic_symbol.clone(), new_debt);
         asset.total_supply = asset.total_supply - amount;
 
         // Fee for burn – allow UNXV discount; per-asset override
@@ -776,11 +768,10 @@ module unxversal::synthetics {
         price: &PriceInfoObject
     ): (u64, bool) {
         // Backward-compatible single-asset check: picks first symbol if any
-        // Prefer last_symbol hint; otherwise unhealthily treat as no debt
-        if (!option::is_some(&vault.last_symbol)) { return (u64::MAX, false); };
-        let sym = option::borrow(&vault.last_symbol);
+        let keys = table::keys(&vault.synthetic_debt);
+        if 0 == vector::length(&keys) { return (u64::MAX, false); };
+        let sym = *vector::borrow(&keys, 0);
         let kv = clone_string(sym);
-        if (!table::contains(&vault.synthetic_debt, clone_string(sym))) { return (u64::MAX, false); };
         let debt = *table::borrow(&vault.synthetic_debt, kv);
         let price_u64 = get_price_scaled_1e6(oracle_cfg, clock, price);
         assert!(price_u64 > 0, E_BAD_PRICE);
@@ -832,9 +823,7 @@ module unxversal::synthetics {
     }
 
     /// Helper getters for bots/indexers
-    public fun list_vault_debt_symbols<C>(vault: &CollateralVault<C>): vector<String> {
-        if (option::is_some(&vault.last_symbol)) { vector[String[clone_string(option::borrow(&vault.last_symbol))]] } else { vector[] }
-    }
+    public fun list_vault_debt_symbols<C>(vault: &CollateralVault<C>): vector<String> { table::keys(&vault.synthetic_debt) }
     public fun get_vault_debt<C>(vault: &CollateralVault<C>, symbol: &String): u64 {
         let k = clone_string(symbol);
         if (table::contains(&vault.synthetic_debt, k)) {
@@ -876,7 +865,7 @@ module unxversal::synthetics {
     ): Order {
         assert!(!registry.paused, 1000);
         assert!(side == 0 || side == 1, E_SIDE_INVALID);
-        let asset = table::borrow(&registry.synthetics, clone_string(&symbol));
+        let asset = table::borrow(&registry.synthetics, &symbol);
         assert!(asset.is_active, E_INVALID_ORDER);
         assert!(vault.owner == ctx.sender(), E_NOT_OWNER);
 
@@ -1037,9 +1026,10 @@ module unxversal::synthetics {
         while (i < vector::length(&vaults)) {
             let v = *vector::borrow(&vaults, i);
             total_coll = total_coll + coin::value(&v.collateral);
-            if (option::is_some(&v.last_symbol)) {
-                let sym = option::borrow(&v.last_symbol);
-                let debt_amt = if (table::contains(&v.synthetic_debt, clone_string(sym))) { *table::borrow(&v.synthetic_debt, clone_string(sym)) } else { 0 };
+            let keys = table::keys(&v.synthetic_debt);
+            if 0 != vector::length(&keys) {
+                let sym = *vector::borrow(&keys, 0);
+                let debt_amt = *table::borrow(&v.synthetic_debt, sym);
                 let clk = *vector::borrow(&clocks, i);
                 let p = *vector::borrow(&prices, i);
                 total_debt = total_debt + debt_amt * get_price_scaled_1e6(oracle_cfg, clk, p);
@@ -1054,14 +1044,14 @@ module unxversal::synthetics {
     * Read-only helpers (bots/indexers)
     *******************************/
     /// List all listed synthetic symbols
-    public fun list_synthetics(registry: &SynthRegistry): vector<String> { std::vector::copy(&registry.symbols) }
+    public fun list_synthetics(registry: &SynthRegistry): vector<String> { table::keys(&registry.synthetics) }
 
     /// Get read-only reference to a listed synthetic asset
     public fun get_synthetic(registry: &SynthRegistry, symbol: &String): &SyntheticAsset { table::borrow(&registry.synthetics, symbol) }
 
     /// Get oracle feed id bytes for a symbol (empty if missing)
     public fun get_oracle_feed_bytes(registry: &SynthRegistry, symbol: &String): vector<u8> {
-        if (table::contains(&registry.oracle_feeds, clone_string(symbol))) { std::vector::copy(&table::borrow(&registry.oracle_feeds, clone_string(symbol))) } else { b"".to_string().into_bytes() }
+        if (table::contains(&registry.oracle_feeds, symbol)) { vector::copy(&table::borrow(&registry.oracle_feeds, symbol)) } else { b"".to_string().into_bytes() }
     }
 
     /// Compute collateral/debt values for a vault and return ratio bps
@@ -1073,8 +1063,9 @@ module unxversal::synthetics {
         price: &PriceInfoObject
     ): (u64, u64, u64) {
         let collateral_value = coin::value(&vault.collateral); // collateral units
-        if (!option::is_some(&vault.last_symbol)) { return (collateral_value, 0, u64::MAX); };
-        let sym = option::borrow(&vault.last_symbol);
+        let keys = table::keys(&vault.synthetic_debt);
+        if 0 == vector::length(&keys) { return (collateral_value, 0, u64::MAX); };
+        let sym = *vector::borrow(&keys, 0);
         let debt_units = *table::borrow(&vault.synthetic_debt, sym);
         let px = get_price_scaled_1e6(oracle_cfg, clock, price);
         let debt_value = debt_units * px;
@@ -1119,7 +1110,7 @@ module unxversal::synthetics {
 
         // Reduce debt
         let new_debt = outstanding - repay;
-        table::add(&mut vault.synthetic_debt, synthetic_symbol.clone(), new_debt);
+        table::insert(&mut vault.synthetic_debt, synthetic_symbol.clone(), new_debt);
 
         // Seize collateral and split bot reward
         let mut seized_coin = coin::split(&mut vault.collateral, seize, ctx);
@@ -1145,7 +1136,7 @@ module unxversal::synthetics {
     * Internal helper – assert caller is in allow‑list
     *******************************/
     fun assert_is_admin(registry: &SynthRegistry, addr: address) {
-        assert!(vec_set::contains(&registry.admin_addrs, &addr), E_NOT_ADMIN);
+        assert!(vec_set::contains(&registry.admin_addrs, addr), E_NOT_ADMIN);
     }
 
     /*******************************
@@ -1175,7 +1166,6 @@ module unxversal::synthetics {
         // 4️⃣ Create empty tables and admin allow‑list (deployer is first admin)
         let syn_table = table::new::<String, SyntheticAsset>(ctx);
         let feed_table = table::new::<String, vector<u8>>(ctx);
-        let symbols = vector[];
         let mut admins = vec_set::empty<address>();
         vec_set::insert(&mut admins, ctx.sender());
 
@@ -1188,7 +1178,6 @@ module unxversal::synthetics {
             id: object::new(ctx),
             synthetics: syn_table,
             oracle_feeds: feed_table,
-            symbols,
             global_params: params,
             paused: false,
             admin_addrs: admins,
