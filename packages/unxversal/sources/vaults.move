@@ -3,10 +3,10 @@ module unxversal::vaults {
     * Unxversal Vaults – Liquidity and Trader Vaults
     * - Two separate registries: LiquidityRegistry and TraderVaultRegistry
     * - Admin gating via synthetics::SynthRegistry allow-list (AdminCap UX token)
-    * - Treasury for fees is USDC/UNXV only
-    * - All deposits/withdrawals are in USDC
-    * - LiquidityVault<Base>: holds USDC and Base; places vault-safe orders on DEX
-    * - TraderVault: USDC-only, share accounting, manager stake, HWM performance fees
+    * - Treasury for fees is Collateral/UNXV
+    * - All deposits/withdrawals use the chosen collateral
+    * - LiquidityVault<Base, C>: holds Coin<C> and Base; places vault-safe orders on DEX
+    * - TraderVault<C>: collateral-only, share accounting, manager stake, HWM performance fees
     * - Rich events and read-only helpers
     *******************************/
 
@@ -22,7 +22,7 @@ module unxversal::vaults {
     use std::vector;
     use std::time;
 
-    use usdc::usdc::USDC;
+    // Collateral coin is generic; avoid direct USDC dependency
     use unxversal::unxv::UNXV;
     use unxversal::synthetics::{SynthRegistry, AdminCap};
     use unxversal::treasury::{Self as TreasuryMod, Treasury};
@@ -57,7 +57,7 @@ module unxversal::vaults {
         treasury_id: ID,
         paused: bool,
         // Global default limits
-        min_cash_bps: u64,              // e.g., 500 = 5% minimum USDC buffer
+        min_cash_bps: u64,              // e.g., 500 = 5% minimum collateral buffer
         default_management_fee_bps: u64, // reserved for future use
     }
 
@@ -67,12 +67,12 @@ module unxversal::vaults {
     public struct LiquidityVaultShutdown has copy, drop { vault_id: ID, by: address, timestamp: u64 }
     public struct VaultDexOrderTracked has copy, drop { vault_id: ID, order_id: ID, side: u8, price: u64, size_base: u64, created_at_ms: u64, expiry_ms: u64 }
 
-    public struct LiquidityVault<Base> has key, store {
+    public struct LiquidityVault<Base, phantom C> has key, store {
         id: UID,
         manager: address,
         base_symbol: String,
         // Balances
-        usdc: Coin<USDC>,
+        usdc: Coin<C>,
         base: Coin<Base>,
         // Share accounting
         total_shares: u64,
@@ -95,7 +95,7 @@ module unxversal::vaults {
         paused: bool,
         min_manager_stake_bps: u64,     // e.g., 500 = 5%
         default_perf_fee_bps: u64,      // manager share of profits
-        protocol_perf_fee_bps: u64,     // protocol cut of perf fees (USDC) to Treasury
+        protocol_perf_fee_bps: u64,     // protocol cut of perf fees (collateral) to Treasury
     }
 
     public struct TraderVaultCreated has copy, drop { vault_id: ID, manager: address, created_at: u64, initial_stake: u64, required_stake_bps: u64 }
@@ -106,17 +106,17 @@ module unxversal::vaults {
     public struct PerformanceFeesCalculated has copy, drop { vault_id: ID, hwm_before_1e6: u64, hwm_after_1e6: u64, perf_fee_bps: u64, manager_fee_usdc: u64, protocol_fee_usdc: u64, timestamp: u64 }
     public struct TraderVaultShutdown has copy, drop { vault_id: ID, by: address, timestamp: u64 }
 
-    public struct TraderVault has key, store {
+    public struct TraderVault<phantom C> has key, store {
         id: UID,
         manager: address,
         // Balances
-        usdc: Coin<USDC>,
+        usdc: Coin<C>,
         // Shares
         total_shares: u64,
         shares: Table<address, u64>,
         manager_shares: u64,
         // Fees & HWM
-        hwm_nav_per_share_1e6: u64,    // high water mark in micro-USDC per share
+        hwm_nav_per_share_1e6: u64,    // high water mark in micro-USD per share
         perf_fee_bps: u64,             // manager
         // Accrued fees payable when liquidity allows
         accrued_manager_fee_usdc: u64,
@@ -158,17 +158,17 @@ module unxversal::vaults {
     /*******************************
     * LiquidityVault lifecycle
     *******************************/
-    public entry fun create_liquidity_vault<Base>(
+    public entry fun create_liquidity_vault<Base, C>(
         cfg: &LiquidityRegistry,
         base_symbol: String,
         ctx: &mut TxContext
-    ): LiquidityVault<Base> {
+    ): LiquidityVault<Base, C> {
         assert!(!cfg.paused, E_PAUSED);
-        let v = LiquidityVault<Base> {
+        let v = LiquidityVault<Base, C> {
             id: object::new(ctx),
             manager: ctx.sender(),
             base_symbol: base_symbol.clone(),
-            usdc: Coin::zero<USDC>(ctx),
+            usdc: Coin::zero<C>(ctx),
             base: Coin::zero<Base>(ctx),
             total_shares: 0,
             shares: Table::new<address, u64>(ctx),
@@ -182,15 +182,15 @@ module unxversal::vaults {
         transfer::share_object(v)
     }
 
-    /// Compute NAV in USDC (micro-USDC) using base price if base holdings > 0
-    fun liquidity_nav_usdc_1e6<Base>(v: &LiquidityVault<Base>, oracle_cfg: &OracleConfig, clock: &Clock, base_price: &sui::object::ID): u128 {
+    /// Compute NAV in collateral terms (micro-USD) using base price if base holdings > 0
+    fun liquidity_nav_usdc_1e6<Base, C>(v: &LiquidityVault<Base, C>, oracle_cfg: &OracleConfig, clock: &Clock, base_price: &sui::object::ID): u128 {
         // Note: we cannot map symbol->feed on-chain here; the caller must provide the PriceInfoObject matching base_symbol
         use pyth::price_info::PriceInfoObject;
         let price_obj = unsafe_from_id_to_price_info_object(base_price);
         let usdc_v = Coin::value(&v.usdc) as u128;
         let base_amt = Coin::value(&v.base) as u128;
         if (base_amt == 0u128) { return usdc_v * 1_000_000u128; };
-        let px = get_price_scaled_1e6(oracle_cfg, clock, &price_obj) as u128; // micro-USDC per 1 base
+        let px = get_price_scaled_1e6(oracle_cfg, clock, &price_obj) as u128; // micro-USD per 1 base
         usdc_v * 1_000_000u128 + (base_amt * px)
     }
 
@@ -201,13 +201,13 @@ module unxversal::vaults {
         abort 10
     }
 
-    public entry fun lp_deposit_usdc<Base>(
-        v: &mut LiquidityVault<Base>,
+    public entry fun lp_deposit_usdc<Base, C>(
+        v: &mut LiquidityVault<Base, C>,
         cfg: &LiquidityRegistry,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         base_price: &pyth::price_info::PriceInfoObject,
-        mut amount: Coin<USDC>,
+        mut amount: Coin<C>,
         ctx: &mut TxContext
     ) {
         assert!(!cfg.paused && !v.shutdown, E_PAUSED);
@@ -215,7 +215,7 @@ module unxversal::vaults {
         assert!(deposit_amt > 0, E_ZERO_AMOUNT);
         // Pre-NAV
         let nav_before = nav_liquidity_usdc_1e6(v, oracle_cfg, clock, base_price);
-        // Merge USDC
+        // Merge collateral
         Coin::merge(&mut v.usdc, amount);
         let nav_after = nav_liquidity_usdc_1e6(v, oracle_cfg, clock, base_price);
         let shares_issued = if (v.total_shares == 0) { deposit_amt } else { ((deposit_amt as u128) * (v.total_shares as u128) * 1_000_000u128 / (nav_before as u128)) as u64 };
@@ -225,7 +225,7 @@ module unxversal::vaults {
         event::emit(LPDeposit { vault_id: object::id(v), lp: ctx.sender(), usdc_amount: deposit_amt, shares_issued, total_shares_after: v.total_shares, timestamp: time::now_ms() });
     }
 
-    fun nav_liquidity_usdc_1e6<Base>(v: &LiquidityVault<Base>, oracle_cfg: &OracleConfig, clock: &Clock, base_price: &pyth::price_info::PriceInfoObject): u64 {
+    fun nav_liquidity_usdc_1e6<Base, C>(v: &LiquidityVault<Base, C>, oracle_cfg: &OracleConfig, clock: &Clock, base_price: &pyth::price_info::PriceInfoObject): u64 {
         let usdc_v = Coin::value(&v.usdc) as u128;
         let base_amt = Coin::value(&v.base) as u128;
         if (base_amt == 0u128) { return (usdc_v * 1_000_000u128) as u64; };
@@ -233,15 +233,15 @@ module unxversal::vaults {
         (usdc_v * 1_000_000u128 + base_amt * px) as u64
     }
 
-    public entry fun lp_withdraw_usdc<Base>(
-        v: &mut LiquidityVault<Base>,
+    public entry fun lp_withdraw_usdc<Base, C>(
+        v: &mut LiquidityVault<Base, C>,
         cfg: &LiquidityRegistry,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         base_price: &pyth::price_info::PriceInfoObject,
         shares_to_redeem: u64,
         ctx: &mut TxContext
-    ): Coin<USDC> {
+    ): Coin<C> {
         assert!(!cfg.paused, E_PAUSED);
         let mut bal = if (Table::contains(&v.shares, &ctx.sender())) { *Table::borrow(&v.shares, &ctx.sender()) } else { 0 };
         assert!(bal >= shares_to_redeem && shares_to_redeem > 0, E_NOT_INVESTOR);
@@ -258,12 +258,12 @@ module unxversal::vaults {
         coin_out
     }
 
-    /// Emergency pro-rata withdrawal distributes current USDC and Base holdings proportionally
-    public entry fun lp_emergency_withdraw_pro_rata<Base>(
-        v: &mut LiquidityVault<Base>,
+    /// Emergency pro-rata withdrawal distributes current collateral and Base holdings proportionally
+    public entry fun lp_emergency_withdraw_pro_rata<Base, C>(
+        v: &mut LiquidityVault<Base, C>,
         shares_to_redeem: u64,
         ctx: &mut TxContext
-    ): (Coin<USDC>, Coin<Base>) {
+    ): (Coin<C>, Coin<Base>) {
         assert!(v.shutdown, E_PAUSED);
         let mut bal = if (Table::contains(&v.shares, &ctx.sender())) { *Table::borrow(&v.shares, &ctx.sender()) } else { 0 };
         assert!(bal >= shares_to_redeem && shares_to_redeem > 0, E_NOT_INVESTOR);
@@ -271,7 +271,7 @@ module unxversal::vaults {
         let base_total = Coin::value(&v.base);
         let usdc_pay = (usdc_total as u128) * (shares_to_redeem as u128) / (v.total_shares as u128);
         let base_pay = (base_total as u128) * (shares_to_redeem as u128) / (v.total_shares as u128);
-        let out_usdc = if (usdc_pay > 0) { Coin::split(&mut v.usdc, usdc_pay as u64, ctx) } else { Coin::zero<USDC>(ctx) };
+        let out_usdc = if (usdc_pay > 0) { Coin::split(&mut v.usdc, usdc_pay as u64, ctx) } else { Coin::zero<C>(ctx) };
         let out_base = if (base_pay > 0) { Coin::split(&mut v.base, base_pay as u64, ctx) } else { Coin::zero<Base>(ctx) };
         bal = bal - shares_to_redeem;
         Table::insert(&mut v.shares, ctx.sender(), bal);
@@ -280,12 +280,12 @@ module unxversal::vaults {
         (out_usdc, out_base)
     }
 
-    public entry fun shutdown_liquidity_vault<Base>(v: &mut LiquidityVault<Base>, ctx: &TxContext) { assert!(v.manager == ctx.sender(), E_NOT_MANAGER); v.shutdown = true; event::emit(LiquidityVaultShutdown { vault_id: object::id(v), by: ctx.sender(), timestamp: time::now_ms() }); }
+    public entry fun shutdown_liquidity_vault<Base, C>(v: &mut LiquidityVault<Base, C>, ctx: &TxContext) { assert!(v.manager == ctx.sender(), E_NOT_MANAGER); v.shutdown = true; event::emit(LiquidityVaultShutdown { vault_id: object::id(v), by: ctx.sender(), timestamp: time::now_ms() }); }
 
     /*******************************
     * LiquidityVault – DEX integration (vault-safe)
     *******************************/
-    public entry fun place_vault_sell<Base>(cfg: &DexConfig, v: &mut LiquidityVault<Base>, price: u64, size_base: u64, expiry_ms: u64, ctx: &mut TxContext): VaultOrderSell<Base> {
+    public entry fun place_vault_sell<Base, C>(cfg: &DexConfig, v: &mut LiquidityVault<Base, C>, price: u64, size_base: u64, expiry_ms: u64, ctx: &mut TxContext): VaultOrderSell<Base> {
         assert!(!v.shutdown, E_SHUTDOWN);
         assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
         let order = Dex::place_vault_sell_order::<Base>(cfg, price, size_base, &mut v.base, expiry_ms, ctx);
@@ -294,34 +294,34 @@ module unxversal::vaults {
         transfer::share_object(order)
     }
 
-    public entry fun place_vault_buy<Base>(cfg: &DexConfig, v: &mut LiquidityVault<Base>, price: u64, size_base: u64, expiry_ms: u64, ctx: &mut TxContext): VaultOrderBuy<Base> {
+    public entry fun place_vault_buy<Base, C>(cfg: &DexConfig, v: &mut LiquidityVault<Base, C>, price: u64, size_base: u64, expiry_ms: u64, ctx: &mut TxContext): VaultOrderBuy<Base, C> {
         assert!(!v.shutdown, E_SHUTDOWN);
         assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
         // Enforce min cash buffer pre-escrow
         let usdc_before = Coin::value(&v.usdc);
         let usdc_needed = price * size_base;
         assert!(usdc_before >= usdc_needed, E_INSUFFICIENT_LIQUIDITY);
-        let order = Dex::place_vault_buy_order::<Base>(cfg, price, size_base, &mut v.usdc, expiry_ms, ctx);
+        let order = Dex::place_vault_buy_order::<Base, C>(cfg, price, size_base, &mut v.usdc, expiry_ms, ctx);
         vector::push_back(&mut v.active_orders, object::id(&order));
         event::emit(VaultDexOrderTracked { vault_id: object::id(v), order_id: object::id(&order), side: 0, price, size_base, created_at_ms: time::now_ms(), expiry_ms });
         transfer::share_object(order)
     }
 
-    public entry fun cancel_vault_sell<Base>(v: &mut LiquidityVault<Base>, order: VaultOrderSell<Base>, ctx: &mut TxContext) {
+    public entry fun cancel_vault_sell<Base, C>(v: &mut LiquidityVault<Base, C>, order: VaultOrderSell<Base>, ctx: &mut TxContext) {
         assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
         Dex::cancel_vault_sell_order::<Base>(order, &mut v.base, ctx);
     }
 
-    public entry fun cancel_vault_buy<Base>(v: &mut LiquidityVault<Base>, order: VaultOrderBuy<Base>, ctx: &mut TxContext) {
+    public entry fun cancel_vault_buy<Base, C>(v: &mut LiquidityVault<Base, C>, order: VaultOrderBuy<Base, C>, ctx: &mut TxContext) {
         assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
-        Dex::cancel_vault_buy_order::<Base>(order, &mut v.usdc, ctx);
+        Dex::cancel_vault_buy_order::<Base, C>(order, &mut v.usdc, ctx);
     }
 
-    public entry fun match_vault_orders<Base>(
+    public entry fun match_vault_orders<Base, C>(
         cfg: &mut DexConfig,
-        v_buy: &mut LiquidityVault<Base>,
-        v_sell: &mut LiquidityVault<Base>,
-        buy: &mut VaultOrderBuy<Base>,
+        v_buy: &mut LiquidityVault<Base, C>,
+        v_sell: &mut LiquidityVault<Base, C>,
+        buy: &mut VaultOrderBuy<Base, C>,
         sell: &mut VaultOrderSell<Base>,
         max_fill_base: u64,
         taker_is_buyer: bool,
@@ -329,12 +329,12 @@ module unxversal::vaults {
         unxv_price: &pyth::price_info::PriceInfoObject,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
-        treasury: &mut Treasury,
+        treasury: &mut Treasury<C>,
         min_price: u64,
         max_price: u64,
         ctx: &mut TxContext
     ) {
-        Dex::match_vault_orders::<Base>(
+        Dex::match_vault_orders::<Base, C>(
             cfg,
             buy,
             sell,
@@ -354,22 +354,22 @@ module unxversal::vaults {
     }
 
     /*******************************
-    * TraderVault lifecycle and accounting (USDC-only)
+    * TraderVault lifecycle and accounting (collateral-only)
     *******************************/
-    public entry fun create_trader_vault(
+    public entry fun create_trader_vault<C>(
         cfg: &TraderVaultRegistry,
-        initial_stake: Coin<USDC>,
+        initial_stake: Coin<C>,
         ctx: &mut TxContext
-    ): TraderVault {
+    ): TraderVault<C> {
         assert!(!cfg.paused, E_PAUSED);
         let stake_amt = Coin::value(&initial_stake);
         assert!(stake_amt > 0, E_ZERO_AMOUNT);
         let mut shares_tbl = Table::new<address, u64>(ctx);
         let manager_addr = ctx.sender();
-        let mut v = TraderVault {
+        let mut v = TraderVault<C> {
             id: object::new(ctx),
             manager: manager_addr,
-            usdc: Coin::zero<USDC>(ctx),
+            usdc: Coin::zero<C>(ctx),
             total_shares: 0,
             shares: shares_tbl,
             manager_shares: 0,
@@ -389,16 +389,16 @@ module unxversal::vaults {
         transfer::share_object(v)
     }
 
-    fun manager_stake_bps(v: &TraderVault): u64 {
+    fun manager_stake_bps<C>(v: &TraderVault<C>): u64 {
         if (v.total_shares == 0) { return 0; };
         (v.manager_shares * 10_000) / v.total_shares
     }
 
     /// Investors can deposit only if manager stake ≥ required bps
-    public entry fun investor_deposit(
-        v: &mut TraderVault,
+    public entry fun investor_deposit<C>(
+        v: &mut TraderVault<C>,
         cfg: &TraderVaultRegistry,
-        mut amount: Coin<USDC>,
+        mut amount: Coin<C>,
         ctx: &mut TxContext
     ) {
         assert!(!cfg.paused && !v.shutdown, E_PAUSED);
@@ -416,7 +416,7 @@ module unxversal::vaults {
     }
 
     /// Manager can add stake anytime (increases manager_shares proportionally)
-    public entry fun manager_add_stake(v: &mut TraderVault, mut stake: Coin<USDC>, ctx: &mut TxContext) {
+    public entry fun manager_add_stake<C>(v: &mut TraderVault<C>, mut stake: Coin<C>, ctx: &mut TxContext) {
         assert!(v.manager == ctx.sender() && !v.shutdown, E_NOT_MANAGER);
         let amt = Coin::value(&stake);
         assert!(amt > 0, E_ZERO_AMOUNT);
@@ -431,7 +431,7 @@ module unxversal::vaults {
     }
 
     /// Manager unstake: only allowed if remains ≥ required bps or vault is shutdown
-    public entry fun manager_unstake(v: &mut TraderVault, cfg: &TraderVaultRegistry, shares_to_burn: u64, ctx: &mut TxContext): Coin<USDC> {
+    public entry fun manager_unstake<C>(v: &mut TraderVault<C>, cfg: &TraderVaultRegistry, shares_to_burn: u64, ctx: &mut TxContext): Coin<C> {
         assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
         let mut mgr_pos = v.manager_shares;
         assert!(shares_to_burn > 0 && mgr_pos >= shares_to_burn, E_NOT_INVESTOR);
@@ -442,7 +442,7 @@ module unxversal::vaults {
             let bps_post = if (total_post == 0) { 0 } else { (mgr_post * 10_000) / total_post };
             assert!(bps_post >= cfg.min_manager_stake_bps, E_STAKE_DEFICIT);
         }
-        // redeem pro-rata USDC
+        // redeem pro-rata collateral
         let payout = (Coin::value(&v.usdc) as u128) * (shares_to_burn as u128) / (v.total_shares as u128);
         let coin_out = Coin::split(&mut v.usdc, payout as u64, ctx);
         v.manager_shares = v.manager_shares - shares_to_burn;
@@ -454,7 +454,7 @@ module unxversal::vaults {
         coin_out
     }
 
-    public entry fun investor_withdraw(v: &mut TraderVault, shares_to_redeem: u64, ctx: &mut TxContext): Coin<USDC> {
+    public entry fun investor_withdraw<C>(v: &mut TraderVault<C>, shares_to_redeem: u64, ctx: &mut TxContext): Coin<C> {
         let mut bal = if (Table::contains(&v.shares, &ctx.sender())) { *Table::borrow(&v.shares, &ctx.sender()) } else { 0 };
         assert!(shares_to_redeem > 0 && bal >= shares_to_redeem, E_NOT_INVESTOR);
         let payout = (Coin::value(&v.usdc) as u128) * (shares_to_redeem as u128) / (v.total_shares as u128);
@@ -470,7 +470,7 @@ module unxversal::vaults {
     }
 
     /// Calculate performance fee vs HWM and accrue amounts (not paid out yet)
-    public entry fun crystallize_performance_fee(v: &mut TraderVault, cfg: &TraderVaultRegistry, _ctx: &mut TxContext) {
+    public entry fun crystallize_performance_fee<C>(v: &mut TraderVault<C>, cfg: &TraderVaultRegistry, _ctx: &mut TxContext) {
         if (v.total_shares == 0) { return; }
         let nav = Coin::value(&v.usdc) as u128;
         let nav_per_share_1e6 = (nav * 1_000_000u128 / (v.total_shares as u128)) as u64;
@@ -486,7 +486,7 @@ module unxversal::vaults {
     }
 
     /// Attempt to pay accrued fees if liquidity allows; protocol fee goes to Treasury
-    public entry fun pay_accrued_fees(v: &mut TraderVault, cfg: &TraderVaultRegistry, treasury: &mut Treasury, ctx: &mut TxContext) {
+    public entry fun pay_accrued_fees<C>(v: &mut TraderVault<C>, cfg: &TraderVaultRegistry, treasury: &mut Treasury<C>, ctx: &mut TxContext) {
         let available = Coin::value(&v.usdc);
         let mut pay_manager = if (v.accrued_manager_fee_usdc > available) { available } else { v.accrued_manager_fee_usdc };
         let mut left = available - pay_manager;
@@ -498,25 +498,25 @@ module unxversal::vaults {
         }
         if (pay_protocol > 0) {
             let outp = Coin::split(&mut v.usdc, pay_protocol, ctx);
-            TreasuryMod::deposit_usdc(treasury, outp, b"perf_fee".to_string(), v.manager, ctx);
+            TreasuryMod::deposit_collateral(treasury, outp, b"perf_fee".to_string(), v.manager, ctx);
             v.accrued_protocol_fee_usdc = v.accrued_protocol_fee_usdc - pay_protocol;
         }
     }
 
-    public entry fun shutdown_trader_vault(v: &mut TraderVault, ctx: &TxContext) { assert!(v.manager == ctx.sender(), E_NOT_MANAGER); v.shutdown = true; event::emit(TraderVaultShutdown { vault_id: object::id(v), by: ctx.sender(), timestamp: time::now_ms() }); }
+    public entry fun shutdown_trader_vault<C>(v: &mut TraderVault<C>, ctx: &TxContext) { assert!(v.manager == ctx.sender(), E_NOT_MANAGER); v.shutdown = true; event::emit(TraderVaultShutdown { vault_id: object::id(v), by: ctx.sender(), timestamp: time::now_ms() }); }
 
     /*******************************
     * Read-only helpers
     *******************************/
-    public fun liquidity_vault_balances<Base>(v: &LiquidityVault<Base>): (u64, u64, u64, u64) {
+    public fun liquidity_vault_balances<Base, C>(v: &LiquidityVault<Base, C>): (u64, u64, u64, u64) {
         (Coin::value(&v.usdc), Coin::value(&v.base), v.total_shares, vector::length(&v.active_orders) as u64)
     }
-    public fun liquidity_user_shares<Base>(v: &LiquidityVault<Base>, addr: address): u64 { if (Table::contains(&v.shares, &addr)) { *Table::borrow(&v.shares, &addr) } else { 0 } }
-    public fun liquidity_is_shutdown<Base>(v: &LiquidityVault<Base>): bool { v.shutdown }
+    public fun liquidity_user_shares<Base, C>(v: &LiquidityVault<Base, C>, addr: address): u64 { if (Table::contains(&v.shares, &addr)) { *Table::borrow(&v.shares, &addr) } else { 0 } }
+    public fun liquidity_is_shutdown<Base, C>(v: &LiquidityVault<Base, C>): bool { v.shutdown }
 
-    public fun trader_nav(v: &TraderVault): (u64, u64, u64) { (Coin::value(&v.usdc), v.total_shares, v.hwm_nav_per_share_1e6) }
-    public fun trader_user_shares(v: &TraderVault, addr: address): u64 { if (Table::contains(&v.shares, &addr)) { *Table::borrow(&v.shares, &addr) } else { 0 } }
-    public fun trader_manager_stake_bps(v: &TraderVault): u64 { manager_stake_bps(v) }
+    public fun trader_nav<C>(v: &TraderVault<C>): (u64, u64, u64) { (Coin::value(&v.usdc), v.total_shares, v.hwm_nav_per_share_1e6) }
+    public fun trader_user_shares<C>(v: &TraderVault<C>, addr: address): u64 { if (Table::contains(&v.shares, &addr)) { *Table::borrow(&v.shares, &addr) } else { 0 } }
+    public fun trader_manager_stake_bps<C>(v: &TraderVault<C>): u64 { manager_stake_bps(v) }
 }
 
 module unxversal::vaults {

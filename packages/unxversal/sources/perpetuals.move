@@ -79,14 +79,14 @@ module unxversal::perpetuals {
     /*******************************
     * Position (owned)
     *******************************/
-    public struct PerpPosition has key, store {
+    public struct PerpPosition<phantom C> has key, store {
         id: UID,
         owner: address,
         market_id: ID,
         side: u8,                            // 0 long, 1 short
         size: u64,                           // in units
         avg_entry_price_micro_usd: u64,
-        margin: Coin<usdc::usdc::USDC>,
+        margin: Coin<C>,
         accumulated_pnl: i64,               // includes funding accruals
         last_funding_ms: u64,
     }
@@ -95,7 +95,7 @@ module unxversal::perpetuals {
     * Events
     *******************************/
     public struct PerpMarketListed has copy, drop { symbol: String, underlying: String, tick: u64, timestamp: u64 }
-    public struct PerpFillRecorded has copy, drop { symbol: String, price: u64, size: u64, taker: address, maker: address, taker_is_buyer: bool, fee_usdc: u64, unxv_discount_applied: bool, maker_rebate_usdc: u64, bot_reward_usdc: u64, timestamp: u64 }
+    public struct PerpFillRecorded has copy, drop { symbol: String, price: u64, size: u64, taker: address, maker: address, taker_is_buyer: bool, fee_paid: u64, unxv_discount_applied: bool, maker_rebate: u64, bot_reward: u64, timestamp: u64 }
     public struct PerpPositionOpened has copy, drop { symbol: String, account: address, side: u8, size: u64, price: u64, margin_locked: u64, sponsor: address, timestamp: u64 }
     public struct PerpPositionClosed has copy, drop { symbol: String, account: address, qty: u64, price: u64, margin_refund: u64, timestamp: u64 }
     public struct PerpVariationMargin has copy, drop { symbol: String, account: address, side: u8, qty: u64, from_price: u64, to_price: u64, pnl_delta: i64, new_margin: u64, timestamp: u64 }
@@ -107,7 +107,7 @@ module unxversal::perpetuals {
     /*******************************
     * Init & Admin
     *******************************/
-    public entry fun init_perps_registry(synth_reg: &SynthRegistry, ctx: &mut TxContext): PerpsRegistry {
+    public entry fun init_perps_registry<C>(synth_reg: &SynthRegistry, ctx: &mut TxContext): PerpsRegistry {
         assert_is_admin(synth_reg, ctx.sender());
         let reg = PerpsRegistry {
             id: object::new(ctx),
@@ -124,7 +124,12 @@ module unxversal::perpetuals {
             default_maint_margin_bps: 600,
             min_list_interval_ms: 60_000,
             last_list_ms: Table::new<String, u64>(ctx),
-            treasury_id: object::id(&Treasury { id: object::new(ctx), usdc: Coin::zero<usdc::usdc::USDC>(ctx), unxv: Coin::zero<unxversal::unxv::UNXV>(ctx), cfg: unxversal::treasury::TreasuryCfg { unxv_burn_bps: 0 } }),
+            treasury_id: {
+                let t = Treasury<C> { id: object::new(ctx), collateral: Coin::zero<C>(ctx), unxv: Coin::zero<unxversal::unxv::UNXV>(ctx), cfg: unxversal::treasury::TreasuryCfg { unxv_burn_bps: 0 } };
+                let id = object::id(&t);
+                transfer::share_object(t);
+                id
+            },
         };
         transfer::share_object(reg)
     }
@@ -150,7 +155,7 @@ module unxversal::perpetuals {
         reg.default_maint_margin_bps = maint_bps;
     }
 
-    public entry fun set_treasury(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut PerpsRegistry, treasury: &Treasury, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); reg.treasury_id = object::id(treasury); }
+    public entry fun set_treasury<C>(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut PerpsRegistry, treasury: &Treasury<C>, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); reg.treasury_id = object::id(treasury); }
     public entry fun pause_registry(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut PerpsRegistry, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); reg.paused = true; }
     public entry fun resume_registry(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut PerpsRegistry, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); reg.paused = false; }
 
@@ -203,7 +208,7 @@ module unxversal::perpetuals {
         unxv_usd_price: &PriceInfoObject,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
-        treasury: &mut Treasury,
+        treasury: &mut Treasury<C>,
         oi_increase: bool,
         min_price: u64,
         max_price: u64,
@@ -238,21 +243,21 @@ module unxversal::perpetuals {
         let usdc_fee_after_discount = if (discount_applied) { if (discount_usdc <= trade_fee) { trade_fee - discount_usdc } else { 0 } } else { trade_fee };
         let maker_rebate = (trade_fee * reg.maker_rebate_bps) / 10_000;
         if (usdc_fee_after_discount > 0) {
-            let mut fee_collector = Coin::zero<usdc::usdc::USDC>(ctx);
+        let mut fee_collector = Coin::zero<C>(ctx);
             if (maker_rebate > 0 && maker_rebate < usdc_fee_after_discount) { let to_maker = Coin::split(&mut fee_collector, maker_rebate, ctx); transfer::public_transfer(to_maker, maker); }
             if (reg.trade_bot_reward_bps > 0) { let bot_cut = (usdc_fee_after_discount * reg.trade_bot_reward_bps) / 10_000; if (bot_cut > 0) { let to_bot = Coin::split(&mut fee_collector, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); } }
-            TreasuryMod::deposit_usdc(treasury, fee_collector, b"perp_trade".to_string(), ctx.sender(), ctx);
+            TreasuryMod::deposit_collateral(treasury, fee_collector, b"perp_trade".to_string(), ctx.sender(), ctx);
         }
         if (oi_increase) { market.open_interest = market.open_interest + size; } else { if (market.open_interest >= size) { market.open_interest = market.open_interest - size; } }
         market.volume_premium_usdc = market.volume_premium_usdc + notional;
         market.last_trade_price_micro_usd = price_micro_usd;
-        event::emit(PerpFillRecorded { symbol: market.symbol.clone(), price: price_micro_usd, size, taker: ctx.sender(), maker, taker_is_buyer, fee_usdc: usdc_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate_usdc: maker_rebate, bot_reward_usdc: if (reg.trade_bot_reward_bps > 0) { (usdc_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: time::now_ms() });
+        event::emit(PerpFillRecorded { symbol: market.symbol.clone(), price: price_micro_usd, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: usdc_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (usdc_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: time::now_ms() });
     }
 
     /*******************************
     * Positions
     *******************************/
-    public entry fun open_position(market: &mut PerpMarket, side: u8, size: u64, entry_price_micro_usd: u64, mut margin: Coin<usdc::usdc::USDC>, ctx: &mut TxContext): PerpPosition {
+    public entry fun open_position<C>(market: &mut PerpMarket, side: u8, size: u64, entry_price_micro_usd: u64, mut margin: Coin<C>, ctx: &mut TxContext): PerpPosition<C> {
         assert!(!market.paused, E_PAUSED);
         assert!(size > 0, E_MIN_INTERVAL);
         assert!(entry_price_micro_usd % market.tick_size_micro_usd == 0, E_MIN_INTERVAL);
@@ -262,13 +267,13 @@ module unxversal::perpetuals {
         let locked = Coin::split(&mut margin, init_req, ctx);
         transfer::public_transfer(margin, ctx.sender());
         market.open_interest = market.open_interest + size;
-        let pos = PerpPosition { id: object::new(ctx), owner: ctx.sender(), market_id: object::id(market), side, size, avg_entry_price_micro_usd: entry_price_micro_usd, margin: locked, accumulated_pnl: 0, last_funding_ms: market.last_funding_ms };
+        let pos = PerpPosition<C> { id: object::new(ctx), owner: ctx.sender(), market_id: object::id(market), side, size, avg_entry_price_micro_usd: entry_price_micro_usd, margin: locked, accumulated_pnl: 0, last_funding_ms: market.last_funding_ms };
         let sponsor_addr = match sui::tx_context::sponsor(ctx) { option::Some(a) => a, option::None => 0x0 };
         event::emit(PerpPositionOpened { symbol: market.symbol.clone(), account: pos.owner, side, size, price: entry_price_micro_usd, margin_locked: Coin::value(&pos.margin), sponsor: sponsor_addr, timestamp: time::now_ms() });
         pos
     }
 
-    public entry fun close_position(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition, close_price_micro_usd: u64, quantity: u64, treasury: &mut Treasury, ctx: &mut TxContext) {
+    public entry fun close_position<C>(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition<C>, close_price_micro_usd: u64, quantity: u64, treasury: &mut Treasury<C>, ctx: &mut TxContext) {
         assert!(!reg.paused && !market.paused, E_PAUSED);
         assert!(quantity > 0 && quantity <= pos.size, E_MIN_INTERVAL);
         assert!(close_price_micro_usd % market.tick_size_micro_usd == 0, E_MIN_INTERVAL);
@@ -286,7 +291,7 @@ module unxversal::perpetuals {
     /*******************************
     * Funding accrual (trustless, no paired transfers)
     *******************************/
-    public entry fun apply_funding_for_position(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition, index_price_micro_usd: u64, clock: &Clock) {
+    public entry fun apply_funding_for_position<C>(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition<C>, index_price_micro_usd: u64, clock: &Clock) {
         assert!(!reg.paused && !market.paused, E_PAUSED);
         let now = time::now_ms();
         let elapsed = if (now > market.last_funding_ms) { now - market.last_funding_ms } else { 0 };
@@ -316,7 +321,7 @@ module unxversal::perpetuals {
     /*******************************
     * Liquidation
     *******************************/
-    public entry fun liquidate_position(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition, mark_price_micro_usd: u64, treasury: &mut Treasury, ctx: &mut TxContext) {
+    public entry fun liquidate_position<C>(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition<C>, mark_price_micro_usd: u64, treasury: &mut Treasury<C>, ctx: &mut TxContext) {
         assert!(!reg.paused && !market.paused, E_PAUSED);
         assert!(object::id(&market) == pos.market_id, E_MIN_INTERVAL);
         let margin_val = Coin::value(&pos.margin);
@@ -332,7 +337,7 @@ module unxversal::perpetuals {
             // Bot reward optional via trade_bot_reward_bps reuse (no separate field here)
             let bot_cut = (seized_total * reg.trade_bot_reward_bps) / 10_000;
             if (bot_cut > 0) { let to_bot = Coin::split(&mut seized, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); }
-            TreasuryMod::deposit_usdc(treasury, seized, b"perp_liquidation".to_string(), ctx.sender(), ctx);
+            TreasuryMod::deposit_collateral(treasury, seized, b"perp_liquidation".to_string(), ctx.sender(), ctx);
         }
         let qty = pos.size; pos.size = 0;
         if (market.open_interest >= qty) { market.open_interest = market.open_interest - qty; }
@@ -344,7 +349,7 @@ module unxversal::perpetuals {
     *******************************/
     public fun market_id(reg: &PerpsRegistry, symbol: &String): ID { *Table::borrow(&reg.markets, symbol) }
     public fun market_metrics(m: &PerpMarket): (u64, u64, u64, i64) { (m.open_interest, m.volume_premium_usdc, m.last_trade_price_micro_usd, m.funding_rate_bps) }
-    public fun position_info(p: &PerpPosition): (address, ID, u8, u64, u64, u64, i64, u64) { (p.owner, p.market_id, p.side, p.size, p.avg_entry_price_micro_usd, Coin::value(&p.margin), p.accumulated_pnl, p.last_funding_ms) }
+    public fun position_info<C>(p: &PerpPosition<C>): (address, ID, u8, u64, u64, u64, i64, u64) { (p.owner, p.market_id, p.side, p.size, p.avg_entry_price_micro_usd, Coin::value(&p.margin), p.accumulated_pnl, p.last_funding_ms) }
     public fun registry_trade_fee_params(reg: &PerpsRegistry): (u64, u64, u64, u64) { (reg.trade_fee_bps, reg.maker_rebate_bps, reg.unxv_discount_bps, reg.trade_bot_reward_bps) }
     public fun registry_funding_params(reg: &PerpsRegistry): (u64, i64, u64) { (reg.funding_interval_ms, reg.max_funding_rate_bps, reg.premium_weight_bps) }
     public fun registry_margin_defaults(reg: &PerpsRegistry): (u64, u64) { (reg.default_init_margin_bps, reg.default_maint_margin_bps) }

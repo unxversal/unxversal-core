@@ -32,7 +32,7 @@ module unxversal::lending {
     use unxversal::treasury::Treasury;
     use unxversal::unxv::UNXV;
     use unxversal::synthetics::{Self as Synth, SynthRegistry, CollateralVault};
-    use usdc::usdc::USDC;
+    // Remove hardcoded USDC; lending remains generic and integrates with chosen collateral C
 
     /*******************************
     * Errors
@@ -104,7 +104,7 @@ module unxversal::lending {
         symbol: String,
         reserve_factor_bps: u64,
         total_borrow_units: u64,
-        total_liquidity_usdc: u64,
+        total_liquidity: u64,
         reserve_units: u64,
     }
 
@@ -132,7 +132,7 @@ module unxversal::lending {
         owner: address,
         supply_balances: Table<String, u64>, // principal units per asset
         borrow_balances: Table<String, u64>, // principal units per asset
-        synth_liquidity_usdc: Table<String, u64>, // per-synth supplied USDC liquidity
+        synth_liquidity: Table<String, u64>, // per-synth supplied collateral liquidity
         synth_borrow_units: Table<String, u64>,   // per-synth borrow units
         last_update_ms: u64,
     }
@@ -317,7 +317,7 @@ module unxversal::lending {
             owner: ctx.sender(),
             supply_balances: Table::new::<String, u64>(ctx),
             borrow_balances: Table::new::<String, u64>(ctx),
-            synth_liquidity_usdc: Table::new::<String, u64>(ctx),
+            synth_liquidity: Table::new::<String, u64>(ctx),
             synth_borrow_units: Table::new::<String, u64>(ctx),
             last_update_ms: time::now_ms()
         };
@@ -624,19 +624,19 @@ module unxversal::lending {
         out
     }
 
-    public fun protocol_metrics(reg: &LendingRegistry, pools_usdc: vector<&LendingPool<USDC>>): (u128, u128, u128) {
-        let mut total_supply_usdc: u128 = 0;
-        let mut total_borrows_usdc: u128 = 0;
-        let mut total_reserves_usdc: u128 = 0;
+    public fun protocol_metrics<C>(reg: &LendingRegistry, pools: vector<&LendingPool<C>>): (u128, u128, u128) {
+        let mut total_supply: u128 = 0;
+        let mut total_borrows: u128 = 0;
+        let mut total_reserves: u128 = 0;
         let mut i = 0;
-        while (i < vector::length(&pools_usdc)) {
-            let p = *vector::borrow(&pools_usdc, i);
-            total_supply_usdc = total_supply_usdc + (p.total_supply as u128);
-            total_borrows_usdc = total_borrows_usdc + (p.total_borrows as u128);
-            total_reserves_usdc = total_reserves_usdc + (p.total_reserves as u128);
+        while (i < vector::length(&pools)) {
+            let p = *vector::borrow(&pools, i);
+            total_supply = total_supply + (p.total_supply as u128);
+            total_borrows = total_borrows + (p.total_borrows as u128);
+            total_reserves = total_reserves + (p.total_reserves as u128);
             i = i + 1;
         };
-        (total_supply_usdc, total_borrows_usdc, total_reserves_usdc)
+        (total_supply, total_borrows, total_reserves)
     }
 
     /*******************************
@@ -721,23 +721,23 @@ module unxversal::lending {
     }
 
     /*******************************
-    * Reserve skim to Treasury (USDC-only)
+    * Reserve skim to Treasury (collateral)
     *******************************/
-    public entry fun skim_reserves_to_treasury_usdc(
+    public entry fun skim_reserves_to_treasury<C>(
         _reg: &LendingRegistry,
-        pool_usdc: &mut LendingPool<USDC>,
-        treasury: &mut Treasury,
+        pool: &mut LendingPool<C>,
+        treasury: &mut Treasury<C>,
         amount: u64,
         ctx: &mut TxContext
     ) {
         assert!(amount > 0, E_ZERO_AMOUNT);
-        let cash = BalanceMod::value(&pool_usdc.cash);
+        let cash = BalanceMod::value(&pool.cash);
         assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
-        assert!(pool_usdc.total_reserves >= amount, E_INSUFFICIENT_LIQUIDITY);
-        let out_bal = BalanceMod::split(&mut pool_usdc.cash, amount);
+        assert!(pool.total_reserves >= amount, E_INSUFFICIENT_LIQUIDITY);
+        let out_bal = BalanceMod::split(&mut pool.cash, amount);
         let out = Coin::from_balance(out_bal, ctx);
-        unxversal::treasury::deposit_usdc(treasury, out, b"lending_reserve".to_string(), ctx.sender(), ctx);
-        pool_usdc.total_reserves = pool_usdc.total_reserves - amount;
+        unxversal::treasury::deposit_collateral(treasury, out, b"lending_reserve".to_string(), ctx.sender(), ctx);
+        pool.total_reserves = pool.total_reserves - amount;
     }
 
     /*******************************
@@ -850,7 +850,7 @@ module unxversal::lending {
     ) {
         assert_is_admin(reg, ctx.sender());
         assert!(!Table::contains(&reg.synth_markets, &symbol), E_ASSET_EXISTS);
-        let m = SynthMarket { symbol: symbol.clone(), reserve_factor_bps, total_borrow_units: 0, total_liquidity_usdc: 0, reserve_units: 0 };
+        let m = SynthMarket { symbol: symbol.clone(), reserve_factor_bps, total_borrow_units: 0, total_liquidity: 0, reserve_units: 0 };
         Table::insert(&mut reg.synth_markets, symbol, m);
         // Display for SynthMarket
         let publisher = package::claim(package::Publisher { id: object::new(ctx) }, ctx);
@@ -859,65 +859,65 @@ module unxversal::lending {
         disp.add(b"symbol".to_string(), b"{symbol}".to_string());
         disp.add(b"reserve_factor_bps".to_string(), b"{reserve_factor_bps}".to_string());
         disp.add(b"total_borrow_units".to_string(), b"{total_borrow_units}".to_string());
-        disp.add(b"total_liquidity_usdc".to_string(), b"{total_liquidity_usdc}".to_string());
+        disp.add(b"total_liquidity".to_string(), b"{total_liquidity}".to_string());
         disp.update_version();
         transfer::public_transfer(disp, ctx.sender());
         transfer::public_transfer(publisher, ctx.sender());
     }
 
-    public entry fun supply_synth_liquidity(
+    public entry fun supply_synth_liquidity<C>(
         reg: &LendingRegistry,
         market_symbol: String,
-        pool_usdc: &mut LendingPool<USDC>,
+        pool_collateral: &mut LendingPool<C>,
         acct: &mut UserAccount,
-        mut usdc: Coin<USDC>,
+        mut coins: Coin<C>,
         amount: u64,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, 1000);
         assert!(amount > 0, E_ZERO_AMOUNT);
         assert!(Table::contains(&reg.synth_markets, &market_symbol), E_UNKNOWN_ASSET);
-        let have = Coin::value(&usdc);
+        let have = Coin::value(&coins);
         assert!(have >= amount, E_ZERO_AMOUNT);
-        let exact = Coin::split(&mut usdc, amount, ctx);
-        transfer::public_transfer(usdc, ctx.sender());
+        let exact = Coin::split(&mut coins, amount, ctx);
+        transfer::public_transfer(coins, ctx.sender());
         let bal = Coin::into_balance(exact);
-        BalanceMod::join(&mut pool_usdc.cash, bal);
-        pool_usdc.total_supply = pool_usdc.total_supply + amount;
-        let cur = if Table::contains(&acct.synth_liquidity_usdc, &market_symbol) { *Table::borrow(&acct.synth_liquidity_usdc, &market_symbol) } else { 0 };
+        BalanceMod::join(&mut pool_collateral.cash, bal);
+        pool_collateral.total_supply = pool_collateral.total_supply + amount;
+        let cur = if Table::contains(&acct.synth_liquidity, &market_symbol) { *Table::borrow(&acct.synth_liquidity, &market_symbol) } else { 0 };
         let newb = cur + amount;
-        Table::insert(&mut acct.synth_liquidity_usdc, market_symbol.clone(), newb);
+        Table::insert(&mut acct.synth_liquidity, market_symbol.clone(), newb);
         let mut m = Table::borrow_mut(&mut (reg as &LendingRegistry).synth_markets, &market_symbol);
-        m.total_liquidity_usdc = m.total_liquidity_usdc + amount;
+        m.total_liquidity = m.total_liquidity + amount;
         acct.last_update_ms = time::now_ms();
-        event::emit(SynthLiquiditySupplied { user: ctx.sender(), symbol: market_symbol, amount_usdc: amount, new_balance_usdc: newb, timestamp: time::now_ms() });
+        event::emit(SynthLiquiditySupplied { user: ctx.sender(), symbol: market_symbol, amount: amount, new_balance: newb, timestamp: time::now_ms() });
     }
 
-    public entry fun withdraw_synth_liquidity(
+    public entry fun withdraw_synth_liquidity<C>(
         reg: &LendingRegistry,
         market_symbol: String,
-        pool_usdc: &mut LendingPool<USDC>,
+        pool_collateral: &mut LendingPool<C>,
         acct: &mut UserAccount,
         amount: u64,
         ctx: &mut TxContext
-    ): Coin<USDC> {
+    ): Coin<C> {
         assert!(!reg.paused, 1000);
         assert!(amount > 0, E_ZERO_AMOUNT);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
-        assert!(Table::contains(&acct.synth_liquidity_usdc, &market_symbol), E_UNKNOWN_ASSET);
-        let cur = *Table::borrow(&acct.synth_liquidity_usdc, &market_symbol);
+        assert!(Table::contains(&acct.synth_liquidity, &market_symbol), E_UNKNOWN_ASSET);
+        let cur = *Table::borrow(&acct.synth_liquidity, &market_symbol);
         assert!(cur >= amount, E_INSUFFICIENT_LIQUIDITY);
-        let cash = BalanceMod::value(&pool_usdc.cash);
+        let cash = BalanceMod::value(&pool_collateral.cash);
         assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
-        let out_bal = BalanceMod::split(&mut pool_usdc.cash, amount);
+        let out_bal = BalanceMod::split(&mut pool_collateral.cash, amount);
         let out = Coin::from_balance(out_bal, ctx);
         let newb = cur - amount;
-        Table::insert(&mut acct.synth_liquidity_usdc, market_symbol.clone(), newb);
-        pool_usdc.total_supply = pool_usdc.total_supply - amount;
+        Table::insert(&mut acct.synth_liquidity, market_symbol.clone(), newb);
+        pool_collateral.total_supply = pool_collateral.total_supply - amount;
         let mut m = Table::borrow_mut(&mut (reg as &LendingRegistry).synth_markets, &market_symbol);
-        m.total_liquidity_usdc = m.total_liquidity_usdc - amount;
+        m.total_liquidity = m.total_liquidity - amount;
         acct.last_update_ms = time::now_ms();
-        event::emit(SynthLiquidityWithdrawn { user: ctx.sender(), symbol: market_symbol, amount_usdc: amount, remaining_balance_usdc: newb, timestamp: time::now_ms() });
+        event::emit(SynthLiquidityWithdrawn { user: ctx.sender(), symbol: market_symbol, amount: amount, remaining_balance: newb, timestamp: time::now_ms() });
         out
     }
 
@@ -1030,7 +1030,7 @@ module unxversal::lending {
     }
 
     /*******************************
-    * Liquidation for synth borrows (vault-based): repay units and seize USDC from market
+    * Liquidation for synth borrows (vault-based): repay units and seize collateral from market
     *******************************/
     public entry fun liquidate_synth(
         reg: &mut LendingRegistry,
@@ -1040,13 +1040,13 @@ module unxversal::lending {
         price_synth: &PriceInfoObject,
         price_usdc: &PriceInfoObject,
         vault: &mut CollateralVault,
-        pool_usdc: &mut LendingPool<USDC>,
+        pool_usdc: &mut LendingPool<C>,
         debtor: &mut UserAccount,
         symbol: String,
         repay_units: u64,
         bonus_bps: u64,
         ctx: &mut TxContext
-    ): Coin<USDC> {
+    ): Coin<C> {
         assert!(!reg.paused, 1000);
         assert!(repay_units > 0, E_ZERO_AMOUNT);
         assert!(Table::contains(&debtor.synth_borrow_units, &symbol), E_UNKNOWN_ASSET);
@@ -1070,12 +1070,12 @@ module unxversal::lending {
         Table::insert(&mut debtor.synth_borrow_units, symbol.clone(), newb);
         let mut m = Table::borrow_mut(&mut reg.synth_markets, &symbol);
         m.total_borrow_units = m.total_borrow_units - repay_units;
-        // Determine USDC to seize (value + bonus) from synth market liquidity
+        // Determine collateral to seize (value + bonus) from synth market liquidity
         let px = get_price_scaled_1e6(oracle_cfg, clock, price_synth) as u128; // micro-USD per unit
         let val = (repay_units as u128) * px;
         let seize_val = val + (val * (bonus_bps as u128)) / 10_000u128;
         let seize_units = if (seize_val > (u64::MAX as u128)) { u64::MAX } else { seize_val as u64 };
-        // Ensure pool has USDC liquidity
+        // Ensure pool has collateral liquidity
         let cash = BalanceMod::value(&pool_usdc.cash);
         assert!(cash >= seize_units, E_INSUFFICIENT_LIQUIDITY);
         let out_bal = BalanceMod::split(&mut pool_usdc.cash, seize_units);

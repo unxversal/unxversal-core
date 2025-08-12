@@ -77,14 +77,14 @@ module unxversal::gas_futures {
     /*******************************
     * Positions
     *******************************/
-    public struct GasPosition has key, store {
+    public struct GasPosition<phantom C> has key, store {
         id: UID,
         owner: address,
         contract_id: ID,
         side: u8,                    // 0 long, 1 short
         size: u64,                   // in contracts
         avg_price_micro_usd_per_gas: u64,
-        margin: Coin<usdc::usdc::USDC>,
+        margin: Coin<C>,
         accumulated_pnl: i64,
         opened_at_ms: u64,
     }
@@ -94,7 +94,7 @@ module unxversal::gas_futures {
     *******************************/
     public struct GasContractListed has copy, drop { symbol: String, contract_size_gas_units: u64, tick_size_micro_usd_per_gas: u64, expiry_ms: u64, timestamp: u64 }
     public struct GasSettled has copy, drop { symbol: String, settlement_price_micro_usd_per_gas: u64, timestamp: u64 }
-    public struct GasFillRecorded has copy, drop { symbol: String, price_micro_usd_per_gas: u64, size: u64, taker: address, maker: address, taker_is_buyer: bool, fee_usdc: u64, unxv_discount_applied: bool, maker_rebate_usdc: u64, bot_reward_usdc: u64, timestamp: u64 }
+    public struct GasFillRecorded has copy, drop { symbol: String, price_micro_usd_per_gas: u64, size: u64, taker: address, maker: address, taker_is_buyer: bool, fee_paid: u64, unxv_discount_applied: bool, maker_rebate: u64, bot_reward: u64, timestamp: u64 }
     public struct GasPositionOpened has copy, drop { symbol: String, account: address, side: u8, size: u64, price_micro_usd_per_gas: u64, margin_locked: u64, sponsor: address, timestamp: u64 }
     public struct GasPositionClosed has copy, drop { symbol: String, account: address, qty: u64, price_micro_usd_per_gas: u64, margin_refund: u64, timestamp: u64 }
     public struct GasVariationMargin has copy, drop { symbol: String, account: address, side: u8, qty: u64, from_price: u64, to_price: u64, pnl_delta: i64, new_margin: u64, timestamp: u64 }
@@ -121,7 +121,12 @@ module unxversal::gas_futures {
             default_init_margin_bps: 1_000,
             default_maint_margin_bps: 600,
             last_list_ms: Table::new<String, u64>(ctx),
-            treasury_id: object::id(&Treasury { id: object::new(ctx), usdc: Coin::zero<usdc::usdc::USDC>(ctx), unxv: Coin::zero<unxversal::unxv::UNXV>(ctx), cfg: unxversal::treasury::TreasuryCfg { unxv_burn_bps: 0 } }),
+            treasury_id: {
+                let t = Treasury<C> { id: object::new(ctx), collateral: Coin::zero<C>(ctx), unxv: Coin::zero<unxversal::unxv::UNXV>(ctx), cfg: unxversal::treasury::TreasuryCfg { unxv_burn_bps: 0 } };
+                let id = object::id(&t);
+                transfer::share_object(t);
+                id
+            },
         };
         transfer::share_object(reg)
     }
@@ -214,14 +219,14 @@ module unxversal::gas_futures {
     /*******************************
     * Positions: open/close
     *******************************/
-    public entry fun open_gas_position(
+    public entry fun open_gas_position<C>(
         market: &mut GasFuturesContract,
         side: u8,
         size: u64,
         entry_price_micro_usd_per_gas: u64,
-        mut margin: Coin<usdc::usdc::USDC>,
+        mut margin: Coin<C>,
         ctx: &mut TxContext
-    ): GasPosition {
+    ): GasPosition<C> {
         assert!(market.is_active && !market.paused, E_PAUSED);
         assert!(size > 0, E_MIN_INTERVAL);
         // Initial margin as % of notional: notional = size * contract_size_gas_units * price
@@ -231,19 +236,19 @@ module unxversal::gas_futures {
         let locked = Coin::split(&mut margin, init_req, ctx);
         transfer::public_transfer(margin, ctx.sender());
         market.open_interest = market.open_interest + size;
-        let pos = GasPosition { id: object::new(ctx), owner: ctx.sender(), contract_id: object::id(market), side, size, avg_price_micro_usd_per_gas: entry_price_micro_usd_per_gas, margin: locked, accumulated_pnl: 0, opened_at_ms: time::now_ms() };
+        let pos = GasPosition<C> { id: object::new(ctx), owner: ctx.sender(), contract_id: object::id(market), side, size, avg_price_micro_usd_per_gas: entry_price_micro_usd_per_gas, margin: locked, accumulated_pnl: 0, opened_at_ms: time::now_ms() };
         let sponsor_addr = match sui::tx_context::sponsor(ctx) { option::Some(a) => a, option::None => 0x0 };
         event::emit(GasPositionOpened { symbol: market.symbol.clone(), account: pos.owner, side, size, price_micro_usd_per_gas: entry_price_micro_usd_per_gas, margin_locked: Coin::value(&pos.margin), sponsor: sponsor_addr, timestamp: time::now_ms() });
         pos
     }
 
-    public entry fun close_gas_position(
+    public entry fun close_gas_position<C>(
         reg: &GasFuturesRegistry,
         market: &mut GasFuturesContract,
-        pos: &mut GasPosition,
+        pos: &mut GasPosition<C>,
         close_price_micro_usd_per_gas: u64,
         quantity: u64,
-        treasury: &mut Treasury,
+        treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused && market.is_active && !market.paused, E_PAUSED);
@@ -263,7 +268,7 @@ module unxversal::gas_futures {
         // Settlement fee on close (optional): use registry.settlement_fee_bps as generic close fee
         let notional = quantity * market.contract_size_gas_units * close_price_micro_usd_per_gas;
         let fee = (notional * reg.settlement_fee_bps) / 10_000;
-        if (fee > 0) { let avail = Coin::value(&pos.margin); if (avail >= fee) { let fc = Coin::split(&mut pos.margin, fee, ctx); TreasuryMod::deposit_usdc(treasury, fc, b"gas_close".to_string(), pos.owner, ctx); } }
+        if (fee > 0) { let avail = Coin::value(&pos.margin); if (avail >= fee) { let fc = Coin::split(&mut pos.margin, fee, ctx); TreasuryMod::deposit_collateral(treasury, fc, b"gas_close".to_string(), pos.owner, ctx); } }
         let new_margin_val = Coin::value(&pos.margin);
         event::emit(GasVariationMargin { symbol: market.symbol.clone(), account: pos.owner, side: pos.side, qty: quantity, from_price: pos.avg_price_micro_usd_per_gas, to_price: close_price_micro_usd_per_gas, pnl_delta, new_margin: new_margin_val, timestamp: time::now_ms() });
         event::emit(GasPositionClosed { symbol: market.symbol.clone(), account: pos.owner, qty: quantity, price_micro_usd_per_gas: close_price_micro_usd_per_gas, margin_refund: margin_refund, timestamp: time::now_ms() });
@@ -272,7 +277,7 @@ module unxversal::gas_futures {
     /*******************************
     * Record fill (off‑chain matching)
     *******************************/
-    public entry fun record_gas_fill(
+    public entry fun record_gas_fill<C>(
         reg: &mut GasFuturesRegistry,
         market: &mut GasFuturesContract,
         price_micro_usd_per_gas: u64,
@@ -284,7 +289,7 @@ module unxversal::gas_futures {
         unxv_usd_price: &PriceInfoObject,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
-        treasury: &mut Treasury,
+        treasury: &mut Treasury<C>,
         oi_increase: bool,
         min_price_micro_usd_per_gas: u64,
         max_price_micro_usd_per_gas: u64,
@@ -327,27 +332,27 @@ module unxversal::gas_futures {
         let maker_rebate = (trade_fee * reg.maker_rebate_bps) / 10_000;
         // Collect fee stream from taker: require caller to have prefunded fee coin via other legs; here we just create accumulator and deposit
         if (usdc_fee_after_discount > 0) {
-            let mut fee_collector = Coin::zero<usdc::usdc::USDC>(ctx);
+            let mut fee_collector = Coin::zero<C>(ctx);
             if (maker_rebate > 0 && maker_rebate < usdc_fee_after_discount) { let to_maker = Coin::split(&mut fee_collector, maker_rebate, ctx); transfer::public_transfer(to_maker, maker); }
             if (reg.trade_bot_reward_bps > 0) { let bot_cut = (usdc_fee_after_discount * reg.trade_bot_reward_bps) / 10_000; if (bot_cut > 0) { let to_bot = Coin::split(&mut fee_collector, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); } }
-            TreasuryMod::deposit_usdc(treasury, fee_collector, b"gas_trade".to_string(), ctx.sender(), ctx);
+            TreasuryMod::deposit_collateral(treasury, fee_collector, b"gas_trade".to_string(), ctx.sender(), ctx);
         }
         if (oi_increase) { market.open_interest = market.open_interest + size; } else { if (market.open_interest >= size) { market.open_interest = market.open_interest - size; } }
         market.volume_premium_usdc = market.volume_premium_usdc + notional;
         market.last_trade_premium_micro_usd_per_gas = price_micro_usd_per_gas;
-        event::emit(GasFillRecorded { symbol: market.symbol.clone(), price_micro_usd_per_gas, size, taker: ctx.sender(), maker, taker_is_buyer, fee_usdc: usdc_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate_usdc: maker_rebate, bot_reward_usdc: if (reg.trade_bot_reward_bps > 0) { (usdc_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: time::now_ms() });
+        event::emit(GasFillRecorded { symbol: market.symbol.clone(), price_micro_usd_per_gas, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: usdc_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (usdc_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: time::now_ms() });
     }
 
     /*******************************
     * Liquidation
     *******************************/
-    public entry fun liquidate_gas_position(
+    public entry fun liquidate_gas_position<C>(
         reg: &GasFuturesRegistry,
         market: &mut GasFuturesContract,
-        pos: &mut GasPosition,
+        pos: &mut GasPosition<C>,
         mark_price_micro_usd_per_gas: u64,
         maint_margin_bps: u64,
-        treasury: &mut Treasury,
+        treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused && market.is_active && !market.paused, E_PAUSED);
@@ -364,7 +369,7 @@ module unxversal::gas_futures {
             let mut seized = Coin::split(&mut pos.margin, seized_total, ctx);
             let bot_cut = (seized_total * reg.settlement_bot_reward_bps) / 10_000;
             if (bot_cut > 0) { let to_bot = Coin::split(&mut seized, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); }
-            TreasuryMod::deposit_usdc(treasury, seized, b"gas_liquidation".to_string(), ctx.sender(), ctx);
+            TreasuryMod::deposit_collateral(treasury, seized, b"gas_liquidation".to_string(), ctx.sender(), ctx);
         }
         let qty = pos.size; pos.size = 0;
         if (market.open_interest >= qty) { market.open_interest = market.open_interest - qty; }
@@ -391,14 +396,14 @@ module unxversal::gas_futures {
     public entry fun request_gas_settlement(reg: &GasFuturesRegistry, market: &GasFuturesContract, queue: &mut GasSettlementQueue, ctx: &TxContext) { assert!(!reg.paused, E_PAUSED); assert!(market.is_expired, E_MIN_INTERVAL); let ready = market.settled_at_ms + reg.dispute_window_ms; Table::insert(&mut queue.entries, object::id(market), ready); }
     public entry fun process_due_gas_settlements(reg: &GasFuturesRegistry, queue: &mut GasSettlementQueue, markets: vector<&mut GasFuturesContract>, ctx: &TxContext) { assert!(!reg.paused, E_PAUSED); let now = time::now_ms(); let mut i = 0; while (i < vector::length(&markets)) { let m = *vector::borrow_mut(&mut markets, i); if (Table::contains(&queue.entries, &object::id(m))) { let ready = *Table::borrow(&queue.entries, &object::id(m)); if (now >= ready) { Table::remove(&mut queue.entries, &object::id(m)); } }; i = i + 1; } }
 
-    public entry fun settle_gas_position(reg: &GasFuturesRegistry, market: &GasFuturesContract, pos: &mut GasPosition, treasury: &mut Treasury, ctx: &mut TxContext) {
+    public entry fun settle_gas_position<C>(reg: &GasFuturesRegistry, market: &GasFuturesContract, pos: &mut GasPosition<C>, treasury: &mut Treasury<C>, ctx: &mut TxContext) {
         assert!(!reg.paused, E_PAUSED); assert!(market.is_expired, E_MIN_INTERVAL); assert!(object::id(&market) == pos.contract_id, E_MIN_INTERVAL);
         let px = market.settlement_price_micro_usd_per_gas;
         let pnl_total: i64 = if (pos.side == 0) { ((px as i64 - pos.avg_price_micro_usd_per_gas as i64) * (pos.size as i64) * (market.contract_size_gas_units as i64)) } else { ((pos.avg_price_micro_usd_per_gas as i64 - px as i64) * (pos.size as i64) * (market.contract_size_gas_units as i64)) };
         let mut margin_val = Coin::value(&pos.margin);
         if (pnl_total >= 0) {
             let fee = ((pnl_total as u64) * reg.settlement_fee_bps) / 10_000;
-            if (fee > 0 && margin_val >= fee) { let fee_coin = Coin::split(&mut pos.margin, fee, ctx); if (reg.settlement_bot_reward_bps > 0) { let bot_cut = (fee * reg.settlement_bot_reward_bps) / 10_000; if (bot_cut > 0) { let to_bot = Coin::split(&mut pos.margin, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); } } TreasuryMod::deposit_usdc(treasury, fee_coin, b"gas_settlement".to_string(), pos.owner, ctx); margin_val = Coin::value(&pos.margin); }
+            if (fee > 0 && margin_val >= fee) { let fee_coin = Coin::split(&mut pos.margin, fee, ctx); if (reg.settlement_bot_reward_bps > 0) { let bot_cut = (fee * reg.settlement_bot_reward_bps) / 10_000; if (bot_cut > 0) { let to_bot = Coin::split(&mut pos.margin, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); } } TreasuryMod::deposit_collateral(treasury, fee_coin, b"gas_settlement".to_string(), pos.owner, ctx); margin_val = Coin::value(&pos.margin); }
         } else {
             let loss = (-(pnl_total)) as u64; if (loss > 0) { let burn = if (margin_val >= loss) { loss } else { margin_val }; if (burn > 0) { let _ = Coin::split(&mut pos.margin, burn, ctx); } }
         }
@@ -411,7 +416,7 @@ module unxversal::gas_futures {
     *******************************/
     public fun gas_contract_id(reg: &GasFuturesRegistry, symbol: &String): ID { *Table::borrow(&reg.contracts, symbol) }
     public fun gas_market_metrics(m: &GasFuturesContract): (u64, u64, u64) { (m.open_interest, m.volume_premium_usdc, m.last_trade_premium_micro_usd_per_gas) }
-    public fun gas_position_info(p: &GasPosition): (address, ID, u8, u64, u64, u64, i64, u64) { (p.owner, p.contract_id, p.side, p.size, p.avg_price_micro_usd_per_gas, Coin::value(&p.margin), p.accumulated_pnl, p.opened_at_ms) }
+    public fun gas_position_info<C>(p: &GasPosition<C>): (address, ID, u8, u64, u64, u64, i64, u64) { (p.owner, p.contract_id, p.side, p.size, p.avg_price_micro_usd_per_gas, Coin::value(&p.margin), p.accumulated_pnl, p.opened_at_ms) }
     public fun gas_registry_trade_fee_params(reg: &GasFuturesRegistry): (u64, u64, u64, u64) { (reg.trade_fee_bps, reg.maker_rebate_bps, reg.unxv_discount_bps, reg.trade_bot_reward_bps) }
     public fun gas_registry_settlement_params(reg: &GasFuturesRegistry): (u64, u64, u64, u64) { (reg.settlement_fee_bps, reg.settlement_bot_reward_bps, reg.min_list_interval_ms, reg.dispute_window_ms) }
 

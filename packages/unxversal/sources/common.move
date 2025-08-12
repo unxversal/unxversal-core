@@ -34,7 +34,7 @@ module unxversal::common {
         unxv_discount: u64,
         /// Final fee after discount
         final_fee: u64,
-        /// Asset used for payment (e.g., "UNXV" or "USDC")
+        /// Asset used for payment (e.g., "UNXV" or collateral symbol)
         payment_asset: String,
     }
 
@@ -45,7 +45,7 @@ module unxversal::common {
         fee_type: String,
         /// Amount of fee collected (in smallest units of the fee asset)
         amount: u64,
-        /// Asset used to pay the fee (e.g., "USDC", "UNXV", or other)
+        /// Asset used to pay the fee (e.g., collateral, "UNXV", or other)
         asset_type: String,
         /// Address of the user who paid the fee
         user: address,

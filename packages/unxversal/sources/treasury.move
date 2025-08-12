@@ -1,7 +1,7 @@
 module unxversal::treasury {
     /*******************************
     * UnXversal Treasury – shared across protocol modules
-    * - Centralizes fee deposits (USDC / UNXV)
+    * - Centralizes fee deposits (Collateral / UNXV)
     * - Admin-gated withdrawals and policy updates
     * - Optional UNXV burn via unxv::SupplyCap holder
     *******************************/
@@ -15,7 +15,6 @@ module unxversal::treasury {
     use std::string::String;
     use std::time;
 
-    use usdc::usdc::USDC;
     use unxversal::unxv::{UNXV, SupplyCap};
 
     /*******************************
@@ -42,9 +41,9 @@ module unxversal::treasury {
     /*******************************
     * Treasury shared object
     *******************************/
-    public struct Treasury has key, store {
+    public struct Treasury<phantom C> has key, store {
         id: UID,
-        usdc: Coin<USDC>,
+        collateral: Coin<C>,
         unxv: Coin<UNXV>,
         cfg: TreasuryCfg,
     }
@@ -52,16 +51,16 @@ module unxversal::treasury {
     /*******************************
     * Init and Display
     *******************************/
-    public entry fun init_treasury(ctx: &mut TxContext) {
-        let t = Treasury { id: object::new(ctx), usdc: Coin::zero<USDC>(ctx), unxv: Coin::zero<UNXV>(ctx), cfg: TreasuryCfg { unxv_burn_bps: 0 } };
+    public entry fun init_treasury<C>(ctx: &mut TxContext) {
+        let t = Treasury<C> { id: object::new(ctx), collateral: Coin::zero<C>(ctx), unxv: Coin::zero<UNXV>(ctx), cfg: TreasuryCfg { unxv_burn_bps: 0 } };
         transfer::share_object(t);
         transfer::public_transfer(TreasuryCap { id: object::new(ctx) }, ctx.sender());
         event::emit(TreasuryInitialized { treasury_id: object::id(&t), by: ctx.sender(), timestamp: time::now_ms() });
     }
 
-    public entry fun init_treasury_with_display(publisher: &Publisher, ctx: &mut TxContext) {
-        init_treasury(ctx);
-        let mut disp = display::new<Treasury>(publisher, ctx);
+    public entry fun init_treasury_with_display<C>(publisher: &Publisher, ctx: &mut TxContext) {
+        init_treasury<C>(ctx);
+        let mut disp = display::new<Treasury<C>>(publisher, ctx);
         disp.add(b"name".to_string(),        b"Unxversal Treasury".to_string());
         disp.add(b"description".to_string(), b"Central fee treasury for Unxversal Protocol".to_string());
         disp.add(b"project_url".to_string(), b"https://unxversal.com".to_string());
@@ -72,14 +71,14 @@ module unxversal::treasury {
     /*******************************
     * Deposits (anyone)
     *******************************/
-    public entry fun deposit_usdc(treasury: &mut Treasury, mut c: Coin<USDC>, source: String, payer: address, ctx: &mut TxContext) {
+    public entry fun deposit_collateral<C>(treasury: &mut Treasury<C>, mut c: Coin<C>, source: String, payer: address, ctx: &mut TxContext) {
         let amount = Coin::value(&c);
         assert!(amount > 0, E_ZERO_AMOUNT);
-        Coin::merge(&mut treasury.usdc, c);
-        event::emit(FeeReceived { source, asset: b"USDC".to_string(), amount, payer, timestamp: time::now_ms() });
+        Coin::merge(&mut treasury.collateral, c);
+        event::emit(FeeReceived { source, asset: b"COLLATERAL".to_string(), amount, payer, timestamp: time::now_ms() });
     }
 
-    public entry fun deposit_unxv(treasury: &mut Treasury, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {
+    public entry fun deposit_unxv<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {
         let mut merged = Coin::zero<UNXV>(ctx);
         let mut i = 0;
         let mut total: u64 = 0;
@@ -98,27 +97,27 @@ module unxversal::treasury {
     /*******************************
     * Withdrawals and Policy (admin-gated by TreasuryCap)
     *******************************/
-    public entry fun withdraw_usdc(_cap: &TreasuryCap, treasury: &mut Treasury, to: address, amount: u64, ctx: &mut TxContext) {
+    public entry fun withdraw_collateral<C>(_cap: &TreasuryCap, treasury: &mut Treasury<C>, to: address, amount: u64, ctx: &mut TxContext) {
         assert!(amount > 0, E_ZERO_AMOUNT);
-        let out = Coin::split(&mut treasury.usdc, amount, ctx);
+        let out = Coin::split(&mut treasury.collateral, amount, ctx);
         transfer::public_transfer(out, to);
-        event::emit(TreasuryWithdrawn { asset: b"USDC".to_string(), amount, to, by: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(TreasuryWithdrawn { asset: b"COLLATERAL".to_string(), amount, to, by: ctx.sender(), timestamp: time::now_ms() });
     }
 
-    public entry fun withdraw_unxv(_cap: &TreasuryCap, treasury: &mut Treasury, to: address, amount: u64, ctx: &mut TxContext) {
+    public entry fun withdraw_unxv<C>(_cap: &TreasuryCap, treasury: &mut Treasury<C>, to: address, amount: u64, ctx: &mut TxContext) {
         assert!(amount > 0, E_ZERO_AMOUNT);
         let out = Coin::split(&mut treasury.unxv, amount, ctx);
         transfer::public_transfer(out, to);
         event::emit(TreasuryWithdrawn { asset: b"UNXV".to_string(), amount, to, by: ctx.sender(), timestamp: time::now_ms() });
     }
 
-    public entry fun set_policy(_cap: &TreasuryCap, treasury: &mut Treasury, new_cfg: TreasuryCfg, ctx: &TxContext) {
+    public entry fun set_policy<C>(_cap: &TreasuryCap, treasury: &mut Treasury<C>, new_cfg: TreasuryCfg, ctx: &TxContext) {
         treasury.cfg = new_cfg;
         event::emit(TreasuryPolicyUpdated { by: ctx.sender(), timestamp: time::now_ms() });
     }
 
     /// Burn UNXV from treasury using the protocol's SupplyCap
-    public entry fun burn_unxv(_cap: &TreasuryCap, treasury: &mut Treasury, sc: &mut SupplyCap, amount: u64, ctx: &mut TxContext) {
+    public entry fun burn_unxv<C>(_cap: &TreasuryCap, treasury: &mut Treasury<C>, sc: &mut SupplyCap, amount: u64, ctx: &mut TxContext) {
         assert!(amount > 0, E_ZERO_AMOUNT);
         let exact = Coin::split(&mut treasury.unxv, amount, ctx);
         let mut vec = vector::empty<Coin<UNXV>>();
@@ -126,6 +125,9 @@ module unxversal::treasury {
         unxversal::unxv::burn(sc, vec, ctx);
         event::emit(UNXVBurned { amount, by: ctx.sender(), timestamp: time::now_ms() });
     }
+
+    // Helper: returns the address of the Treasury object (useful for transfers)
+    public fun treasury_address<C>(t: &Treasury<C>): address { object::uid_to_address(&t.id) }
 }
 
 
