@@ -23,7 +23,6 @@ module unxversal::lending {
 
 
     use std::string::{Self as string, String};
-    use sui::table::Table;
     use sui::vec_set::{Self as vec_set, VecSet};
     use std::vector;
 
@@ -262,7 +261,7 @@ module unxversal::lending {
     public entry fun add_supported_asset(_admin: &LendingAdminCap, reg: &mut LendingRegistry, symbol: String, is_collateral: bool, is_borrowable: bool, reserve_factor_bps: u64, ltv_bps: u64, liq_threshold_bps: u64, liq_penalty_bps: u64, irm: InterestRateModel, ctx: &TxContext) {
         assert_is_admin(reg, ctx.sender());
         assert!(!reg.paused, 1000);
-        assert!(!table::contains(&reg.supported_assets, &symbol), E_ASSET_EXISTS);
+        assert!(!table::contains(&reg.supported_assets, clone_string(&symbol)), E_ASSET_EXISTS);
         table::add(&mut reg.supported_assets, clone_string(&symbol), AssetConfig { symbol: clone_string(&symbol), is_collateral, is_borrowable, reserve_factor_bps, ltv_bps, liq_threshold_bps, liq_penalty_bps });
         table::add(&mut reg.interest_rate_models, symbol, irm);
     }
@@ -281,7 +280,7 @@ module unxversal::lending {
     ) {
         assert_is_admin(reg, ctx.sender());
         assert!(!reg.paused, 1000);
-        let mut a = table::borrow_mut(&mut reg.supported_assets, &symbol);
+        let mut a = table::borrow_mut(&mut reg.supported_assets, clone_string(&symbol));
         a.is_collateral = is_collateral;
         a.is_borrowable = is_borrowable;
         a.reserve_factor_bps = reserve_factor_bps;
@@ -301,8 +300,8 @@ module unxversal::lending {
     public entry fun create_pool<T>(_admin: &LendingAdminCap, reg: &mut LendingRegistry, asset_symbol: String, ctx: &mut TxContext) {
         assert_is_admin(reg, ctx.sender());
         assert!(!reg.paused, 1000);
-        assert!(table::contains(&reg.supported_assets, &asset_symbol), E_UNKNOWN_ASSET);
-        assert!(!table::contains(&reg.lending_pools, &asset_symbol), E_POOL_EXISTS);
+        assert!(table::contains(&reg.supported_assets, clone_string(&asset_symbol)), E_UNKNOWN_ASSET);
+        assert!(!table::contains(&reg.lending_pools, clone_string(&asset_symbol)), E_POOL_EXISTS);
         let pool = LendingPool<T> {
             id: object::new(ctx),
             asset: clone_string(&asset_symbol),
@@ -373,7 +372,7 @@ module unxversal::lending {
         pool.total_supply = pool.total_supply + amount;
         let sym = clone_string(&pool.asset);
         // store scaled balance: scaled += amount / supply_index
-        let cur_scaled = if (table::contains(&acct.supply_balances, &sym)) { *table::borrow(&acct.supply_balances, &sym) } else { 0 };
+        let cur_scaled = if (table::contains(&acct.supply_balances, clone_string(&sym))) { *table::borrow(&acct.supply_balances, clone_string(&sym)) } else { 0 };
         let delta_scaled = scaled_from_units(amount, pool.supply_index);
         let new_scaled = cur_scaled + delta_scaled;
         table::add(&mut acct.supply_balances, clone_string(&sym), new_scaled);
@@ -399,8 +398,8 @@ module unxversal::lending {
         assert!(amount > 0, E_ZERO_AMOUNT);
         accrue_pool_interest(pool);
         let sym = clone_string(&pool.asset);
-        assert!(table::contains(&acct.supply_balances, &sym), E_UNKNOWN_ASSET);
-        let cur_scaled = *table::borrow(&acct.supply_balances, &sym);
+        assert!(table::contains(&acct.supply_balances, clone_string(&sym)), E_UNKNOWN_ASSET);
+        let cur_scaled = *table::borrow(&acct.supply_balances, clone_string(&sym));
         let cur_units = units_from_scaled(cur_scaled, pool.supply_index);
         assert!(cur_units >= amount, E_ZERO_AMOUNT);
         // ensure liquidity
@@ -413,8 +412,8 @@ module unxversal::lending {
         table::add(&mut acct.supply_balances, clone_string(&sym), new_scaled);
         pool.total_supply = pool.total_supply - amount;
         // Enforce LTV after withdrawal if asset is collateral
-        if (table::contains(&reg.supported_assets, &sym)) {
-            let a = table::borrow(&reg.supported_assets, &sym);
+        if (table::contains(&reg.supported_assets, clone_string(&sym))) {
+            let a = table::borrow(&reg.supported_assets, clone_string(&sym));
             if (a.is_collateral) {
                 // compute current totals
                 let (tot_coll, tot_debt, _) = check_account_health_coins(acct, reg, oracle_cfg, clock, vector::empty<String>(), vector::empty<&PriceInfoObject>());
@@ -460,7 +459,7 @@ module unxversal::lending {
         // update borrow scaled
         let sym = clone_string(&pool.asset);
         // store scaled debt: scaled += amount / borrow_index
-        let cur_scaled = if (table::contains(&acct.borrow_balances, &sym)) { *table::borrow(&acct.borrow_balances, &sym) } else { 0 };
+        let cur_scaled = if (table::contains(&acct.borrow_balances, clone_string(&sym))) { *table::borrow(&acct.borrow_balances, clone_string(&sym)) } else { 0 };
         let delta_scaled = scaled_from_units(amount, pool.borrow_index);
         let new_scaled = cur_scaled + delta_scaled;
         table::add(&mut acct.borrow_balances, clone_string(&sym), new_scaled);
@@ -480,8 +479,8 @@ module unxversal::lending {
         let amount = coin::value(&payment);
         assert!(amount > 0, E_ZERO_AMOUNT);
         let sym = clone_string(&pool.asset);
-        assert!(table::contains(&acct.borrow_balances, &sym), E_UNKNOWN_ASSET);
-        let cur_scaled = *table::borrow(&acct.borrow_balances, &sym);
+        assert!(table::contains(&acct.borrow_balances, clone_string(&sym)), E_UNKNOWN_ASSET);
+        let cur_scaled = *table::borrow(&acct.borrow_balances, clone_string(&sym));
         let cur_units = units_from_scaled(cur_scaled, pool.borrow_index);
         assert!(amount <= cur_units, E_OVER_REPAY);
         // move into pool cash
@@ -499,8 +498,8 @@ module unxversal::lending {
     * Rate model and interest accrual (coins)
     *******************************/
     fun get_reserve_factor_bps(reg: &LendingRegistry, sym: &String): u64 {
-        if (table::contains(&reg.supported_assets, sym)) {
-            let a = table::borrow(&reg.supported_assets, sym);
+        if (table::contains(&reg.supported_assets, clone_string(sym))) {
+            let a = table::borrow(&reg.supported_assets, clone_string(sym));
             if (a.reserve_factor_bps > 0) { return a.reserve_factor_bps; };
         };
         reg.global_params.reserve_factor_bps
@@ -572,10 +571,10 @@ module unxversal::lending {
         let mut i = 0;
         while (i < vector::length(&symbols)) {
             let sym = *vector::borrow(&symbols, i);
-            if (table::contains(&acct.supply_balances, &sym) && table::contains(&reg.supported_assets, &sym)) {
-                let a = table::borrow(&reg.supported_assets, &sym);
+            if (table::contains(&acct.supply_balances, clone_string(&sym)) && table::contains(&reg.supported_assets, clone_string(&sym))) {
+                let a = table::borrow(&reg.supported_assets, clone_string(&sym));
                 if (a.is_collateral) {
-                    let units = *table::borrow(&acct.supply_balances, &sym) as u128;
+                    let units = *table::borrow(&acct.supply_balances, clone_string(&sym)) as u128;
                     let p = *vector::borrow(&prices, i);
                     let px = get_price_scaled_1e6(oracle_cfg, clock, p) as u128;
                     cap = cap + (units * px * (a.ltv_bps as u128)) / 10_000u128;
@@ -604,16 +603,16 @@ module unxversal::lending {
             let sym = *vector::borrow(&symbols, i);
             let p = *vector::borrow(&prices, i);
             let px = get_price_scaled_1e6(oracle_cfg, clock, p) as u128; // micro-USD
-            if (table::contains(&acct.supply_balances, &sym)) {
-                let units = *table::borrow(&acct.supply_balances, &sym) as u128;
+            if (table::contains(&acct.supply_balances, clone_string(&sym))) {
+                let units = *table::borrow(&acct.supply_balances, clone_string(&sym)) as u128;
                 // only count as collateral if allowed
-                if (table::contains(&reg.supported_assets, &sym)) {
-                    let a = table::borrow(&reg.supported_assets, &sym);
+                if (table::contains(&reg.supported_assets, clone_string(&sym))) {
+                    let a = table::borrow(&reg.supported_assets, clone_string(&sym));
                     if (a.is_collateral) { total_coll = total_coll + units * px; };
                 }
             };
-            if (table::contains(&acct.borrow_balances, &sym)) {
-                let units = *table::borrow(&acct.borrow_balances, &sym) as u128;
+            if (table::contains(&acct.borrow_balances, clone_string(&sym))) {
+                let units = *table::borrow(&acct.borrow_balances, clone_string(&sym)) as u128;
                 total_debt = total_debt + units * px;
             };
             i = i + 1;
@@ -626,7 +625,7 @@ module unxversal::lending {
     *******************************/
     public fun list_supported_assets(reg: &LendingRegistry): vector<String> { table::keys(&reg.supported_assets) }
 
-    public fun get_asset_config(reg: &LendingRegistry, symbol: &String): &AssetConfig { table::borrow(&reg.supported_assets, symbol) }
+    public fun get_asset_config(reg: &LendingRegistry, symbol: &String): &AssetConfig { table::borrow(&reg.supported_assets, clone_string(symbol)) }
 
     public fun list_pools(reg: &LendingRegistry): vector<String> { table::keys(&reg.lending_pools) }
 
@@ -698,13 +697,13 @@ module unxversal::lending {
         if (tot_debt > 0) {
             let ratio_bps = ((tot_coll * 10_000u128) / tot_debt) as u64;
             let coll_sym = clone_string(&coll_pool.asset);
-            let coll_cfg = table::borrow(&reg.supported_assets, &coll_sym);
+            let coll_cfg = table::borrow(&reg.supported_assets, clone_string(&coll_sym));
             assert!(ratio_bps < coll_cfg.liq_threshold_bps, E_VIOLATION);
         };
         // debtor must have outstanding debt in this asset
         let debt_sym = clone_string(&debt_pool.asset);
-        assert!(table::contains(&debtor.borrow_balances, &debt_sym), E_UNKNOWN_ASSET);
-        let cur_debt = *table::borrow(&debtor.borrow_balances, &debt_sym);
+        assert!(table::contains(&debtor.borrow_balances, clone_string(&debt_sym)), E_UNKNOWN_ASSET);
+        let cur_debt = *table::borrow(&debtor.borrow_balances, clone_string(&debt_sym));
         assert!(repay_amount <= cur_debt, E_OVER_REPAY);
         // apply payment into pool
         let exact_pay = coin::split(&mut payment, repay_amount, ctx);
@@ -721,15 +720,15 @@ module unxversal::lending {
         assert!(pd > 0 && pc > 0, E_BAD_PRICE);
         let repay_val = (repay_amount as u128) * pd;
         let coll_sym = clone_string(&coll_pool.asset);
-        let coll_cfg = table::borrow(&reg.supported_assets, &coll_sym);
+        let coll_cfg = table::borrow(&reg.supported_assets, clone_string(&coll_sym));
         let bonus_bps = coll_cfg.liq_penalty_bps as u128;
         let seize_val = repay_val + (repay_val * bonus_bps) / 10_000u128;
         let mut seize_units = seize_val / pc;
         if (seize_units * pc < seize_val) { seize_units = seize_units + 1; } // ceil
         let seize_u64 = if (seize_units > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { seize_units as u64 };
         // check debtor has collateral in this asset
-        assert!(table::contains(&debtor.supply_balances, &coll_sym), E_NO_COLLATERAL);
-        let cur_coll = *table::borrow(&debtor.supply_balances, &coll_sym);
+        assert!(table::contains(&debtor.supply_balances, clone_string(&coll_sym)), E_NO_COLLATERAL);
+        let cur_coll = *table::borrow(&debtor.supply_balances, clone_string(&coll_sym));
         assert!(cur_coll >= seize_u64, E_INSUFFICIENT_LIQUIDITY);
         // ensure pool has liquidity to deliver
         let cash_coll = BalanceMod::value(&coll_pool.cash);
@@ -873,7 +872,7 @@ module unxversal::lending {
         ctx: &TxContext
     ) {
         assert_is_admin(reg, ctx.sender());
-        assert!(!table::contains(&reg.synth_markets, &symbol), E_ASSET_EXISTS);
+        assert!(!table::contains(&reg.synth_markets, clone_string(&symbol)), E_ASSET_EXISTS);
         let m = SynthMarket { symbol: clone_string(&symbol), reserve_factor_bps, total_borrow_units: 0, total_liquidity: 0, reserve_units: 0 };
         table::add(&mut reg.synth_markets, symbol, m);
         // Display for SynthMarket
@@ -900,7 +899,7 @@ module unxversal::lending {
     ) {
         assert!(!reg.paused, 1000);
         assert!(amount > 0, E_ZERO_AMOUNT);
-        assert!(table::contains(&reg.synth_markets, &market_symbol), E_UNKNOWN_ASSET);
+        assert!(table::contains(&reg.synth_markets, clone_string(&market_symbol)), E_UNKNOWN_ASSET);
         let have = coin::value(&coins);
         assert!(have >= amount, E_ZERO_AMOUNT);
         let exact = coin::split(&mut coins, amount, ctx);
@@ -908,10 +907,10 @@ module unxversal::lending {
         let bal = coin::into_balance(exact);
         BalanceMod::join(&mut pool_collateral.cash, bal);
         pool_collateral.total_supply = pool_collateral.total_supply + amount;
-        let cur = if (table::contains(&acct.synth_liquidity, &market_symbol)) { *table::borrow(&acct.synth_liquidity, &market_symbol) } else { 0 };
+        let cur = if (table::contains(&acct.synth_liquidity, clone_string(&market_symbol))) { *table::borrow(&acct.synth_liquidity, clone_string(&market_symbol)) } else { 0 };
         let newb = cur + amount;
         table::add(&mut acct.synth_liquidity, clone_string(&market_symbol), newb);
-        let mut m = table::borrow_mut(&mut (reg as &LendingRegistry).synth_markets, &market_symbol);
+        let mut m = table::borrow_mut(&mut (reg as &LendingRegistry).synth_markets, clone_string(&market_symbol));
         m.total_liquidity = m.total_liquidity + amount;
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(SynthLiquiditySupplied { user: ctx.sender(), symbol: market_symbol, amount: amount, new_balance: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
@@ -928,8 +927,8 @@ module unxversal::lending {
         assert!(!reg.paused, 1000);
         assert!(amount > 0, E_ZERO_AMOUNT);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
-        assert!(table::contains(&acct.synth_liquidity, &market_symbol), E_UNKNOWN_ASSET);
-        let cur = *table::borrow(&acct.synth_liquidity, &market_symbol);
+        assert!(table::contains(&acct.synth_liquidity, clone_string(&market_symbol)), E_UNKNOWN_ASSET);
+        let cur = *table::borrow(&acct.synth_liquidity, clone_string(&market_symbol));
         assert!(cur >= amount, E_INSUFFICIENT_LIQUIDITY);
         let cash = BalanceMod::value(&pool_collateral.cash);
         assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
@@ -938,7 +937,7 @@ module unxversal::lending {
         let newb = cur - amount;
         table::add(&mut acct.synth_liquidity, clone_string(&market_symbol), newb);
         pool_collateral.total_supply = pool_collateral.total_supply - amount;
-        let mut m = table::borrow_mut(&mut (reg as &LendingRegistry).synth_markets, &market_symbol);
+        let mut m = table::borrow_mut(&mut (reg as &LendingRegistry).synth_markets, clone_string(&market_symbol));
         m.total_liquidity = m.total_liquidity - amount;
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(SynthLiquidityWithdrawn { user: ctx.sender(), symbol: market_symbol, amount: amount, remaining_balance: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
@@ -963,7 +962,7 @@ module unxversal::lending {
         assert!(!reg.paused, 1000);
         assert!(units > 0, E_ZERO_AMOUNT);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
-        assert!(table::contains(&reg.synth_markets, &symbol), E_UNKNOWN_ASSET);
+        assert!(table::contains(&reg.synth_markets, clone_string(&symbol)), E_UNKNOWN_ASSET);
         // Health gate: use synthetics check to ensure vault is healthy before minting
         // (delegate to synthetics' own ratio checks inside mint_synthetic)
         Synth::mint_synthetic(
@@ -979,10 +978,10 @@ module unxversal::lending {
             treasury,
             ctx
         );
-        let cur = if (table::contains(&acct.synth_borrow_units, &symbol)) { *table::borrow(&acct.synth_borrow_units, &symbol) } else { 0 };
+        let cur = if (table::contains(&acct.synth_borrow_units, clone_string(&symbol))) { *table::borrow(&acct.synth_borrow_units, clone_string(&symbol)) } else { 0 };
         let newb = cur + units;
         table::add(&mut acct.synth_borrow_units, clone_string(&symbol), newb);
-        let mut m = table::borrow_mut(&mut reg.synth_markets, &symbol);
+        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
         m.total_borrow_units = m.total_borrow_units + units;
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(SynthBorrowed { user: ctx.sender(), symbol, units, new_borrow_units: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
@@ -1006,8 +1005,8 @@ module unxversal::lending {
         assert!(!reg.paused, 1000);
         assert!(units > 0, E_ZERO_AMOUNT);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
-        assert!(table::contains(&acct.synth_borrow_units, &symbol), E_UNKNOWN_ASSET);
-        let cur = *table::borrow(&acct.synth_borrow_units, &symbol);
+        assert!(table::contains(&acct.synth_borrow_units, clone_string(&symbol)), E_UNKNOWN_ASSET);
+        let cur = *table::borrow(&acct.synth_borrow_units, clone_string(&symbol));
         assert!(units <= cur, E_OVER_REPAY);
         Synth::burn_synthetic(
             vault,
@@ -1024,7 +1023,7 @@ module unxversal::lending {
         );
         let newb = cur - units;
         table::add(&mut acct.synth_borrow_units, clone_string(&symbol), newb);
-        let mut m = table::borrow_mut(&mut reg.synth_markets, &symbol);
+        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
         m.total_borrow_units = m.total_borrow_units - units;
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(SynthRepaid { user: ctx.sender(), symbol, units, remaining_borrow_units: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
