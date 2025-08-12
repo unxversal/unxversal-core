@@ -119,6 +119,188 @@ module unxversal::dex {
     public entry fun resume(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.paused = false; }
 
     /*******************************
+    * Vault-safe order variants (escrow remains under vault control)
+    * These order types are intended for integration with on-chain vaults that
+    * manage their own Coin<Base>/Coin<USDC> balances. Placement functions take
+    * &mut references to the vault's internal coin stores to split escrow from,
+    * and cancellation/matching variants return funds by merging back into
+    * caller-provided coin stores. No address transfers are performed for these
+    * paths, preventing custody leakage to EOAs.
+    *******************************/
+
+    /// Vault-mode sell order: vault sells Base for USDC
+    public struct VaultOrderSell<Base> has key, store {
+        id: UID,
+        owner: address,        // manager/operator address (for UX and auth)
+        price: u64,
+        remaining_base: u64,
+        created_at_ms: u64,
+        expiry_ms: u64,
+        escrow_base: Coin<Base>,
+    }
+
+    /// Vault-mode buy order: vault buys Base with USDC
+    public struct VaultOrderBuy<Base> has key, store {
+        id: UID,
+        owner: address,
+        price: u64,
+        remaining_base: u64,
+        created_at_ms: u64,
+        expiry_ms: u64,
+        escrow_usdc: Coin<USDC>,
+    }
+
+    /// Place a vault-mode sell order by moving Base from a caller-managed coin store
+    public entry fun place_vault_sell_order<Base>(
+        cfg: &DexConfig,
+        price: u64,
+        size_base: u64,
+        base_store: &mut Coin<Base>,
+        expiry_ms: u64,
+        ctx: &mut TxContext
+    ): VaultOrderSell<Base> {
+        assert!(!cfg.paused, E_PAUSED);
+        assert!(size_base > 0, E_ZERO_AMOUNT);
+        let have = Coin::value(base_store);
+        assert!(have >= size_base, E_INSUFFICIENT_PAYMENT);
+        let escrow = Coin::split(base_store, size_base, ctx);
+        let order = VaultOrderSell<Base> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: time::now_ms(), expiry_ms, escrow_base: escrow };
+        event::emit(CoinOrderPlaced { order_id: object::id(&order), owner: order.owner, side: 1, price, size_base, created_at_ms: order.created_at_ms, expiry_ms });
+        order
+    }
+
+    /// Place a vault-mode buy order by moving USDC from a caller-managed coin store
+    public entry fun place_vault_buy_order<Base>(
+        cfg: &DexConfig,
+        price: u64,
+        size_base: u64,
+        usdc_store: &mut Coin<USDC>,
+        expiry_ms: u64,
+        ctx: &mut TxContext
+    ): VaultOrderBuy<Base> {
+        assert!(!cfg.paused, E_PAUSED);
+        assert!(size_base > 0, E_ZERO_AMOUNT);
+        let need_usdc = price * size_base;
+        let have = Coin::value(usdc_store);
+        assert!(have >= need_usdc, E_INSUFFICIENT_PAYMENT);
+        let escrow = Coin::split(usdc_store, need_usdc, ctx);
+        let order = VaultOrderBuy<Base> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: time::now_ms(), expiry_ms, escrow_usdc: escrow };
+        event::emit(CoinOrderPlaced { order_id: object::id(&order), owner: order.owner, side: 0, price, size_base, created_at_ms: order.created_at_ms, expiry_ms });
+        order
+    }
+
+    /// Cancel vault-mode sell: merge base escrow back into caller-provided store
+    public entry fun cancel_vault_sell_order<Base>(order: VaultOrderSell<Base>, to_store: &mut Coin<Base>, ctx: &mut TxContext) {
+        assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
+        let order_id = object::id(&order);
+        Coin::merge(to_store, order.escrow_base);
+        let VaultOrderSell<Base> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_base: _ } = order;
+        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: time::now_ms() });
+        object::delete(id);
+    }
+
+    /// Cancel vault-mode buy: merge USDC escrow back into caller-provided store
+    public entry fun cancel_vault_buy_order<Base>(order: VaultOrderBuy<Base>, to_store: &mut Coin<USDC>, ctx: &mut TxContext) {
+        assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
+        let order_id = object::id(&order);
+        Coin::merge(to_store, order.escrow_usdc);
+        let VaultOrderBuy<Base> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_usdc: _ } = order;
+        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: time::now_ms() });
+        object::delete(id);
+    }
+
+    /// Match vault buy and vault sell; deliver fills to provided coin stores
+    public entry fun match_vault_orders<Base>(
+        cfg: &mut DexConfig,
+        buy: &mut VaultOrderBuy<Base>,
+        sell: &mut VaultOrderSell<Base>,
+        max_fill_base: u64,
+        taker_is_buyer: bool,
+        mut unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &PriceInfoObject,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        treasury: &mut Treasury,
+        min_price: u64,
+        max_price: u64,
+        buyer_base_store: &mut Coin<Base>,
+        seller_usdc_store: &mut Coin<USDC>,
+        ctx: &mut TxContext
+    ) {
+        assert!(!cfg.paused, E_PAUSED);
+        let now = time::now_ms();
+        if (buy.expiry_ms != 0) { assert!(now <= buy.expiry_ms, E_PAUSED); };
+        if (sell.expiry_ms != 0) { assert!(now <= sell.expiry_ms, E_PAUSED); };
+        assert!(buy.price >= sell.price, E_PAUSED);
+        let trade_price = if taker_is_buyer { sell.price } else { buy.price };
+        assert!(trade_price >= min_price && trade_price <= max_price, E_PAUSED);
+        let fill = {
+            let a = if buy.remaining_base < sell.remaining_base { buy.remaining_base } else { sell.remaining_base };
+            if (a < max_fill_base) { a } else { max_fill_base }
+        };
+        assert!(fill > 0, E_ZERO_AMOUNT);
+
+        // Deliver base to buyer store
+        let base_out = Coin::split(&mut sell.escrow_base, fill, ctx);
+        Coin::merge(buyer_base_store, base_out);
+
+        // USDC settlement and fee
+        let usdc_owed = trade_price * fill;
+        let trade_fee = (usdc_owed * cfg.trade_fee_bps) / 10_000;
+        let discount_usdc = (trade_fee * cfg.unxv_discount_bps) / 10_000;
+        let mut discount_applied = false;
+        if (discount_usdc > 0 && vector::length(&unxv_payment) > 0) {
+            let price_unxv_u64 = get_price_scaled_1e6(oracle_cfg, clock, unxv_price);
+            if (price_unxv_u64 > 0) {
+                let unxv_needed = (discount_usdc + price_unxv_u64 - 1) / price_unxv_u64;
+                let mut merged = Coin::zero<UNXV>(ctx);
+                let mut i = 0;
+                while (i < vector::length(&unxv_payment)) {
+                    let c = vector::pop_back(&mut unxv_payment);
+                    Coin::merge(&mut merged, c);
+                    i = i + 1;
+                };
+                let have = Coin::value(&merged);
+                if (have >= unxv_needed) {
+                    let exact = Coin::split(&mut merged, unxv_needed, ctx);
+                    let mut vec_unxv = vector::empty<Coin<UNXV>>();
+                    vector::push_back(&mut vec_unxv, exact);
+                    TreasuryMod::deposit_unxv(treasury, vec_unxv, b"otc_match".to_string(), buy.owner, ctx);
+                    transfer::public_transfer(merged, buy.owner);
+                    discount_applied = true;
+                } else {
+                    transfer::public_transfer(merged, buy.owner);
+                }
+            }
+        }
+        let usdc_fee_to_collect = if (discount_applied) { trade_fee - discount_usdc } else { trade_fee };
+        let maker_rebate = (trade_fee * cfg.maker_rebate_bps) / 10_000;
+        // Move net USDC to seller store from buy escrow
+        let usdc_net_to_seller = if (usdc_fee_to_collect <= usdc_owed) { usdc_owed - usdc_fee_to_collect } else { 0 };
+        if (usdc_net_to_seller > 0) {
+            let to_seller = Coin::split(&mut buy.escrow_usdc, usdc_net_to_seller, ctx);
+            Coin::merge(seller_usdc_store, to_seller);
+        }
+        if (usdc_fee_to_collect > 0) {
+            let mut fee_coin_all = Coin::split(&mut buy.escrow_usdc, usdc_fee_to_collect, ctx);
+            if (maker_rebate > 0 && maker_rebate < usdc_fee_to_collect) {
+                let to_maker = Coin::split(&mut fee_coin_all, maker_rebate, ctx);
+                // Maker address for vault-mode: attribute based on taker side, but rebate paid to EOA maker.
+                let maker_addr = if (taker_is_buyer) { sell.owner } else { buy.owner };
+                transfer::public_transfer(to_maker, maker_addr);
+            };
+            TreasuryMod::deposit_usdc(treasury, fee_coin_all, b"otc_match".to_string(), if (taker_is_buyer) { buy.owner } else { sell.owner }, ctx);
+        }
+
+        // Update remaining
+        buy.remaining_base = buy.remaining_base - fill;
+        sell.remaining_base = sell.remaining_base - fill;
+
+        event::emit(FeeCollected { fee_type: b"otc_match".to_string(), amount: trade_fee, asset_type: b"USDC".to_string(), user: if (taker_is_buyer) { buy.owner } else { sell.owner }, unxv_discount_applied: discount_applied, timestamp: time::now_ms() });
+        event::emit(CoinOrderMatched { buy_order_id: object::id(buy), sell_order_id: object::id(sell), price: trade_price, size_base: fill, taker_is_buyer, fee_paid_usdc: usdc_fee_to_collect, unxv_discount_applied: discount_applied, maker_rebate_usdc: maker_rebate, timestamp: time::now_ms() });
+    }
+
+    /*******************************
     * Order placement / cancellation (escrow based)
     *******************************/
     public entry fun place_coin_sell_order<Base>(cfg: &DexConfig, price: u64, size_base: u64, mut base: Coin<Base>, expiry_ms: u64, ctx: &mut TxContext): CoinOrderSell<Base> {
