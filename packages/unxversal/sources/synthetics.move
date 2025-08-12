@@ -679,7 +679,7 @@ module unxversal::synthetics {
                 table::add(&mut vault.synthetic_debt, synthetic_symbol, debt_units);
                 event::emit(StabilityAccrued { vault_id: object::id(vault), synthetic_type: synthetic_symbol, delta_units, from_ms: last_ms, to_ms: now_ms });
             }
-        }
+        };
         vault.last_update_ms = now_ms;
     }
     public fun mint_synthetic<C>(
@@ -724,7 +724,7 @@ module unxversal::synthetics {
         if (table::contains(debt_table, clone_string(&synthetic_symbol))) {
             let _ = table::remove(debt_table, clone_string(&synthetic_symbol));
         };
-        table::add(debt_table, synthetic_symbol.clone(), new_debt);
+        table::add(debt_table, clone_string(&synthetic_symbol), new_debt);
         asset.total_supply = asset.total_supply + amount;
 
         // Fee for mint: allow UNXV discount; remainder in collateral (per-asset override)
@@ -806,7 +806,7 @@ module unxversal::synthetics {
         assert!(amount <= old_debt, 2000);
         let new_debt = old_debt - amount;
         let _ = table::remove(debt_table, clone_string(&synthetic_symbol));
-        table::add(debt_table, synthetic_symbol.clone(), new_debt);
+        table::add(debt_table, clone_string(&synthetic_symbol), new_debt);
         asset.total_supply = asset.total_supply - amount;
 
         // Fee for burn – allow UNXV discount; per-asset override
@@ -977,7 +977,7 @@ module unxversal::synthetics {
             id: object::new(ctx),
             owner: ctx.sender(),
             vault_id: object::id(vault),
-            symbol: symbol.clone(),
+            symbol: clone_string(&symbol),
             side,
             price,
             size,
@@ -1024,7 +1024,7 @@ module unxversal::synthetics {
         assert!(!registry.paused, 1000);
         assert!(buy_order.side == 0 && sell_order.side == 1, E_SIDE_INVALID);
         assert!(buy_order.symbol == sell_order.symbol, E_SYMBOL_MISMATCH);
-        let sym = buy_order.symbol.clone();
+        let sym = clone_string(&buy_order.symbol);
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
         if (buy_order.expiry_ms != 0) { assert!(now <= buy_order.expiry_ms, E_ORDER_EXPIRED); };
         if (sell_order.expiry_ms != 0) { assert!(now <= sell_order.expiry_ms, E_ORDER_EXPIRED); };
@@ -1041,10 +1041,10 @@ module unxversal::synthetics {
         let coin_to_pay = coin::from_balance(bal_to_pay, ctx);
 
         // Buyer mints exposure (no fee inside match)
-        mint_synthetic_internal(buyer_vault, registry, clock, price_info, sym.clone(), fill, ctx);
+        mint_synthetic_internal(buyer_vault, registry, clock, price_info, clone_string(&sym), fill, ctx);
 
         // Seller burns exposure (no fee inside match)
-        burn_synthetic_internal(seller_vault, registry, clock, price_info, sym.clone(), fill, ctx);
+        burn_synthetic_internal(seller_vault, registry, clock, price_info, clone_string(&sym), fill, ctx);
 
         // Settle collateral
         let bal_to_recv = coin::into_balance(coin_to_pay);
@@ -1216,7 +1216,7 @@ module unxversal::synthetics {
         if (table::contains(&vault.synthetic_debt, clone_string(&synthetic_symbol))) {
             let _ = table::remove(&mut vault.synthetic_debt, clone_string(&synthetic_symbol));
         };
-        table::add(&mut vault.synthetic_debt, synthetic_symbol.clone(), new_debt);
+        table::add(&mut vault.synthetic_debt, clone_string(&synthetic_symbol), new_debt);
 
         // Seize collateral and split bot reward
         let mut seized_coin = {
