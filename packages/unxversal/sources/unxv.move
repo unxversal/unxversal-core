@@ -1,19 +1,12 @@
 module unxversal::unxv {
-    use sui::coin::{Self, TreasuryCap, Coin};
-    use sui::tx_context::TxContext;
-    use sui::transfer;
-    use sui::coin;
-    use sui::package;
-    use sui::display;
-    use std::string::String;
-    use std::vector;
-    use option;
-
+    use sui::coin::{Self as coin, TreasuryCap, Coin};
+    
     /// Our UNXV (Unxversal) token type
     public struct UNXV has drop {}
 
     /// Wraps the raw mint cap plus supply‐tracking fields.
-    resource struct SupplyCap has key {
+    public struct SupplyCap has key, store {
+        id: UID,
         cap: TreasuryCap<UNXV>,
         max_supply: u64,
         current: u64,
@@ -25,59 +18,38 @@ module unxversal::unxv {
     /// 3) Freeze metadata  
     /// 4) Mint 1_000_000_000 UNXV to `owner`  
     /// 5) Wrap & store the mint cap in a `SupplyCap` (so you can enforce a max later)  
-    /// 6) Create a `Display<UNXV>` with your placeholders  
-    /// 7) Transfer Publisher, Display, and `SupplyCap` to `owner`
-    public entry fun init(
-        otw: sui::package::ONE_TIME_WITNESS,
+    /// 6) Transfer `SupplyCap` to `owner`
+    fun init(
+        witness: UNXV,
         ctx: &mut TxContext
     ) {
-        let publisher = package::claim(otw, ctx);
-
         // 2) Create the coin + raw mint cap
         let (mut raw_cap, metadata) = coin::create_currency(
-            UNXV {}, 
+            witness,
             6,                         // decimals
             b"UNXV",                   // symbol
             b"Unxversal Token",        // name
-            b"",                       // icon URL placeholder
+            b"",                       // icon URL placeholder / description
             option::none(),            // no extensions
             ctx
         );
         // 3) Freeze metadata
         transfer::public_freeze_object(metadata);
 
-        // 4) Mint all 1 000 000 000 up‑front
+        // 4) Mint all 1_000_000_000 up‑front
         let initial: u64 = 1_000_000_000;
-        let coins = coin::mint(&mut raw_cap, initial, ctx);
+        let coins_all = coin::mint(&mut raw_cap, initial, ctx);
         let owner = ctx.sender();
-        transfer::public_transfer(coins, owner);
+        transfer::public_transfer(coins_all, owner);
 
-        // 5) Wrap cap + supply tracking
-        let sc = SupplyCap {
-            cap: raw_cap,
-            max_supply: initial,
-            current: initial,
-        };
-        move_to(owner, sc);
-
-        // 6) Display setup with your placeholders
-        let mut disp = display::new<UNXV>(&publisher, ctx);
-        disp.add(b"name".to_string(),           b"UNXV".to_string());
-        disp.add(b"description".to_string(),    b"{description}".to_string());
-        disp.add(b"image_url".to_string(),      b"{image_url}".to_string());
-        disp.add(b"thumbnail_url".to_string(),  b"{thumbnail_url}".to_string());
-        disp.add(b"project_url".to_string(),    b"https://unxversal.com".to_string());
-        disp.add(b"creator".to_string(),        b"Unxversal Protocol".to_string());
-        disp.update_version();
-
-        // 7) Hand off Publisher and Display to owner
-        transfer::public_transfer(publisher, owner);
-        transfer::public_transfer(disp, owner);
+        // 5) Wrap cap + supply tracking and transfer to owner
+        let sc = SupplyCap { id: object::new(ctx), cap: raw_cap, max_supply: initial, current: initial };
+        transfer::public_transfer(sc, owner);
     }
 
-    /// Mint additional UNXV, up to the 1 000 000 000 cap.
+    /// Mint additional UNXV, up to the 1 000 000 000 cap.
     /// Only callable by whoever holds the SupplyCap.
-    public entry fun mint(
+    public fun mint(
         sc: &mut SupplyCap,
         amount: u64,
         recipient: address,
@@ -92,21 +64,23 @@ module unxversal::unxv {
 
     /// Burn UNXV and reduce the tracked supply.
     /// Only callable by whoever holds the SupplyCap.
-    public entry fun burn(
+    public fun burn(
         sc: &mut SupplyCap,
-        coins: vector<Coin<UNXV>>,
+        mut coins: vector<Coin<UNXV>>,
         ctx: &mut TxContext
     ) {
-        // sum up burned amount
+        // merge vector into single coin and track amount
         let mut i = 0;
         let mut burned: u64 = 0;
+        let mut merged = coin::zero<UNXV>(ctx);
         while (i < vector::length(&coins)) {
-            let c_ref = vector::borrow(&coins, i);
-            burned = burned + coin::value(c_ref);
+            let c = vector::pop_back(&mut coins);
+            burned = burned + coin::value(&c);
+            coin::join(&mut merged, c);
             i = i + 1;
-        }
-        // burn on‐chain
-        coin::burn(&mut sc.cap, coins, ctx);
+        };
+        // burn on‑chain
+        coin::burn(&mut sc.cap, merged);
         sc.current = sc.current - burned;
     }
 }
