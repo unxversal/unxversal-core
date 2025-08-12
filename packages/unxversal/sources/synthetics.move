@@ -21,6 +21,7 @@ module unxversal::synthetics {
     use sui::table::{Self as table, Table};
     use sui::clock::Clock;                 // clock for oracle staleness checks
     use sui::coin::{Self as coin, Coin};   // coin helpers (merge/split/zero/value)
+    use sui::balance::{Self as balance, Balance};
     use sui::object;
     use sui::object::ID;
     use sui::transfer;
@@ -309,7 +310,7 @@ module unxversal::synthetics {
         id: UID,
         owner: address,
         /// Collateral held inside this vault (full‑value coin of type C)
-        collateral: Coin<C>,
+        collateral: Balance<C>,
         /// symbol → synthetic debt amount
         synthetic_debt: Table<String, u64>,
         last_update_ms: u64,
@@ -506,7 +507,7 @@ module unxversal::synthetics {
         assert!(!registry.paused, 1000);
         assert_cfg_matches(registry, cfg);
 
-        let coin_zero = coin::zero<C>(ctx);
+        let coin_zero = balance::zero<C>();
         let debt_table = table::new::<String, u64>(ctx);
         let vault = CollateralVault<C> {
             id: object::new(ctx),
@@ -528,9 +529,10 @@ module unxversal::synthetics {
     ) {
         // owner-only for deposits on shared vault
         assert!(vault.owner == ctx.sender(), E_NOT_OWNER);
-        coin::merge(&mut vault.collateral, coins_in);
+        let bal_in = coin::into_balance(coins_in);
+        balance::join(&mut vault.collateral, bal_in);
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
-        event::emit(CollateralDeposited { vault_id: object::id(vault), amount: coin::value(&vault.collateral), depositor: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(CollateralDeposited { vault_id: object::id(vault), amount: balance::value(&vault.collateral), depositor: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /// Withdraw collateral if post‑withdraw health ≥ min_coll_ratio
@@ -552,8 +554,9 @@ module unxversal::synthetics {
         let (ratio, _) = check_vault_health(vault, registry, clock, price, symbol);
         assert!(ratio >= registry.global_params.min_collateral_ratio, E_VAULT_NOT_HEALTHY);
 
-        // split & return coin
-        let coin_out = coin::split(&mut vault.collateral, amount);
+        // split from balance & wrap to coin
+        let bal_out = balance::split(&mut vault.collateral, amount);
+        let coin_out = coin::from_balance(bal_out, ctx);
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(CollateralWithdrawn { vault_id: object::id(vault), amount, withdrawer: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         coin_out
@@ -579,7 +582,7 @@ module unxversal::synthetics {
         let k1 = clone_string(&synthetic_symbol);
         let old_debt = if (table::contains(debt_table, clone_string(&synthetic_symbol))) { *table::borrow(debt_table, k1) } else { 0 };
         let new_debt = old_debt + amount;
-        let collateral_usd = coin::value(&vault.collateral);
+        let collateral_usd = balance::value(&vault.collateral);
         let debt_usd = new_debt * price_u64;
         let new_ratio = if debt_usd == 0 { u64::MAX } else { (collateral_usd * 10_000) / debt_usd };
         let min_req = if asset.min_collateral_ratio > registry.global_params.min_collateral_ratio { asset.min_collateral_ratio } else { registry.global_params.min_collateral_ratio };
@@ -695,7 +698,7 @@ module unxversal::synthetics {
             *table::borrow(debt_table, clone_string(&synthetic_symbol))
         } else { 0 };
         let new_debt = old_debt + amount;
-        let collateral_usd = coin::value(&vault.collateral); // collateral units (assumed $1 peg)
+        let collateral_usd = balance::value(&vault.collateral); // collateral units (assumed $1 peg)
         let debt_usd = new_debt * price_u64;
         let new_ratio = if debt_usd == 0 { u64::MAX } else { (collateral_usd * 10_000) / debt_usd };
 
@@ -749,7 +752,8 @@ module unxversal::synthetics {
 
         let fee_to_collect = if (discount_applied) { base_fee - discount_collateral } else { base_fee };
         if (fee_to_collect > 0) {
-            let fee_coin = coin::split(&mut vault.collateral, fee_to_collect);
+            let fee_bal = balance::split(&mut vault.collateral, fee_to_collect);
+            let fee_coin = coin::from_balance(fee_bal, ctx);
             TreasuryMod::deposit_collateral(treasury, fee_coin, b"mint".to_string(), ctx.sender(), ctx);
         };
         // fee details are recorded in treasury; external FeeCollected removed here
@@ -827,7 +831,8 @@ module unxversal::synthetics {
         };
         let fee_to_collect = if (discount_applied) { base_fee - discount_collateral } else { base_fee };
         if (fee_to_collect > 0) {
-            let fee_coin = coin::split(&mut vault.collateral, fee_to_collect);
+            let fee_bal = balance::split(&mut vault.collateral, fee_to_collect);
+            let fee_coin = coin::from_balance(fee_bal, ctx);
             TreasuryMod::deposit_collateral(treasury, fee_coin, b"burn".to_string(), ctx.sender(), ctx);
         };
         // fee details are recorded in treasury; external FeeCollected removed here
@@ -860,7 +865,7 @@ module unxversal::synthetics {
         let debt = *table::borrow(&vault.synthetic_debt, clone_string(symbol));
         let price_u64 = get_price_scaled_1e6(clock, price, DEFAULT_MAX_AGE_SEC);
         assert!(price_u64 > 0, E_BAD_PRICE);
-        let collateral_value = coin::value(&vault.collateral);
+        let collateral_value = balance::value(&vault.collateral);
         let debt_value = debt * price_u64;
         let ratio = if debt_value == 0 { u64::MAX } else { (collateral_value * 10_000) / debt_value };
         let ka = clone_string(symbol);
@@ -879,7 +884,7 @@ module unxversal::synthetics {
         symbols: vector<String>,
         prices: vector<&PriceInfoObject>
     ): (u64, bool) {
-        let collateral_value = coin::value(&vault.collateral);
+        let collateral_value = balance::value(&vault.collateral);
         let mut total_debt_value: u64 = 0;
         let mut i = 0;
         let mut max_threshold = registry.global_params.liquidation_threshold;
@@ -929,8 +934,8 @@ module unxversal::synthetics {
     ) {
         // ensure cfg is the global one
         // read-only SynthRegistry not available here; assume caller validated via PTB sequence
-        let coin_out = coin::split(&mut from_vault.collateral, amount, ctx);
-        coin::merge(&mut to_vault.collateral, coin_out);
+        let bal_out = balance::split(&mut from_vault.collateral, amount);
+        balance::join(&mut to_vault.collateral, bal_out);
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
         from_vault.last_update_ms = now;
         to_vault.last_update_ms = now;
@@ -1020,7 +1025,8 @@ module unxversal::synthetics {
         assert!(fill > 0, E_INVALID_ORDER);
 
         let notional = fill * trade_price;
-        let coin_to_pay = coin::split(&mut buyer_vault.collateral, notional);
+        let bal_to_pay = balance::split(&mut buyer_vault.collateral, notional);
+        let coin_to_pay = coin::from_balance(bal_to_pay, ctx);
 
         // Buyer mints exposure (no fee inside match)
         mint_synthetic_internal(buyer_vault, registry, clock, price_info, sym.clone(), fill, ctx);
@@ -1029,7 +1035,8 @@ module unxversal::synthetics {
         burn_synthetic_internal(seller_vault, registry, clock, price_info, sym.clone(), fill, ctx);
 
         // Settle collateral
-        coin::merge(&mut seller_vault.collateral, coin_to_pay);
+        let bal_to_recv = coin::into_balance(coin_to_pay);
+        balance::join(&mut seller_vault.collateral, bal_to_recv);
 
         // Update orders
         buy_order.remaining = buy_order.remaining - fill;
@@ -1067,7 +1074,8 @@ module unxversal::synthetics {
         let maker_rebate = (trade_fee * registry.global_params.maker_rebate_bps) / 10_000;
         if (collateral_fee_after_discount > 0) {
             // Split fee from taker
-            let fee_coin_all = if (taker_is_buyer) { coin::split(&mut buyer_vault.collateral, collateral_fee_after_discount) } else { coin::split(&mut seller_vault.collateral, collateral_fee_after_discount) };
+            let fee_bal_all = if (taker_is_buyer) { balance::split(&mut buyer_vault.collateral, collateral_fee_after_discount) } else { balance::split(&mut seller_vault.collateral, collateral_fee_after_discount) };
+            let mut fee_coin_all = coin::from_balance(fee_bal_all, ctx);
             // From fee, pay maker rebate directly to maker, deposit remainder to treasury
             if (maker_rebate > 0 && maker_rebate < collateral_fee_after_discount) {
                 let to_maker = coin::split(&fee_coin_all, maker_rebate, ctx);
@@ -1110,7 +1118,7 @@ module unxversal::synthetics {
         let mut i = 0;
         while (i < vector::length(&vaults)) {
             let v = *vector::borrow(&vaults, i);
-            total_coll = total_coll + coin::value(&v.collateral);
+            total_coll = total_coll + balance::value(&v.collateral);
             if (i < vector::length(&symbols)) {
                 let sym = *vector::borrow(&symbols, i);
                 let debt_amt = if (table::contains(&v.synthetic_debt, clone_string(&sym))) { *table::borrow(&v.synthetic_debt, clone_string(&sym)) } else { 0 };
@@ -1147,7 +1155,7 @@ module unxversal::synthetics {
         price: &PriceInfoObject,
         symbol: &String
     ): (u64, u64, u64) {
-        let collateral_value = coin::value(&vault.collateral);
+        let collateral_value = balance::value(&vault.collateral);
         if (!table::contains(&vault.synthetic_debt, clone_string(symbol))) { return (collateral_value, 0, u64::MAX); };
         let debt_units = *table::borrow(&vault.synthetic_debt, clone_string(symbol));
         let px = get_price_scaled_1e6(clock, price, DEFAULT_MAX_AGE_SEC);
@@ -1199,7 +1207,10 @@ module unxversal::synthetics {
         table::add(&mut vault.synthetic_debt, synthetic_symbol.clone(), new_debt);
 
         // Seize collateral and split bot reward
-        let mut seized_coin = coin::split(&mut vault.collateral, seize);
+        let mut seized_coin = {
+            let seized_bal = balance::split(&mut vault.collateral, seize);
+            coin::from_balance(seized_bal, ctx)
+        };
         let bot_cut = (seize * registry.global_params.bot_split) / 10_000;
         let to_bot = coin::split(&mut seized_coin, bot_cut);
         transfer::public_transfer(to_bot, liquidator);
