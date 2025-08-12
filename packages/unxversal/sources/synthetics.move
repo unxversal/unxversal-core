@@ -78,7 +78,7 @@ module unxversal::synthetics {
             while (n > 0) { acc = acc * 10u128; n = n - 1; };
             raw_u128 / acc
         };
-        assert!(scaled_u128 <= (u64::MAX as u128), 0);
+        assert!(scaled_u128 <= 18_446_744_073_709_551_615, 0);
         scaled_u128 as u64
     }
 
