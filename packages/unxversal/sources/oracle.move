@@ -14,9 +14,8 @@ module unxversal::oracle {
     use sui::package;
     use sui::object;
     use sui::clock::Clock;          // block‑timestamp source
-    use std::vec_set::{Self as VecSet, VecSet};
+    use sui::vec_set::VecSet;
     use std::string::String;
-    use std::time;                  // now_ms helper
     use pyth::price_info;
     use pyth::price_identifier;
     use pyth::price;
@@ -50,7 +49,7 @@ module unxversal::oracle {
     *******************************/
     fun assert_is_admin(registry: &SynthRegistry, addr: address) {
         // `assert_is_admin` from synthetics is private, so inline equivalent
-        use std::vec_set::{contains};
+        use sui::vec_set::{contains};
         assert!(contains(&registry.admin_addrs, addr), E_NOT_ADMIN);
     }
 

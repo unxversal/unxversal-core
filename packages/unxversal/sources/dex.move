@@ -11,7 +11,7 @@ module unxversal::dex {
     use sui::event;
     use std::string::String;
     use std::vector;
-    use std::time;
+    use sui::clock; // timestamp helpers
 
     // Collateral coin type is generic per market; no hard USDC dependency
     use pyth::price_info::PriceInfoObject;
@@ -20,7 +20,7 @@ module unxversal::dex {
     use unxversal::oracle::{OracleConfig, get_latest_price, get_price_scaled_1e6};
     use unxversal::common::FeeCollected;
     use unxversal::treasury::{Self as TreasuryMod, Treasury};
-    use std::vec_set::{Self as VecSet};
+    use sui::vec_set::{Self as VecSet};
 
     const E_INSUFFICIENT_PAYMENT: u64 = 1;
     const E_ZERO_AMOUNT: u64 = 2;
@@ -76,7 +76,7 @@ module unxversal::dex {
     }
 
     /// Escrowed buy order: user buys Base with collateral at price (collateral per 1 Base)
-    /// size_base is implied by escrow_usdc / price (we also store remaining_base)
+    /// size_base is implied by escrow_collateral / price (we also store remaining_base)
     public struct CoinOrderBuy<Base, phantom C> has key, store {
         id: UID,
         owner: address,
@@ -84,7 +84,7 @@ module unxversal::dex {
         remaining_base: u64,
         created_at_ms: u64,
         expiry_ms: u64,
-        escrow_usdc: Coin<C>,
+        escrow_collateral: Coin<C>,
     }
 
     public struct DexConfig has key, store {
@@ -147,7 +147,7 @@ module unxversal::dex {
         remaining_base: u64,
         created_at_ms: u64,
         expiry_ms: u64,
-        escrow_usdc: Coin<C>,
+        escrow_collateral: Coin<C>,
     }
 
     /// Place a vault-mode sell order by moving Base from a caller-managed coin store
@@ -164,7 +164,7 @@ module unxversal::dex {
         let have = Coin::value(base_store);
         assert!(have >= size_base, E_INSUFFICIENT_PAYMENT);
         let escrow = Coin::split(base_store, size_base, ctx);
-        let order = VaultOrderSell<Base> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: time::now_ms(), expiry_ms, escrow_base: escrow };
+        let order = VaultOrderSell<Base> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), expiry_ms, escrow_base: escrow };
         event::emit(CoinOrderPlaced { order_id: object::id(&order), owner: order.owner, side: 1, price, size_base, created_at_ms: order.created_at_ms, expiry_ms });
         order
     }
@@ -174,17 +174,17 @@ module unxversal::dex {
         cfg: &DexConfig,
         price: u64,
         size_base: u64,
-        usdc_store: &mut Coin<C>,
+        collateral_store: &mut Coin<C>,
         expiry_ms: u64,
         ctx: &mut TxContext
     ): VaultOrderBuy<Base, C> {
         assert!(!cfg.paused, E_PAUSED);
         assert!(size_base > 0, E_ZERO_AMOUNT);
-        let need_usdc = price * size_base;
-        let have = Coin::value(usdc_store);
-        assert!(have >= need_usdc, E_INSUFFICIENT_PAYMENT);
-        let escrow = Coin::split(usdc_store, need_usdc, ctx);
-        let order = VaultOrderBuy<Base, C> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: time::now_ms(), expiry_ms, escrow_usdc: escrow };
+        let need_collateral = price * size_base;
+        let have = Coin::value(collateral_store);
+        assert!(have >= need_collateral, E_INSUFFICIENT_PAYMENT);
+        let escrow = Coin::split(collateral_store, need_collateral, ctx);
+        let order = VaultOrderBuy<Base, C> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), expiry_ms, escrow_collateral: escrow };
         event::emit(CoinOrderPlaced { order_id: object::id(&order), owner: order.owner, side: 0, price, size_base, created_at_ms: order.created_at_ms, expiry_ms });
         order
     }
@@ -195,7 +195,7 @@ module unxversal::dex {
         let order_id = object::id(&order);
         Coin::merge(to_store, order.escrow_base);
         let VaultOrderSell<Base> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_base: _ } = order;
-        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         object::delete(id);
     }
 
@@ -203,9 +203,9 @@ module unxversal::dex {
     public entry fun cancel_vault_buy_order<Base, C>(order: VaultOrderBuy<Base, C>, to_store: &mut Coin<C>, ctx: &mut TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
         let order_id = object::id(&order);
-        Coin::merge(to_store, order.escrow_usdc);
-        let VaultOrderBuy<Base, C> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_usdc: _ } = order;
-        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: time::now_ms() });
+        Coin::merge(to_store, order.escrow_collateral);
+        let VaultOrderBuy<Base, C> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_collateral: _ } = order;
+        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         object::delete(id);
     }
 
@@ -224,11 +224,11 @@ module unxversal::dex {
         min_price: u64,
         max_price: u64,
         buyer_base_store: &mut Coin<Base>,
-        seller_usdc_store: &mut Coin<C>,
+        seller_collateral_store: &mut Coin<C>,
         ctx: &mut TxContext
     ) {
         assert!(!cfg.paused, E_PAUSED);
-        let now = time::now_ms();
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
         if (buy.expiry_ms != 0) { assert!(now <= buy.expiry_ms, E_PAUSED); };
         if (sell.expiry_ms != 0) { assert!(now <= sell.expiry_ms, E_PAUSED); };
         assert!(buy.price >= sell.price, E_PAUSED);
@@ -245,14 +245,14 @@ module unxversal::dex {
         Coin::merge(buyer_base_store, base_out);
 
         // Collateral settlement and fee
-        let usdc_owed = trade_price * fill;
-        let trade_fee = (usdc_owed * cfg.trade_fee_bps) / 10_000;
-        let discount_usdc = (trade_fee * cfg.unxv_discount_bps) / 10_000;
+        let collateral_owed = trade_price * fill;
+        let trade_fee = (collateral_owed * cfg.trade_fee_bps) / 10_000;
+        let discount_collateral = (trade_fee * cfg.unxv_discount_bps) / 10_000;
         let mut discount_applied = false;
-        if (discount_usdc > 0 && vector::length(&unxv_payment) > 0) {
+        if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
             let price_unxv_u64 = get_price_scaled_1e6(oracle_cfg, clock, unxv_price);
             if (price_unxv_u64 > 0) {
-                let unxv_needed = (discount_usdc + price_unxv_u64 - 1) / price_unxv_u64;
+                let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
                 let mut merged = Coin::zero<UNXV>(ctx);
                 let mut i = 0;
                 while (i < vector::length(&unxv_payment)) {
@@ -273,17 +273,17 @@ module unxversal::dex {
                 }
             }
         }
-        let usdc_fee_to_collect = if (discount_applied) { trade_fee - discount_usdc } else { trade_fee };
+        let collateral_fee_to_collect = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
         let maker_rebate = (trade_fee * cfg.maker_rebate_bps) / 10_000;
         // Move net collateral to seller store from buy escrow
-        let usdc_net_to_seller = if (usdc_fee_to_collect <= usdc_owed) { usdc_owed - usdc_fee_to_collect } else { 0 };
-        if (usdc_net_to_seller > 0) {
-            let to_seller = Coin::split(&mut buy.escrow_usdc, usdc_net_to_seller, ctx);
-            Coin::merge(seller_usdc_store, to_seller);
+        let collateral_net_to_seller = if (collateral_fee_to_collect <= collateral_owed) { collateral_owed - collateral_fee_to_collect } else { 0 };
+        if (collateral_net_to_seller > 0) {
+            let to_seller = Coin::split(&mut buy.escrow_collateral, collateral_net_to_seller, ctx);
+            Coin::merge(seller_collateral_store, to_seller);
         }
-        if (usdc_fee_to_collect > 0) {
-            let mut fee_coin_all = Coin::split(&mut buy.escrow_usdc, usdc_fee_to_collect, ctx);
-            if (maker_rebate > 0 && maker_rebate < usdc_fee_to_collect) {
+        if (collateral_fee_to_collect > 0) {
+            let mut fee_coin_all = Coin::split(&mut buy.escrow_collateral, collateral_fee_to_collect, ctx);
+            if (maker_rebate > 0 && maker_rebate < collateral_fee_to_collect) {
                 let to_maker = Coin::split(&mut fee_coin_all, maker_rebate, ctx);
                 // Maker address for vault-mode: attribute based on taker side, but rebate paid to EOA maker.
                 let maker_addr = if (taker_is_buyer) { sell.owner } else { buy.owner };
@@ -296,8 +296,8 @@ module unxversal::dex {
         buy.remaining_base = buy.remaining_base - fill;
         sell.remaining_base = sell.remaining_base - fill;
 
-        event::emit(FeeCollected { fee_type: b"otc_match".to_string(), amount: trade_fee, asset_type: b"COLLATERAL".to_string(), user: if (taker_is_buyer) { buy.owner } else { sell.owner }, unxv_discount_applied: discount_applied, timestamp: time::now_ms() });
-        event::emit(CoinOrderMatched { buy_order_id: object::id(buy), sell_order_id: object::id(sell), price: trade_price, size_base: fill, taker_is_buyer, fee_paid: usdc_fee_to_collect, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, timestamp: time::now_ms() });
+        event::emit(FeeCollected { fee_type: b"otc_match".to_string(), amount: trade_fee, asset_type: b"COLLATERAL".to_string(), user: if (taker_is_buyer) { buy.owner } else { sell.owner }, unxv_discount_applied: discount_applied, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(CoinOrderMatched { buy_order_id: object::id(buy), sell_order_id: object::id(sell), price: trade_price, size_base: fill, taker_is_buyer, fee_paid: collateral_fee_to_collect, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -310,20 +310,20 @@ module unxversal::dex {
         assert!(have >= size_base, E_INSUFFICIENT_PAYMENT);
         let escrow = Coin::split(&mut base, size_base, ctx);
         transfer::public_transfer(base, ctx.sender());
-        let order = CoinOrderSell<Base> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: time::now_ms(), expiry_ms, escrow_base: escrow };
+        let order = CoinOrderSell<Base> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), expiry_ms, escrow_base: escrow };
         event::emit(CoinOrderPlaced { order_id: object::id(&order), owner: order.owner, side: 1, price, size_base, created_at_ms: order.created_at_ms, expiry_ms });
         order
     }
 
-    public entry fun place_coin_buy_order<Base, C>(cfg: &DexConfig, price: u64, size_base: u64, mut usdc: Coin<C>, expiry_ms: u64, ctx: &mut TxContext): CoinOrderBuy<Base, C> {
+    public entry fun place_coin_buy_order<Base, C>(cfg: &DexConfig, price: u64, size_base: u64, mut collateral: Coin<C>, expiry_ms: u64, ctx: &mut TxContext): CoinOrderBuy<Base, C> {
         assert!(!cfg.paused, E_PAUSED);
         assert!(size_base > 0, E_ZERO_AMOUNT);
-        let need_usdc = price * size_base;
-        let have = Coin::value(&usdc);
-        assert!(have >= need_usdc, E_INSUFFICIENT_PAYMENT);
-        let escrow = Coin::split(&mut usdc, need_usdc, ctx);
-        transfer::public_transfer(usdc, ctx.sender());
-        let order = CoinOrderBuy<Base, C> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: time::now_ms(), expiry_ms, escrow_usdc: escrow };
+        let need_collateral = price * size_base;
+        let have = Coin::value(&collateral);
+        assert!(have >= need_collateral, E_INSUFFICIENT_PAYMENT);
+        let escrow = Coin::split(&mut collateral, need_collateral, ctx);
+        transfer::public_transfer(collateral, ctx.sender());
+        let order = CoinOrderBuy<Base, C> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), expiry_ms, escrow_collateral: escrow };
         event::emit(CoinOrderPlaced { order_id: object::id(&order), owner: order.owner, side: 0, price, size_base, created_at_ms: order.created_at_ms, expiry_ms });
         order
     }
@@ -334,16 +334,16 @@ module unxversal::dex {
         transfer::public_transfer(order.escrow_base, order.owner);
         // delete object
         let CoinOrderSell<Base> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_base: _ } = order;
-        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         object::delete(id);
     }
 
     public entry fun cancel_coin_buy_order<Base, C>(order: CoinOrderBuy<Base, C>, ctx: &mut TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
         let order_id = object::id(&order);
-        transfer::public_transfer(order.escrow_usdc, order.owner);
-        let CoinOrderBuy<Base, C> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_usdc: _ } = order;
-        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: time::now_ms() });
+        transfer::public_transfer(order.escrow_collateral, order.owner);
+        let CoinOrderBuy<Base, C> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_collateral: _ } = order;
+        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         object::delete(id);
     }
 
@@ -366,7 +366,7 @@ module unxversal::dex {
         ctx: &mut TxContext
     ) {
         assert!(!cfg.paused, E_PAUSED);
-        let now = time::now_ms();
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
         if (buy.expiry_ms != 0) { assert!(now <= buy.expiry_ms, E_PAUSED); };
         if (sell.expiry_ms != 0) { assert!(now <= sell.expiry_ms, E_PAUSED); };
         // Crossed
@@ -385,15 +385,15 @@ module unxversal::dex {
         // Deliver base to buyer immediately (escrow unlock)
         transfer::public_transfer(base_out, buy.owner);
         // Move collateral from buy escrow to seller minus fee
-        let usdc_owed = trade_price * fill;
+        let collateral_owed = trade_price * fill;
         // Fee
-        let trade_fee = (usdc_owed * cfg.trade_fee_bps) / 10_000;
-        let discount_usdc = (trade_fee * cfg.unxv_discount_bps) / 10_000;
+        let trade_fee = (collateral_owed * cfg.trade_fee_bps) / 10_000;
+        let discount_collateral = (trade_fee * cfg.unxv_discount_bps) / 10_000;
         let mut discount_applied = false;
-        if (discount_usdc > 0 && vector::length(&unxv_payment) > 0) {
+        if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
             let price_unxv_u64 = get_price_scaled_1e6(oracle_cfg, clock, unxv_price);
             if (price_unxv_u64 > 0) {
-                let unxv_needed = (discount_usdc + price_unxv_u64 - 1) / price_unxv_u64;
+                let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
                 let mut merged = Coin::zero<UNXV>(ctx);
                 let mut i = 0;
                 while (i < vector::length(&unxv_payment)) {
@@ -414,16 +414,16 @@ module unxversal::dex {
                 }
             }
         }
-        let usdc_fee_to_collect = if (discount_applied) { trade_fee - discount_usdc } else { trade_fee };
+        let collateral_fee_to_collect = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
         let maker_rebate = (trade_fee * cfg.maker_rebate_bps) / 10_000;
-        let usdc_net_to_seller = if (usdc_fee_to_collect <= usdc_owed) { usdc_owed - usdc_fee_to_collect } else { 0 };
-        if (usdc_net_to_seller > 0) {
-            let to_seller = Coin::split(&mut buy.escrow_usdc, usdc_net_to_seller, ctx);
+        let collateral_net_to_seller = if (collateral_fee_to_collect <= collateral_owed) { collateral_owed - collateral_fee_to_collect } else { 0 };
+        if (collateral_net_to_seller > 0) {
+            let to_seller = Coin::split(&mut buy.escrow_collateral, collateral_net_to_seller, ctx);
             transfer::public_transfer(to_seller, sell.owner);
         }
-        if (usdc_fee_to_collect > 0) {
-            let fee_coin_all = Coin::split(&mut buy.escrow_usdc, usdc_fee_to_collect, ctx);
-            if (maker_rebate > 0 && maker_rebate < usdc_fee_to_collect) {
+        if (collateral_fee_to_collect > 0) {
+            let fee_coin_all = Coin::split(&mut buy.escrow_collateral, collateral_fee_to_collect, ctx);
+            if (maker_rebate > 0 && maker_rebate < collateral_fee_to_collect) {
                 let to_maker = Coin::split(&mut fee_coin_all, maker_rebate, ctx);
                 let maker_addr = if (taker_is_buyer) { sell.owner } else { buy.owner };
                 transfer::public_transfer(to_maker, maker_addr);
@@ -435,8 +435,8 @@ module unxversal::dex {
         buy.remaining_base = buy.remaining_base - fill;
         sell.remaining_base = sell.remaining_base - fill;
 
-        event::emit(FeeCollected { fee_type: b"otc_match".to_string(), amount: trade_fee, asset_type: b"COLLATERAL".to_string(), user: if (taker_is_buyer) { buy.owner } else { sell.owner }, unxv_discount_applied: discount_applied, timestamp: time::now_ms() });
-        event::emit(CoinOrderMatched { buy_order_id: object::id(buy), sell_order_id: object::id(sell), price: trade_price, size_base: fill, taker_is_buyer, fee_paid: usdc_fee_to_collect, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, timestamp: time::now_ms() });
+        event::emit(FeeCollected { fee_type: b"otc_match".to_string(), amount: trade_fee, asset_type: b"COLLATERAL".to_string(), user: if (taker_is_buyer) { buy.owner } else { sell.owner }, unxv_discount_applied: discount_applied, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(CoinOrderMatched { buy_order_id: object::id(buy), sell_order_id: object::id(sell), price: trade_price, size_base: fill, taker_is_buyer, fee_paid: collateral_fee_to_collect, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -446,7 +446,7 @@ module unxversal::dex {
 
     public fun get_config_fees(cfg: &DexConfig): (u64, u64, u64, bool) { (cfg.trade_fee_bps, cfg.unxv_discount_bps, cfg.maker_rebate_bps, cfg.paused) }
 
-    public fun order_buy_info<Base, C>(o: &CoinOrderBuy<Base, C>): (address, u64, u64, u64, u64, u64) { (o.owner, o.price, o.remaining_base, o.created_at_ms, o.expiry_ms, Coin::value(&o.escrow_usdc)) }
+    public fun order_buy_info<Base, C>(o: &CoinOrderBuy<Base, C>): (address, u64, u64, u64, u64, u64) { (o.owner, o.price, o.remaining_base, o.created_at_ms, o.expiry_ms, Coin::value(&o.escrow_collateral)) }
 
     public fun order_sell_info<Base>(o: &CoinOrderSell<Base>): (address, u64, u64, u64, u64, u64) { (o.owner, o.price, o.remaining_base, o.created_at_ms, o.expiry_ms, Coin::value(&o.escrow_base)) }
 

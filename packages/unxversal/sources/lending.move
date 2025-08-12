@@ -21,10 +21,9 @@ module unxversal::lending {
     use sui::coin::{Self as Coin, Coin};
 
     use std::string::String;
-    use std::table::{Self as Table, Table};
-    use std::vec_set::{Self as VecSet, VecSet};
+    use sui::table::Table;
+    use sui::vec_set::VecSet;
     use std::vector;
-    use std::time;
 
     // Synthetics integration
     use pyth::price_info::PriceInfoObject;
@@ -122,7 +121,7 @@ module unxversal::lending {
     public struct RateUpdated has copy, drop { asset: String, utilization_bps: u64, borrow_rate_bps: u64, supply_rate_bps: u64, timestamp: u64 }
     public struct InterestAccrued has copy, drop { asset: String, dt_ms: u64, new_borrow_index: u64, new_supply_index: u64, delta_borrows: u64, reserves_added: u64, timestamp: u64 }
     public struct SynthAccrued has copy, drop { symbol: String, delta_units: u64, reserve_units: u64, timestamp: u64 }
-    public struct SynthLiquidated has copy, drop { symbol: String, repay_units: u64, usdc_seized: u64, bot_reward: u64, liquidator: address, timestamp: u64 }
+    public struct SynthLiquidated has copy, drop { symbol: String, repay_units: u64, collateral_seized: u64, bot_reward: u64, liquidator: address, timestamp: u64 }
 
     /*******************************
     * User account
@@ -289,7 +288,7 @@ module unxversal::lending {
             cash: BalanceMod::zero<T>(),
             supply_index: 1_000_000, // 1e6
             borrow_index: 1_000_000,
-            last_update_ms: time::now_ms(),
+            last_update_ms: sui::tx_context::epoch_timestamp_ms(ctx),
             current_supply_rate_bps: 0,
             current_borrow_rate_bps: 0,
         };
@@ -319,7 +318,7 @@ module unxversal::lending {
             borrow_balances: Table::new::<String, u64>(ctx),
             synth_liquidity: Table::new::<String, u64>(ctx),
             synth_borrow_units: Table::new::<String, u64>(ctx),
-            last_update_ms: time::now_ms()
+            last_update_ms: sui::tx_context::epoch_timestamp_ms(ctx)
         };
         transfer::share_object(acct);
         // Display for account
@@ -354,9 +353,9 @@ module unxversal::lending {
         let delta_scaled = scaled_from_units(amount, pool.supply_index);
         let new_scaled = cur_scaled + delta_scaled;
         Table::insert(&mut acct.supply_balances, sym.clone(), new_scaled);
-        acct.last_update_ms = time::now_ms();
+        acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         let new_units = units_from_scaled(new_scaled, pool.supply_index);
-        event::emit(AssetSupplied { user: ctx.sender(), asset: sym, amount, new_balance: new_units, timestamp: time::now_ms() });
+        event::emit(AssetSupplied { user: ctx.sender(), asset: sym, amount, new_balance: new_units, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public entry fun withdraw<T>(
@@ -401,8 +400,8 @@ module unxversal::lending {
                 assert!(tot_debt <= new_capacity, E_VIOLATION);
             }
         }
-        acct.last_update_ms = time::now_ms();
-        event::emit(AssetWithdrawn { user: ctx.sender(), asset: sym, amount, remaining_balance: new_units, timestamp: time::now_ms() });
+        acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
+        event::emit(AssetWithdrawn { user: ctx.sender(), asset: sym, amount, remaining_balance: new_units, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         out
     }
 
@@ -442,12 +441,12 @@ module unxversal::lending {
         let new_scaled = cur_scaled + delta_scaled;
         Table::insert(&mut acct.borrow_balances, sym.clone(), new_scaled);
         pool.total_borrows = pool.total_borrows + amount;
-        acct.last_update_ms = time::now_ms();
+        acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         // transfer out
         let out_bal = BalanceMod::split(&mut pool.cash, amount);
         let out = Coin::from_balance(out_bal, ctx);
         let new_units = units_from_scaled(new_scaled, pool.borrow_index);
-        event::emit(AssetBorrowed { user: ctx.sender(), asset: sym, amount, new_borrow_balance: new_units, timestamp: time::now_ms() });
+        event::emit(AssetBorrowed { user: ctx.sender(), asset: sym, amount, new_borrow_balance: new_units, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         out
     }
 
@@ -468,8 +467,8 @@ module unxversal::lending {
         let new_scaled = scaled_from_units(new_units, pool.borrow_index);
         Table::insert(&mut acct.borrow_balances, sym.clone(), new_scaled);
         pool.total_borrows = pool.total_borrows - amount;
-        acct.last_update_ms = time::now_ms();
-        event::emit(DebtRepaid { user: ctx.sender(), asset: sym, amount, remaining_debt: new_units, timestamp: time::now_ms() });
+        acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
+        event::emit(DebtRepaid { user: ctx.sender(), asset: sym, amount, remaining_debt: new_units, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -500,11 +499,11 @@ module unxversal::lending {
         let rf = get_reserve_factor_bps(reg, &pool.asset);
         let supply_rate = (borrow_rate * u_bps * (10_000 - rf)) / (10_000 * 10_000);
         pool.current_supply_rate_bps = supply_rate;
-        event::emit(RateUpdated { asset: pool.asset.clone(), utilization_bps: u_bps, borrow_rate_bps: borrow_rate, supply_rate_bps: supply_rate, timestamp: time::now_ms() });
+        event::emit(RateUpdated { asset: pool.asset.clone(), utilization_bps: u_bps, borrow_rate_bps: borrow_rate, supply_rate_bps: supply_rate, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public entry fun accrue_pool_interest<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>) {
-        let now = time::now_ms();
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
         if (now <= pool.last_update_ms) { return; };
         let dt = now - pool.last_update_ms;
         let year_ms = 31_536_000_000; // 365 days
@@ -750,7 +749,7 @@ module unxversal::lending {
         let fee = (amount * reg.global_params.flash_loan_fee_bps) / 10_000;
         let out_bal = BalanceMod::split(&mut pool.cash, amount);
         let out = Coin::from_balance(out_bal, ctx);
-        event::emit(FlashLoanInitiated { asset: pool.asset.clone(), amount, fee, borrower: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(FlashLoanInitiated { asset: pool.asset.clone(), amount, fee, borrower: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         (out, FlashLoan<T> { amount, fee, asset: pool.asset.clone() })
     }
 
@@ -766,7 +765,7 @@ module unxversal::lending {
         // principal back
         let principal_bal = Coin::into_balance(principal);
         BalanceMod::join(&mut pool.cash, principal_bal);
-        event::emit(FlashLoanRepaid { asset: proof.asset, amount: proof.amount, fee: proof.fee, repayer: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(FlashLoanRepaid { asset: proof.asset, amount: proof.amount, fee: proof.fee, repayer: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -802,7 +801,7 @@ module unxversal::lending {
             ctx
         );
         let fee_units = (amount_units * reg.global_params.flash_loan_fee_bps) / 10_000;
-        event::emit(SynthFlashLoanInitiated { symbol: symbol.clone(), amount_units, fee_units, borrower: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(SynthFlashLoanInitiated { symbol: symbol.clone(), amount_units, fee_units, borrower: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         SynthFlashLoan { symbol, amount_units, fee_units }
     }
 
@@ -835,7 +834,7 @@ module unxversal::lending {
             treasury,
             ctx
         );
-        event::emit(SynthFlashLoanRepaid { symbol, amount_units, fee_units, repayer: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(SynthFlashLoanRepaid { symbol, amount_units, fee_units, repayer: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -889,8 +888,8 @@ module unxversal::lending {
         Table::insert(&mut acct.synth_liquidity, market_symbol.clone(), newb);
         let mut m = Table::borrow_mut(&mut (reg as &LendingRegistry).synth_markets, &market_symbol);
         m.total_liquidity = m.total_liquidity + amount;
-        acct.last_update_ms = time::now_ms();
-        event::emit(SynthLiquiditySupplied { user: ctx.sender(), symbol: market_symbol, amount: amount, new_balance: newb, timestamp: time::now_ms() });
+        acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
+        event::emit(SynthLiquiditySupplied { user: ctx.sender(), symbol: market_symbol, amount: amount, new_balance: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public entry fun withdraw_synth_liquidity<C>(
@@ -916,8 +915,8 @@ module unxversal::lending {
         pool_collateral.total_supply = pool_collateral.total_supply - amount;
         let mut m = Table::borrow_mut(&mut (reg as &LendingRegistry).synth_markets, &market_symbol);
         m.total_liquidity = m.total_liquidity - amount;
-        acct.last_update_ms = time::now_ms();
-        event::emit(SynthLiquidityWithdrawn { user: ctx.sender(), symbol: market_symbol, amount: amount, remaining_balance: newb, timestamp: time::now_ms() });
+        acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
+        event::emit(SynthLiquidityWithdrawn { user: ctx.sender(), symbol: market_symbol, amount: amount, remaining_balance: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         out
     }
 
@@ -960,8 +959,8 @@ module unxversal::lending {
         Table::insert(&mut acct.synth_borrow_units, symbol.clone(), newb);
         let mut m = Table::borrow_mut(&mut reg.synth_markets, &symbol);
         m.total_borrow_units = m.total_borrow_units + units;
-        acct.last_update_ms = time::now_ms();
-        event::emit(SynthBorrowed { user: ctx.sender(), symbol, units, new_borrow_units: newb, timestamp: time::now_ms() });
+        acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
+        event::emit(SynthBorrowed { user: ctx.sender(), symbol, units, new_borrow_units: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public entry fun repay_synth(
@@ -1002,8 +1001,8 @@ module unxversal::lending {
         Table::insert(&mut acct.synth_borrow_units, symbol.clone(), newb);
         let mut m = Table::borrow_mut(&mut reg.synth_markets, &symbol);
         m.total_borrow_units = m.total_borrow_units - units;
-        acct.last_update_ms = time::now_ms();
-        event::emit(SynthRepaid { user: ctx.sender(), symbol, units, remaining_borrow_units: newb, timestamp: time::now_ms() });
+        acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
+        event::emit(SynthRepaid { user: ctx.sender(), symbol, units, remaining_borrow_units: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -1026,7 +1025,7 @@ module unxversal::lending {
         let to_debt = delta - to_reserve;
         m.total_borrow_units = m.total_borrow_units + (to_debt as u64);
         m.reserve_units = m.reserve_units + (to_reserve as u64);
-        event::emit(SynthAccrued { symbol, delta_units: delta as u64, reserve_units: to_reserve as u64, timestamp: time::now_ms() });
+        event::emit(SynthAccrued { symbol, delta_units: delta as u64, reserve_units: to_reserve as u64, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -1080,7 +1079,7 @@ module unxversal::lending {
         assert!(cash >= seize_units, E_INSUFFICIENT_LIQUIDITY);
         let out_bal = BalanceMod::split(&mut pool_usdc.cash, seize_units);
         let out = Coin::from_balance(out_bal, ctx);
-        event::emit(SynthLiquidated { symbol, repay_units, usdc_seized: seize_units, bot_reward: ((seize_units as u128) - val) as u64, liquidator: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(SynthLiquidated { symbol, repay_units, collateral_seized: seize_units, bot_reward: ((seize_units as u128) - val) as u64, liquidator: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         out
     }
 }

@@ -14,10 +14,10 @@ module unxversal::futures {
     use sui::display;
     use sui::clock::Clock;
     use std::string::String;
-    use std::table::{Self as Table, Table};
-    use std::vec_set::{Self as VecSet, VecSet};
+    use sui::table::Table;
+    use sui::vec_set::VecSet;
     use std::vector;
-    use std::time;
+    use sui::clock; // timestamp helpers
     use sui::coin::{Self as Coin, Coin};
 
     use pyth::price_info::{Self as PriceInfo, PriceInfoObject};
@@ -82,8 +82,8 @@ module unxversal::futures {
         maint_margin_bps: u64,
         // Lightweight metrics
         open_interest: u64,
-        volume_premium_usdc: u64,
-        last_trade_premium_usdc: u64,
+        volume_premium: u64,
+        last_trade_premium: u64,
     }
 
     /*******************************
@@ -105,7 +105,7 @@ module unxversal::futures {
     public struct FuturesLiq has copy, drop { symbol: String, account: address, size: u64, price: u64, seized_margin: u64, bot_reward: u64, timestamp: u64 }
     public struct VariationMarginApplied has copy, drop { symbol: String, account: address, side: u8, qty: u64, from_price: u64, to_price: u64, pnl_delta: i64, new_margin: u64, timestamp: u64 }
     public struct PositionSettled has copy, drop { symbol: String, account: address, size: u64, settlement_price: u64, fee_paid: u64, bot_reward: u64, timestamp: u64 }
-    public struct MarginCall has copy, drop { symbol: String, account: address, equity_usdc: i64, maint_required_usdc: u64, timestamp: u64 }
+    public struct MarginCall has copy, drop { symbol: String, account: address, equity: i64, maint_required: u64, timestamp: u64 }
     public struct FillRecorded has copy, drop { symbol: String, price: u64, size: u64, taker: address, maker: address, taker_is_buyer: bool, fee_paid: u64, unxv_discount_applied: bool, maker_rebate: u64, bot_reward: u64, timestamp: u64 }
     public struct PositionOpened has copy, drop { symbol: String, account: address, side: u8, size: u64, price: u64, margin_locked: u64, timestamp: u64 }
     public struct PositionClosed has copy, drop { symbol: String, account: address, qty: u64, price: u64, margin_refund: u64, timestamp: u64 }
@@ -130,8 +130,8 @@ module unxversal::futures {
         // Refund any remainder back to owner
         transfer::public_transfer(margin, ctx.sender());
         market.open_interest = market.open_interest + size;
-        let pos = FuturesPosition<C> { id: object::new(ctx), owner: ctx.sender(), contract_id: object::id(market), side, size, avg_price: entry_price, margin: locked, accumulated_pnl: 0, opened_at_ms: time::now_ms() };
-        event::emit(PositionOpened { symbol: market.symbol.clone(), account: pos.owner, side, size, price: entry_price, margin_locked: Coin::value(&pos.margin), timestamp: time::now_ms() });
+        let pos = FuturesPosition<C> { id: object::new(ctx), owner: ctx.sender(), contract_id: object::id(market), side, size, avg_price: entry_price, margin: locked, accumulated_pnl: 0, opened_at_ms: sui::tx_context::epoch_timestamp_ms(ctx) };
+        event::emit(PositionOpened { symbol: market.symbol.clone(), account: pos.owner, side, size, price: entry_price, margin_locked: Coin::value(&pos.margin), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         pos
     }
 
@@ -173,9 +173,9 @@ module unxversal::futures {
             }
         }
         let new_margin_val = Coin::value(&pos.margin);
-        event::emit(VariationMarginApplied { symbol: market.symbol.clone(), account: pos.owner, side: pos.side, qty: quantity, from_price: pos.avg_price, to_price: close_price, pnl_delta, new_margin: new_margin_val, timestamp: time::now_ms() });
-        event::emit(PositionClosed { symbol: market.symbol.clone(), account: pos.owner, qty: quantity, price: close_price, margin_refund: margin_refund, timestamp: time::now_ms() });
-        event::emit(FuturesTrade { symbol: market.symbol.clone(), taker: ctx.sender(), maker: 0x0, size: quantity, price: close_price, fee_paid: fee, maker_rebate: 0, timestamp: time::now_ms() });
+        event::emit(VariationMarginApplied { symbol: market.symbol.clone(), account: pos.owner, side: pos.side, qty: quantity, from_price: pos.avg_price, to_price: close_price, pnl_delta, new_margin: new_margin_val, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(PositionClosed { symbol: market.symbol.clone(), account: pos.owner, qty: quantity, price: close_price, margin_refund: margin_refund, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(FuturesTrade { symbol: market.symbol.clone(), taker: ctx.sender(), maker: 0x0, size: quantity, price: close_price, fee_paid: fee, maker_rebate: 0, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -203,12 +203,12 @@ module unxversal::futures {
         let notional = size * price;
         // Fees
         let trade_fee = (notional * reg.trade_fee_bps) / 10_000;
-        let discount_usdc = (trade_fee * reg.unxv_discount_bps) / 10_000;
+        let discount_collateral = (trade_fee * reg.unxv_discount_bps) / 10_000;
         let mut discount_applied = false;
-        if (discount_usdc > 0 && vector::length(&unxv_payment) > 0) {
+        if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
             let price_unxv = get_price_scaled_1e6(oracle_cfg, clock, unxv_price);
             if (price_unxv > 0) {
-                let unxv_needed = (discount_usdc + price_unxv - 1) / price_unxv;
+                let unxv_needed = (discount_collateral + price_unxv - 1) / price_unxv;
                 let mut merged = Coin::zero<unxversal::unxv::UNXV>(ctx);
                 let mut i = 0;
                 while (i < vector::length(&unxv_payment)) {
@@ -229,14 +229,14 @@ module unxversal::futures {
                 }
             }
         };
-        let usdc_fee_after_discount = if (discount_applied) { trade_fee - discount_usdc } else { trade_fee };
+        let collateral_fee_after_discount = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
         let maker_rebate = (trade_fee * reg.maker_rebate_bps) / 10_000;
-        if (usdc_fee_after_discount > 0) {
+        if (collateral_fee_after_discount > 0) {
             // Collect fee from taker via an external payment passed separately is ideal.
             // For now, we emit fee event and expect taker to include a prior transfer into treasury via collateral coin in same tx.
             // If maker rebate is configured, mint rebate from the fee stream by splitting before deposit.
             let mut fee_collector = Coin::zero<C>(ctx);
-            if (maker_rebate > 0 && maker_rebate < usdc_fee_after_discount) {
+            if (maker_rebate > 0 && maker_rebate < collateral_fee_after_discount) {
                 // Pay maker rebate from taker fee stream if caller supplied funds into fee_collector earlier in tx
                 // This path expects the caller to have merged collateral into fee_collector via an outer flow.
                 let to_maker = Coin::split(&mut fee_collector, maker_rebate, ctx);
@@ -244,7 +244,7 @@ module unxversal::futures {
             };
             // Bot reward split on trade fee (optional)
             if (reg.trade_bot_reward_bps > 0) {
-                let bot_cut = (usdc_fee_after_discount * reg.trade_bot_reward_bps) / 10_000;
+                let bot_cut = (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000;
                 if (bot_cut > 0) {
                     let to_bot = Coin::split(&mut fee_collector, bot_cut, ctx);
                     transfer::public_transfer(to_bot, ctx.sender());
@@ -254,10 +254,10 @@ module unxversal::futures {
         }
         // Metrics
         if (oi_increase) { market.open_interest = market.open_interest + size; } else { if (market.open_interest >= size) { market.open_interest = market.open_interest - size; } }
-        market.volume_premium_usdc = market.volume_premium_usdc + notional;
-        market.last_trade_premium_usdc = price;
-        event::emit(FuturesTrade { symbol: market.symbol.clone(), taker: ctx.sender(), maker, size, price, fee_paid: usdc_fee_after_discount, maker_rebate: maker_rebate, timestamp: time::now_ms() });
-        event::emit(FillRecorded { symbol: market.symbol.clone(), price, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: usdc_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (usdc_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: time::now_ms() });
+        market.volume_premium = market.volume_premium + notional;
+        market.last_trade_premium = price;
+        event::emit(FuturesTrade { symbol: market.symbol.clone(), taker: ctx.sender(), maker, size, price, fee_paid: collateral_fee_after_discount, maker_rebate: maker_rebate, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(FillRecorded { symbol: market.symbol.clone(), price, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: collateral_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -282,7 +282,7 @@ module unxversal::futures {
         let notional = pos.size * mark_price;
         let maint_req = (notional * market.maint_margin_bps) / 10_000;
         if (!(equity < (maint_req as i128))) { return; } // not liquidatable
-        event::emit(MarginCall { symbol: market.symbol.clone(), account: pos.owner, equity_usdc: equity as i64, maint_required_usdc: maint_req, timestamp: time::now_ms() });
+        event::emit(MarginCall { symbol: market.symbol.clone(), account: pos.owner, equity: equity as i64, maint_required: maint_req, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         // Seize all margin to treasury, split bot reward
         let seized_total = Coin::value(&pos.margin);
         if (seized_total > 0) {
@@ -298,7 +298,7 @@ module unxversal::futures {
         let liq_price = mark_price;
         let qty = pos.size;
         pos.size = 0;
-        event::emit(FuturesLiq { symbol: market.symbol.clone(), account: pos.owner, size: qty, price: liq_price, seized_margin: seized_total, bot_reward: (seized_total * reg.settlement_bot_reward_bps) / 10_000, timestamp: time::now_ms() });
+        event::emit(FuturesLiq { symbol: market.symbol.clone(), account: pos.owner, size: qty, price: liq_price, seized_margin: seized_total, bot_reward: (seized_total * reg.settlement_bot_reward_bps) / 10_000, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         if (market.open_interest >= qty) { market.open_interest = market.open_interest - qty; }
     }
 
@@ -347,8 +347,8 @@ module unxversal::futures {
         transfer::share_object(reg)
     }
 
-    public entry fun pause(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut FuturesRegistry, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); reg.paused = true; event::emit(PausedToggled { new_state: true, by: ctx.sender(), timestamp: time::now_ms() }); }
-    public entry fun resume(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut FuturesRegistry, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); reg.paused = false; event::emit(PausedToggled { new_state: false, by: ctx.sender(), timestamp: time::now_ms() }); }
+    public entry fun pause(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut FuturesRegistry, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); reg.paused = true; event::emit(PausedToggled { new_state: true, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
+    public entry fun resume(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut FuturesRegistry, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); reg.paused = false; event::emit(PausedToggled { new_state: false, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
 
     public entry fun set_params(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut FuturesRegistry, settlement_fee_bps: u64, settlement_bot_reward_bps: u64, min_list_interval_ms: u64, ctx: &TxContext) {
         assert_is_admin(synth_reg, ctx.sender());
@@ -391,7 +391,7 @@ module unxversal::futures {
         assert_is_admin(synth_reg, ctx.sender());
         VecSet::add(&mut reg.underlyings, underlying.clone());
         Table::insert(&mut reg.price_feeds, underlying.clone(), feed_bytes);
-        event::emit(UnderlyingWhitelisted { underlying, by: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(UnderlyingWhitelisted { underlying, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -400,7 +400,7 @@ module unxversal::futures {
     public entry fun list_futures(reg: &mut FuturesRegistry, underlying: String, symbol: String, contract_size: u64, tick_size: u64, expiry_ms: u64, init_margin_bps: u64, maint_margin_bps: u64, ctx: &mut TxContext) {
         assert!(!reg.paused, E_PAUSED);
         assert!(VecSet::contains(&reg.underlyings, underlying.clone()), E_UNKNOWN_UNDERLYING);
-        let now = time::now_ms();
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
         let last = if (Table::contains(&reg.last_list_ms, &underlying)) { *Table::borrow(&reg.last_list_ms, &underlying) } else { 0 };
         assert!(now >= last + reg.min_list_interval_ms, E_MIN_INTERVAL);
         Table::insert(&mut reg.last_list_ms, underlying.clone(), now);
@@ -420,8 +420,8 @@ module unxversal::futures {
             init_margin_bps,
             maint_margin_bps,
             open_interest: 0,
-            volume_premium_usdc: 0,
-            last_trade_premium_usdc: 0,
+            volume_premium: 0,
+            last_trade_premium: 0,
             user_open_interest: Table::new<address, u64>(ctx),
             max_oi_per_user: reg.default_max_oi_per_user,
         };
@@ -455,7 +455,7 @@ module unxversal::futures {
         rdisp.add(b"default_max_oi_per_user".to_string(), b"{default_max_oi_per_user}".to_string());
         rdisp.update_version();
         transfer::public_transfer(rdisp, ctx.sender());
-        event::emit(RegistryDisplayInitialized { by: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(RegistryDisplayInitialized { by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -464,7 +464,7 @@ module unxversal::futures {
     public entry fun settle_futures(reg: &mut FuturesRegistry, oracle_cfg: &OracleConfig, market: &mut FuturesContract, clock: &Clock, price_info: &PriceInfoObject, treasury: &mut Treasury, ctx: &mut TxContext) {
         assert!(!reg.paused, E_PAUSED);
         assert!(!market.is_expired, E_ALREADY_SETTLED);
-        let now = time::now_ms();
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
         assert!(now >= market.expiry_ms, E_MIN_INTERVAL);
         // Enforce feed matches whitelisted underlying
         let pi = PriceInfo::get_price_info_from_price_info_object(price_info);
@@ -524,7 +524,7 @@ module unxversal::futures {
         }
         let size = pos.size;
         let fee_for_event = ((if (pnl_total >= 0) { pnl_total as u64 } else { 0 }) * reg.settlement_fee_bps) / 10_000;
-        event::emit(PositionSettled { symbol: market.symbol.clone(), account: pos.owner, size, settlement_price: px, fee_paid: fee_for_event, bot_reward: (fee_for_event * reg.settlement_bot_reward_bps) / 10_000, timestamp: time::now_ms() });
+        event::emit(PositionSettled { symbol: market.symbol.clone(), account: pos.owner, size, settlement_price: px, fee_paid: fee_for_event, bot_reward: (fee_for_event * reg.settlement_bot_reward_bps) / 10_000, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         // Close position fully and return remaining margin to owner
         pos.size = 0;
         let rem = Coin::value(&pos.margin);
@@ -562,7 +562,7 @@ module unxversal::futures {
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, E_PAUSED);
-        let now = time::now_ms();
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
         let mut i = 0;
         while (i < vector::length(&markets)) {
             let m = *vector::borrow_mut(&mut markets, i);
@@ -582,7 +582,7 @@ module unxversal::futures {
     *******************************/
     public fun get_contract_id(reg: &FuturesRegistry, symbol: &String): ID { *Table::borrow(&reg.contracts, symbol) }
     public fun is_underlying_whitelisted(reg: &FuturesRegistry, u: &String): bool { VecSet::contains(&reg.underlyings, u.clone()) }
-    public fun get_market_metrics(m: &FuturesContract): (u64, u64, u64) { (m.open_interest, m.volume_premium_usdc, m.last_trade_premium_usdc) }
+    public fun get_market_metrics(m: &FuturesContract): (u64, u64, u64) { (m.open_interest, m.volume_premium, m.last_trade_premium) }
     public fun position_info<C>(p: &FuturesPosition<C>): (address, ID, u8, u64, u64, u64, i64, u64) { (p.owner, p.contract_id, p.side, p.size, p.avg_price, Coin::value(&p.margin), p.accumulated_pnl, p.opened_at_ms) }
     public fun registry_trade_fee_params(reg: &FuturesRegistry): (u64, u64, u64, u64) { (reg.trade_fee_bps, reg.maker_rebate_bps, reg.unxv_discount_bps, reg.trade_bot_reward_bps) }
     public fun registry_settlement_params(reg: &FuturesRegistry): (u64, u64) { (reg.settlement_fee_bps, reg.settlement_bot_reward_bps) }

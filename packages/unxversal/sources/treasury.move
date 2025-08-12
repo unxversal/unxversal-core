@@ -13,7 +13,7 @@ module unxversal::treasury {
     use sui::event;
     use sui::coin::{Self as Coin, Coin};
     use std::string::String;
-    use std::time;
+    use sui::clock; // timestamp helpers
 
     use unxversal::unxv::{UNXV, SupplyCap};
 
@@ -55,7 +55,7 @@ module unxversal::treasury {
         let t = Treasury<C> { id: object::new(ctx), collateral: Coin::zero<C>(ctx), unxv: Coin::zero<UNXV>(ctx), cfg: TreasuryCfg { unxv_burn_bps: 0 } };
         transfer::share_object(t);
         transfer::public_transfer(TreasuryCap { id: object::new(ctx) }, ctx.sender());
-        event::emit(TreasuryInitialized { treasury_id: object::id(&t), by: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(TreasuryInitialized { treasury_id: object::id(&t), by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public entry fun init_treasury_with_display<C>(publisher: &Publisher, ctx: &mut TxContext) {
@@ -75,7 +75,7 @@ module unxversal::treasury {
         let amount = Coin::value(&c);
         assert!(amount > 0, E_ZERO_AMOUNT);
         Coin::merge(&mut treasury.collateral, c);
-        event::emit(FeeReceived { source, asset: b"COLLATERAL".to_string(), amount, payer, timestamp: time::now_ms() });
+        event::emit(FeeReceived { source, asset: b"COLLATERAL".to_string(), amount, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public entry fun deposit_unxv<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {
@@ -90,7 +90,7 @@ module unxversal::treasury {
         };
         assert!(total > 0, E_ZERO_AMOUNT);
         Coin::merge(&mut treasury.unxv, merged);
-        event::emit(FeeReceived { source, asset: b"UNXV".to_string(), amount: total, payer, timestamp: time::now_ms() });
+        event::emit(FeeReceived { source, asset: b"UNXV".to_string(), amount: total, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         // Note: actual burning requires SupplyCap; use burn_unxv below
     }
 
@@ -101,19 +101,19 @@ module unxversal::treasury {
         assert!(amount > 0, E_ZERO_AMOUNT);
         let out = Coin::split(&mut treasury.collateral, amount, ctx);
         transfer::public_transfer(out, to);
-        event::emit(TreasuryWithdrawn { asset: b"COLLATERAL".to_string(), amount, to, by: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(TreasuryWithdrawn { asset: b"COLLATERAL".to_string(), amount, to, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public entry fun withdraw_unxv<C>(_cap: &TreasuryCap, treasury: &mut Treasury<C>, to: address, amount: u64, ctx: &mut TxContext) {
         assert!(amount > 0, E_ZERO_AMOUNT);
         let out = Coin::split(&mut treasury.unxv, amount, ctx);
         transfer::public_transfer(out, to);
-        event::emit(TreasuryWithdrawn { asset: b"UNXV".to_string(), amount, to, by: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(TreasuryWithdrawn { asset: b"UNXV".to_string(), amount, to, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public entry fun set_policy<C>(_cap: &TreasuryCap, treasury: &mut Treasury<C>, new_cfg: TreasuryCfg, ctx: &TxContext) {
         treasury.cfg = new_cfg;
-        event::emit(TreasuryPolicyUpdated { by: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(TreasuryPolicyUpdated { by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /// Burn UNXV from treasury using the protocol's SupplyCap
@@ -123,7 +123,7 @@ module unxversal::treasury {
         let mut vec = vector::empty<Coin<UNXV>>();
         vector::push_back(&mut vec, exact);
         unxversal::unxv::burn(sc, vec, ctx);
-        event::emit(UNXVBurned { amount, by: ctx.sender(), timestamp: time::now_ms() });
+        event::emit(UNXVBurned { amount, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     // Helper: returns the address of the Treasury object (useful for transfers)
