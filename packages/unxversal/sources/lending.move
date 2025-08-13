@@ -1041,7 +1041,8 @@ module unxversal::lending {
         reg: &mut LendingRegistry,
         symbol: String,
         dt_ms: u64,
-        apr_bps: u64
+        apr_bps: u64,
+        ctx: &TxContext
     ) {
         assert!(!reg.paused, 1000);
         let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
@@ -1060,15 +1061,17 @@ module unxversal::lending {
     /*******************************
     * Liquidation for synth borrows (vault-based): repay units and seize collateral from market
     *******************************/
-    public entry fun liquidate_synth(
+    public entry fun liquidate_synth<C>(
         reg: &mut LendingRegistry,
         synth_reg: &mut SynthRegistry,
+        cfg: &CollateralConfig<C>,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         price_synth: &PriceInfoObject,
         price_usdc: &PriceInfoObject,
         vault: &mut CollateralVault<C>,
         pool_usdc: &mut LendingPool<C>,
+        treasury: &mut Treasury<C>,
         debtor: &mut UserAccount,
         symbol: String,
         repay_units: u64,
@@ -1082,16 +1085,16 @@ module unxversal::lending {
         assert!(repay_units <= cur, E_OVER_REPAY);
         // Burn exposure on debtor
         Synth::burn_synthetic(
+            cfg,
             vault,
             synth_reg,
-            oracle_cfg,
             clock,
             price_synth,
-            symbol.clone(),
+            clone_string(&symbol),
             repay_units,
             vector::empty<Coin<UNXV>>(),
             price_usdc,
-            &mut *(&mut (object::borrow_mut::<Treasury>(reg as &LendingRegistry as &LendingRegistry) ) ),
+            treasury,
             ctx
         );
         let newb = cur - repay_units;
