@@ -192,9 +192,9 @@ module unxversal::dex {
     /// Cancel vault-mode sell: merge base escrow back into caller-provided store
     public entry fun cancel_vault_sell_order<Base: store>(order: VaultOrderSell<Base>, to_store: &mut Coin<Base>, ctx: &mut TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
+        let order_id = object::id(&order);
         let VaultOrderSell<Base> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_base } = order;
         coin::join(to_store, escrow_base);
-        let order_id = object::id_from_uid(&id);
         event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         object::delete(id);
     }
@@ -202,9 +202,9 @@ module unxversal::dex {
     /// Cancel vault-mode buy: merge collateral escrow back into caller-provided store
     public entry fun cancel_vault_buy_order<Base: store, C: store>(order: VaultOrderBuy<Base, C>, to_store: &mut Coin<C>, ctx: &mut TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
+        let order_id = object::id(&order);
         let VaultOrderBuy<Base, C> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_collateral } = order;
         coin::join(to_store, escrow_collateral);
-        let order_id = object::id_from_uid(&id);
         event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         object::delete(id);
     }
@@ -270,7 +270,7 @@ module unxversal::dex {
                     transfer::public_transfer(merged, buy.owner);
                 }
             }
-        }
+        };
         let collateral_fee_to_collect = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
         let maker_rebate = (trade_fee * cfg.maker_rebate_bps) / 10_000;
         // Move net collateral to seller store from buy escrow
@@ -278,7 +278,7 @@ module unxversal::dex {
         if (collateral_net_to_seller > 0) {
             let to_seller = coin::split(&mut buy.escrow_collateral, collateral_net_to_seller, ctx);
             coin::join(seller_collateral_store, to_seller);
-        }
+        };
         if (collateral_fee_to_collect > 0) {
             let mut fee_coin_all = coin::split(&mut buy.escrow_collateral, collateral_fee_to_collect, ctx);
             if (maker_rebate > 0 && maker_rebate < collateral_fee_to_collect) {
@@ -328,18 +328,18 @@ module unxversal::dex {
 
     public entry fun cancel_coin_sell_order<Base: store>(order: CoinOrderSell<Base>, ctx: &mut TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
+        let order_id = object::id(&order);
         let CoinOrderSell<Base> { id, owner, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_base } = order;
         transfer::public_transfer(escrow_base, owner);
-        let order_id = object::id_from_uid(&id);
         event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         object::delete(id);
     }
 
     public entry fun cancel_coin_buy_order<Base: store, C: store>(order: CoinOrderBuy<Base, C>, ctx: &mut TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
+        let order_id = object::id(&order);
         let CoinOrderBuy<Base, C> { id, owner, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_collateral } = order;
         transfer::public_transfer(escrow_collateral, owner);
-        let order_id = object::id_from_uid(&id);
         event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         object::delete(id);
     }
