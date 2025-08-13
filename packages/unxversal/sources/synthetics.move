@@ -1294,6 +1294,37 @@ module unxversal::synthetics {
         event::emit(AdminRevoked { admin_addr: bad_admin, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
+    /// Bind the system to a specific collateral coin type C exactly once.
+    /// Creates and shares a `CollateralConfig<C>` object and records its ID in the registry.
+    public entry fun set_collateral<C>(
+        _admin: &AdminCap,
+        registry: &mut SynthRegistry,
+        ctx: &mut TxContext
+    ) {
+        // Allow‑list enforcement
+        assert_is_admin(registry, ctx.sender());
+        // One‑time only
+        assert!(!registry.collateral_set, E_COLLATERAL_NOT_SET);
+        let cfg = CollateralConfig<C> { id: object::new(ctx) };
+        let cfg_id = object::id(&cfg);
+        registry.collateral_set = true;
+        registry.collateral_cfg_id = option::some<ID>(cfg_id);
+        // Expose the config as a shared object so other modules can reference it
+        transfer::share_object(cfg);
+    }
+
+    /// Update the registry's treasury reference to the concrete `Treasury<C>` selected by governance.
+    public entry fun set_registry_treasury<C>(
+        _admin: &AdminCap,
+        registry: &mut SynthRegistry,
+        treasury: &Treasury<C>,
+        ctx: &TxContext
+    ) {
+        assert_is_admin(registry, ctx.sender());
+        registry.treasury_id = object::id(treasury);
+        event::emit(ParamsUpdated { updater: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
     /// Parameter updates & emergency pause – gated by allow‑list
     /// Replace **all** global parameters. Consider granular setters in future.
     public fun update_global_params(

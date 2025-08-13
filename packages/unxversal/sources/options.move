@@ -9,17 +9,14 @@ module unxversal::options {
     *******************************/
 
     use sui::tx_context::TxContext;
-    use sui::transfer;
     use sui::display;
-    use sui::object;
     use sui::package;
     use sui::package::Publisher;
     use sui::types;
     use sui::event;
     use std::string::{Self as string, String};
     use sui::table::{Self as table, Table};
-    use std::vector;
-    use sui::clock; // timestamp helpers
+    // timestamp helpers via Clock type import below
     use sui::clock::Clock;
     use switchboard::aggregator::Aggregator;
     use unxversal::oracle::{OracleConfig, get_price_scaled_1e6};
@@ -233,6 +230,14 @@ module unxversal::options {
     /// Short underlying escrow for coin-physical CALLs (typed by Base)
     public struct ShortUnderlyingEscrow<Base> has key, store {
         id: UID,
+        position_id: ID,
+        escrow_base: Coin<Base>,
+    }
+
+    /// Long underlying escrow for coin-physical PUTs (typed by Base)
+    public struct LongUnderlyingEscrow<Base> has key, store {
+        id: UID,
+        owner: address,
         position_id: ID,
         escrow_base: Coin<Base>,
     }
@@ -485,6 +490,7 @@ module unxversal::options {
         assert!(u.is_active, E_UNDERLYING_INACTIVE);
         assert!(strike_price >= u.min_strike_price && strike_price <= u.max_strike_price, E_BAD_PARAMS);
         assert!(expiry_ms >= u.min_expiry_duration_ms && expiry_ms <= u.max_expiry_duration_ms, E_BAD_PARAMS);
+        // Both CALL and PUT markets can be CASH, PHYSICAL or BOTH
 
         let key_bytes = market_key_bytes(&underlying, &option_type, strike_price, expiry_ms);
         assert!(!table::contains(&reg.option_markets, clone_bytes(&key_bytes)), E_BAD_PARAMS);
@@ -601,9 +607,7 @@ module unxversal::options {
     ) {
         assert!(!reg.paused && (market.exercise_style == b"AMERICAN".to_string()), E_PAUSED);
         assert!(quantity > 0 && quantity <= long_pos.quantity && quantity <= short_pos.quantity, E_AMOUNT);
-        // Oracle feed enforcement
-        let ua = table::borrow(&reg.supported_underlyings, clone_string(&market.underlying));
-        // No on-chain ID check: feed binding is via off-chain provisioning of the right Aggregator
+        // Oracle price (symbol existence checked at market creation)
         let spot = get_price_scaled_1e6(oracle_cfg, clock, price_info);
         let mut payout = 0u64;
         if (long_pos.option_type == b"CALL".to_string()) {
@@ -626,8 +630,8 @@ module unxversal::options {
         if (market.total_open_interest >= quantity) { market.total_open_interest = market.total_open_interest - quantity; };
         // Decrement user OI for long owner
         if (table::contains(&market.user_open_interest, long_pos.owner)) {
-            let cur = *table::borrow(&market.user_open_interest, long_pos.owner);
-            let newv = if (cur > quantity) { cur - quantity } else { 0 };
+            let old = table::remove(&mut market.user_open_interest, long_pos.owner);
+            let newv = if (old > quantity) { old - quantity } else { 0 };
             table::add(&mut market.user_open_interest, long_pos.owner, newv);
         };
         event::emit(EarlyExercised { market_id: object::id(market), long_owner: long_pos.owner, short_owner: short_pos.owner, quantity, payout_to_long: net_to_long, fee_paid: fee, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
@@ -659,17 +663,69 @@ module unxversal::options {
         let trade_fee_bps = if (market.trade_fee_bps_override > 0) { market.trade_fee_bps_override } else { reg.trade_fee_bps };
         let taker_fee = (premium_total * trade_fee_bps) / 10_000;
         let maker_rebate = (taker_fee * reg.maker_rebate_bps_close) / 10_000;
-        let fee_to_collect = taker_fee;
+        // Optional UNXV discount on taker fee
+        let discount_collateral = (taker_fee * reg.unxv_discount_bps) / 10_000;
+        let mut discount_applied = false;
+        if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
+            let price_unxv_u64 = get_price_scaled_1e6(oracle_cfg, clock, unxv_price);
+            if (price_unxv_u64 > 0) {
+                let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
+                let mut merged = coin::zero<UNXV>(ctx);
+                let mut i = 0;
+                while (i < vector::length(&unxv_payment)) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); i = i + 1; };
+                let have = coin::value(&merged);
+                let payer_addr = if (payer_is_long) { long_pos.owner } else { short_pos.owner };
+                if (have >= unxv_needed) {
+                    let exact = coin::split(&mut merged, unxv_needed, ctx);
+                    let mut vecu = vector::empty<Coin<UNXV>>();
+                    vector::push_back(&mut vecu, exact);
+                    TreasuryMod::deposit_unxv(treasury, vecu, b"options_close".to_string(), payer_addr, ctx);
+                    transfer::public_transfer(merged, payer_addr);
+                    discount_applied = true;
+                } else { transfer::public_transfer(merged, payer_addr); }
+            }
+        };
+        let fee_to_collect = if (discount_applied) { if (taker_fee > discount_collateral) { taker_fee - discount_collateral } else { 0 } } else { taker_fee };
         let net_amount = if (premium_total > fee_to_collect) { premium_total - fee_to_collect } else { 0 };
         if (payer_is_long) {
             // Long pays short to close; transfer net to short and fee to treasury
-            if (net_amount > 0) { let to_short = coin::split(&mut usdc, net_amount, ctx); transfer::public_transfer(to_short, short_pos.owner); };
-            if (fee_to_collect > 0) { let mut fee_all = coin::split(&mut usdc, fee_to_collect, ctx); if (maker_rebate > 0 && maker_rebate < fee_to_collect) { let to_maker = coin::split(&mut fee_all, maker_rebate, ctx); transfer::public_transfer(to_maker, short_pos.owner); }; let bot_cut = (coin::value(&fee_all) * reg.close_bot_reward_bps) / 10_000; if (bot_cut > 0) { let to_bots = coin::split(&mut fee_all, bot_cut, ctx); TreasuryMod::deposit_collateral(treasury, to_bots, b"options_close_bot".to_string(), long_pos.owner, ctx); }; TreasuryMod::deposit_collateral(treasury, fee_all, b"options_close".to_string(), long_pos.owner, ctx); };
+            if (net_amount > 0) {
+                let to_short = coin::split(&mut usdc, net_amount, ctx);
+                transfer::public_transfer(to_short, short_pos.owner);
+            };
+            if (fee_to_collect > 0) {
+                let mut fee_all = coin::split(&mut usdc, fee_to_collect, ctx);
+                if (maker_rebate > 0 && maker_rebate < fee_to_collect) {
+                    let to_maker = coin::split(&mut fee_all, maker_rebate, ctx);
+                    transfer::public_transfer(to_maker, short_pos.owner);
+                };
+                let bot_cut = (coin::value(&fee_all) * reg.close_bot_reward_bps) / 10_000;
+                if (bot_cut > 0) {
+                    let to_bots = coin::split(&mut fee_all, bot_cut, ctx);
+                    TreasuryMod::deposit_collateral(treasury, to_bots, b"options_close_bot".to_string(), long_pos.owner, ctx);
+                };
+                TreasuryMod::deposit_collateral(treasury, fee_all, b"options_close".to_string(), long_pos.owner, ctx);
+            };
         } else {
             // Short pays long to close (buy-back)
-            if (net_amount > 0) { let to_long = coin::split(&mut usdc, net_amount, ctx); transfer::public_transfer(to_long, long_pos.owner); };
-            if (fee_to_collect > 0) { let mut fee_all = coin::split(&mut usdc, fee_to_collect, ctx); if (maker_rebate > 0 && maker_rebate < fee_to_collect) { let to_maker = coin::split(&mut fee_all, maker_rebate, ctx); transfer::public_transfer(to_maker, long_pos.owner); }; let bot_cut = (coin::value(&fee_all) * reg.close_bot_reward_bps) / 10_000; if (bot_cut > 0) { let to_bots = coin::split(&mut fee_all, bot_cut, ctx); TreasuryMod::deposit_collateral(treasury, to_bots, b"options_close_bot".to_string(), short_pos.owner, ctx); }; TreasuryMod::deposit_collateral(treasury, fee_all, b"options_close".to_string(), short_pos.owner, ctx); };
-        }
+            if (net_amount > 0) {
+                let to_long = coin::split(&mut usdc, net_amount, ctx);
+                transfer::public_transfer(to_long, long_pos.owner);
+            };
+            if (fee_to_collect > 0) {
+                let mut fee_all = coin::split(&mut usdc, fee_to_collect, ctx);
+                if (maker_rebate > 0 && maker_rebate < fee_to_collect) {
+                    let to_maker = coin::split(&mut fee_all, maker_rebate, ctx);
+                    transfer::public_transfer(to_maker, long_pos.owner);
+                };
+                let bot_cut = (coin::value(&fee_all) * reg.close_bot_reward_bps) / 10_000;
+                if (bot_cut > 0) {
+                    let to_bots = coin::split(&mut fee_all, bot_cut, ctx);
+                    TreasuryMod::deposit_collateral(treasury, to_bots, b"options_close_bot".to_string(), short_pos.owner, ctx);
+                };
+                TreasuryMod::deposit_collateral(treasury, fee_all, b"options_close".to_string(), short_pos.owner, ctx);
+            };
+        };
         // Refund proportional initial margin to short for closed quantity
         let notional = quantity * market.strike_price;
         let refund = (notional * market.init_margin_bps_short) / 10_000;
@@ -681,6 +737,7 @@ module unxversal::options {
         if (table::contains(&market.user_open_interest, long_pos.owner)) {
             let cur = *table::borrow(&market.user_open_interest, long_pos.owner);
             let newv = if (cur > quantity) { cur - quantity } else { 0 };
+            let _ = table::remove(&mut market.user_open_interest, long_pos.owner);
             table::add(&mut market.user_open_interest, long_pos.owner, newv);
         };
         // Refund any remainder of usdc source
@@ -691,22 +748,22 @@ module unxversal::options {
     /*******************************
     * Liquidation: close pair at live price with penalty to liquidator
     *******************************/
-    public entry fun liquidate_under_collateralized_pair(
+    public entry fun liquidate_under_collateralized_pair<C: store>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
-        long_pos: &mut OptionPosition,
-        short_pos: &mut OptionPosition,
+        long_pos: &mut OptionPosition<C>,
+        short_pos: &mut OptionPosition<C>,
         quantity: u64,
         liquidator: address,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         price_info: &Aggregator,
-        treasury: &mut Treasury,
+        treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, E_PAUSED);
         assert!(quantity > 0 && quantity <= long_pos.quantity && quantity <= short_pos.quantity, E_AMOUNT);
-        let ua = table::borrow(&reg.supported_underlyings, clone_string(&market.underlying));
+        // Underlying exists check done implicitly at market creation; keep logic local
         let spot = get_price_scaled_1e6(oracle_cfg, clock, price_info);
         // Maintenance health
         let notional = quantity * market.strike_price;
@@ -722,12 +779,12 @@ module unxversal::options {
         let fee = (payout * fee_bps) / 10_000;
         let net_to_long = if (payout > fee) { payout - fee } else { 0 };
         let mut to_long = coin::zero<C>(ctx);
-        if (net_to_long > 0) { let p = coin::split(&mut short_pos.collateral_locked, net_to_long, ctx); coin::join(&mut to_long, p); }
+        if (net_to_long > 0) { let p = coin::split(&mut short_pos.collateral_locked, net_to_long, ctx); coin::join(&mut to_long, p); };
         transfer::public_transfer(to_long, long_pos.owner);
-        if (fee > 0) { let fc = coin::split(&mut short_pos.collateral_locked, fee, ctx); TreasuryMod::deposit_collateral(treasury, fc, b"options_liquidation".to_string(), liquidator, ctx); }
+        if (fee > 0) { let fc = coin::split(&mut short_pos.collateral_locked, fee, ctx); TreasuryMod::deposit_collateral(treasury, fc, b"options_liquidation".to_string(), liquidator, ctx); };
         // Liquidator bonus from remaining collateral proportional to liq_penalty_bps
         let bonus = (coin::value(&short_pos.collateral_locked) * reg.liq_penalty_bps) / 10_000;
-        if (bonus > 0) { let b = coin::split(&mut short_pos.collateral_locked, bonus, ctx); transfer::public_transfer(b, liquidator); }
+        if (bonus > 0) { let b = coin::split(&mut short_pos.collateral_locked, bonus, ctx); transfer::public_transfer(b, liquidator); };
         long_pos.quantity = long_pos.quantity - quantity;
         short_pos.quantity = short_pos.quantity - quantity;
         if (market.total_open_interest >= quantity) { market.total_open_interest = market.total_open_interest - quantity; };
@@ -801,7 +858,7 @@ module unxversal::options {
         transfer::public_transfer(disp, ctx.sender());
     }
 
-    public entry fun init_offer_and_position_displays<C>(publisher: &Publisher, ctx: &mut TxContext) {
+    public entry fun init_offer_and_position_displays<C: store>(publisher: &Publisher, ctx: &mut TxContext) {
         let mut disp_offer = display::new<ShortOffer<C>>(publisher, ctx);
         disp_offer.add(b"name".to_string(), b"Short Offer {option_type} {strike_price} exp {expiry_ms}".to_string());
         disp_offer.add(b"remaining_qty".to_string(), b"{remaining_qty}".to_string());
@@ -823,6 +880,11 @@ module unxversal::options {
         disp_pos.add(b"premium_per_unit".to_string(), b"{premium_per_unit}".to_string());
         disp_pos.update_version();
         transfer::public_transfer(disp_pos, ctx.sender());
+
+        let mut disp_long_esc = display::new<LongUnderlyingEscrow<C>>(publisher, ctx);
+        disp_long_esc.add(b"name".to_string(), b"Long Underlying Escrow {position_id}".to_string());
+        disp_long_esc.update_version();
+        transfer::public_transfer(disp_long_esc, ctx.sender());
     }
 
     /*******************************
@@ -923,25 +985,62 @@ module unxversal::options {
         transfer::share_object(esc);
     }
 
+    /// Long underlying escrow for physical PUTs: buyer deposits Base they will deliver on exercise
+    public entry fun place_long_underlying_escrow<Base: store>(
+        market: &OptionMarket,
+        quantity: u64,
+        mut base_in: Coin<Base>,
+        ctx: &mut TxContext
+    ) {
+        assert!(market.is_active && !market.is_expired, E_EXPIRED);
+        assert!(market.settlement_type == b"PHYSICAL".to_string() || market.settlement_type == b"BOTH".to_string(), E_BAD_PARAMS);
+        assert!(market.option_type == b"PUT".to_string(), E_BAD_PARAMS);
+        assert!(quantity > 0, E_AMOUNT);
+        let have = coin::value(&base_in);
+        assert!(have >= quantity, E_COLLATERAL);
+        let escrow = coin::split(&mut base_in, quantity, ctx);
+        transfer::public_transfer(base_in, ctx.sender());
+        // Position will be created on match; bind owner now
+        let esc = LongUnderlyingEscrow<Base> { id: object::new(ctx), owner: ctx.sender(), position_id: object::id(market), escrow_base: escrow };
+        transfer::share_object(esc);
+    }
+
+    public entry fun cancel_long_underlying_escrow<Base: store>(market: &OptionMarket, esc: LongUnderlyingEscrow<Base>, ctx: &mut TxContext) {
+        assert!(esc.owner == ctx.sender(), E_NOT_ADMIN);
+        // Allow cancel only if escrow is unbound (still tied to market placeholder id)
+        assert!(esc.position_id == object::id(market), E_BAD_PARAMS);
+        let LongUnderlyingEscrow<Base> { id, owner, position_id: _, escrow_base } = esc;
+        transfer::public_transfer(escrow_base, owner);
+        object::delete(id);
+    }
+
+    /// GC for long PUT escrow: delete when empty (anyone can call; no funds)
+    public entry fun gc_long_underlying_escrow<Base: store>(esc: LongUnderlyingEscrow<Base>, _ctx: &mut TxContext) {
+        assert!(coin::value(&esc.escrow_base) == 0, E_BAD_PARAMS);
+        let LongUnderlyingEscrow<Base> { id, owner: _, position_id: _, escrow_base } = esc;
+        coin::destroy_zero(escrow_base);
+        object::delete(id);
+    }
+
     public entry fun cancel_short_offer<C: store>(offer: ShortOffer<C>, ctx: &mut TxContext) {
         assert!(offer.owner == ctx.sender(), E_NOT_ADMIN);
-        transfer::public_transfer(offer.collateral_locked, offer.owner);
-        let ShortOffer<C> { id, owner: _, market_id: _, option_type: _, strike_price: _, expiry_ms: _, remaining_qty: _, min_premium_per_unit: _, collateral_locked: _, created_at_ms: _ } = offer;
+        let ShortOffer<C> { id, owner, market_id: _, option_type: _, strike_price: _, expiry_ms: _, remaining_qty: _, min_premium_per_unit: _, collateral_locked, created_at_ms: _ } = offer;
+        transfer::public_transfer(collateral_locked, owner);
         object::delete(id);
     }
 
     public entry fun cancel_coin_short_offer<Base: store>(offer: CoinShortOffer<Base>, ctx: &mut TxContext) {
         assert!(offer.owner == ctx.sender(), E_NOT_ADMIN);
-        transfer::public_transfer(offer.escrow_base, offer.owner);
-        let CoinShortOffer<Base> { id, owner: _, market_id: _, option_type: _, strike_price: _, expiry_ms: _, remaining_qty: _, min_premium_per_unit: _, escrow_base: _, created_at_ms: _ } = offer;
+        let CoinShortOffer<Base> { id, owner, market_id: _, option_type: _, strike_price: _, expiry_ms: _, remaining_qty: _, min_premium_per_unit: _, escrow_base, created_at_ms: _ } = offer;
+        transfer::public_transfer(escrow_base, owner);
         object::delete(id);
     }
 
     public entry fun cancel_premium_escrow<C: store>(esc: PremiumEscrow<C>, ctx: &mut TxContext) {
         assert!(esc.owner == ctx.sender(), E_NOT_ADMIN);
         assert!(sui::tx_context::epoch_timestamp_ms(ctx) >= esc.expiry_cancel_ms, E_BAD_PARAMS);
-        transfer::public_transfer(esc.escrow_collateral, esc.owner);
-        let PremiumEscrow<C> { id, owner: _, market_id: _, option_type: _, strike_price: _, expiry_ms: _, remaining_qty: _, premium_per_unit: _, escrow_collateral: _, created_at_ms: _, expiry_cancel_ms: _ } = esc;
+        let PremiumEscrow<C> { id, owner, market_id: _, option_type: _, strike_price: _, expiry_ms: _, remaining_qty: _, premium_per_unit: _, escrow_collateral, created_at_ms: _, expiry_cancel_ms: _ } = esc;
+        transfer::public_transfer(escrow_collateral, owner);
         object::delete(id);
     }
 
@@ -973,11 +1072,11 @@ module unxversal::options {
         assert!(fill > 0, E_AMOUNT);
         assert!(fill % market.contract_size == 0, E_BAD_PARAMS);
         // Per-market/user caps
-        if (market.max_open_contracts_market > 0) { assert!(market.total_open_interest + fill <= market.max_open_contracts_market, E_BAD_PARAMS); }
+        if (market.max_open_contracts_market > 0) { assert!(market.total_open_interest + fill <= market.max_open_contracts_market, E_BAD_PARAMS); };
         if (market.max_oi_per_user > 0) {
             let cur = if (table::contains(&market.user_open_interest, escrow.owner)) { *table::borrow(&market.user_open_interest, escrow.owner) } else { 0 };
             assert!(cur + fill <= market.max_oi_per_user, E_BAD_PARAMS);
-        }
+        };
 
         // Premium owed
         let premium_total = fill * escrow.premium_per_unit;
@@ -1003,19 +1102,19 @@ module unxversal::options {
                     transfer::public_transfer(merged, escrow.owner);
                 }
             }
-        }
-        let fee_to_collect = if (discount_applied) { if trade_fee > discount_collateral { trade_fee - discount_collateral } else { 0 } } else { trade_fee };
+        };
+        let fee_to_collect = if (discount_applied) { if (trade_fee > discount_collateral) { trade_fee - discount_collateral } else { 0 } } else { trade_fee };
 
         // Move premium net of fee to writer, pay fee to treasury
         let net_to_writer = if (premium_total > fee_to_collect) { premium_total - fee_to_collect } else { 0 };
         if (net_to_writer > 0) {
             let to_writer = coin::split(&mut escrow.escrow_collateral, net_to_writer, ctx);
             transfer::public_transfer(to_writer, offer.owner);
-        }
+        };
         if (fee_to_collect > 0) {
             let fee_coin = coin::split(&mut escrow.escrow_collateral, fee_to_collect, ctx);
             TreasuryMod::deposit_collateral(treasury, fee_coin, b"options_premium_trade".to_string(), escrow.owner, ctx);
-        }
+        };
 
         // Create positions
         let long_pos = OptionPosition<C> { id: object::new(ctx), owner: escrow.owner, market_id: object::id(market), option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, side: 0, quantity: fill, premium_per_unit: escrow.premium_per_unit, opened_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), collateral_locked: coin::zero<C>(ctx) };
@@ -1047,47 +1146,85 @@ module unxversal::options {
     public entry fun match_coin_offer_and_escrow<Base: store, C: store>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
-        mut offer: CoinShortOffer<Base>,
+        mut offer_or_long: CoinShortOffer<Base>,
         mut escrow: PremiumEscrow<C>,
         max_fill_qty: u64,
+        // UNXV discount support (optional). Pass empty vector to skip.
+        mut unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &Aggregator,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
         treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, E_PAUSED);
-        assert!(offer.market_id == object::id(market) && escrow.market_id == object::id(market), E_MISMATCH);
+        assert!(offer_or_long.market_id == object::id(market) && escrow.market_id == object::id(market), E_MISMATCH);
         assert!(market.is_active && !market.is_expired && !market.paused, E_EXPIRED);
         assert!(market.option_type == b"CALL".to_string(), E_BAD_PARAMS);
         assert!(market.settlement_type == b"PHYSICAL".to_string() || market.settlement_type == b"BOTH".to_string(), E_BAD_PARAMS);
         assert!(escrow.premium_per_unit % market.tick_size == 0, E_PRICE);
-        assert!(offer.remaining_qty % market.contract_size == 0 && escrow.remaining_qty % market.contract_size == 0, E_BAD_PARAMS);
-        assert!(escrow.premium_per_unit >= offer.min_premium_per_unit, E_PRICE);
-        let fill = { let a = if (offer.remaining_qty < escrow.remaining_qty) { offer.remaining_qty } else { escrow.remaining_qty }; if (a < max_fill_qty) { a } else { max_fill_qty } };
+        assert!(offer_or_long.remaining_qty % market.contract_size == 0 && escrow.remaining_qty % market.contract_size == 0, E_BAD_PARAMS);
+        assert!(escrow.premium_per_unit >= offer_or_long.min_premium_per_unit, E_PRICE);
+        let fill = { let a = if (offer_or_long.remaining_qty < escrow.remaining_qty) { offer_or_long.remaining_qty } else { escrow.remaining_qty }; if (a < max_fill_qty) { a } else { max_fill_qty } };
         assert!(fill > 0 && fill % market.contract_size == 0, E_AMOUNT);
-        if (market.max_open_contracts_market > 0) { assert!(market.total_open_interest + fill <= market.max_open_contracts_market, E_BAD_PARAMS); }
+        if (market.max_open_contracts_market > 0) { assert!(market.total_open_interest + fill <= market.max_open_contracts_market, E_BAD_PARAMS); };
         if (market.max_oi_per_user > 0) { let cur = if (table::contains(&market.user_open_interest, escrow.owner)) { *table::borrow(&market.user_open_interest, escrow.owner) } else { 0 }; assert!(cur + fill <= market.max_oi_per_user, E_BAD_PARAMS); };
-        // Premium payment (no UNXV path here for brevity; can be added like match_offer_and_escrow)
-        let collateral_owed = fill * escrow.premium_per_unit;
-        let to_writer = coin::split(&mut escrow.escrow_collateral, collateral_owed, ctx);
-        transfer::public_transfer(to_writer, offer.owner);
+        // Premium payment with UNXV discount parity
+        let premium_total = fill * escrow.premium_per_unit;
+        let trade_fee_bps = if (market.trade_fee_bps_override > 0) { market.trade_fee_bps_override } else { reg.trade_fee_bps };
+        let trade_fee = (premium_total * trade_fee_bps) / 10_000;
+        let discount_collateral = (trade_fee * reg.unxv_discount_bps) / 10_000;
+        let mut discount_applied = false;
+        // Try UNXV discount (optional)
+        if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
+            let price_unxv_u64 = get_price_scaled_1e6(oracle_cfg, clock, unxv_price);
+            if (price_unxv_u64 > 0) {
+                let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
+                let mut merged = coin::zero<UNXV>(ctx);
+                let mut i = 0;
+                while (i < vector::length(&unxv_payment)) {
+                    let c = vector::pop_back(&mut unxv_payment);
+                    coin::join(&mut merged, c);
+                    i = i + 1;
+                };
+                let have = coin::value(&merged);
+                if (have >= unxv_needed) {
+                    let exact = coin::split(&mut merged, unxv_needed, ctx);
+                    let mut vecu = vector::empty<Coin<UNXV>>();
+                    vector::push_back(&mut vecu, exact);
+                    TreasuryMod::deposit_unxv(treasury, vecu, b"options_premium_trade".to_string(), escrow.owner, ctx);
+                    transfer::public_transfer(merged, escrow.owner);
+                    discount_applied = true;
+                } else {
+                    transfer::public_transfer(merged, escrow.owner);
+                }
+            }
+        };
+        let fee_to_collect = if (discount_applied) { if (trade_fee > discount_collateral) { trade_fee - discount_collateral } else { 0 } } else { trade_fee };
+        // Move premium net of fee to writer, pay fee to treasury
+        let net_to_writer = if (premium_total > fee_to_collect) { premium_total - fee_to_collect } else { 0 };
+        if (net_to_writer > 0) { let to_writer = coin::split(&mut escrow.escrow_collateral, net_to_writer, ctx); transfer::public_transfer(to_writer, offer_or_long.owner); };
+        if (fee_to_collect > 0) { let fee_coin = coin::split(&mut escrow.escrow_collateral, fee_to_collect, ctx); TreasuryMod::deposit_collateral(treasury, fee_coin, b"options_premium_trade".to_string(), escrow.owner, ctx); };
         // Create positions: long receives standard long position; short remains coin-escrowed upon exercise
         let long_pos = OptionPosition<C> { id: object::new(ctx), owner: escrow.owner, market_id: object::id(market), option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, side: 0, quantity: fill, premium_per_unit: escrow.premium_per_unit, opened_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), collateral_locked: coin::zero<C>(ctx) };
-        // Lock proportional base into a separate escrow tied to this short position ID
+        if (market.option_type == b"CALL".to_string()) {
         let short_pos_id = object::new(ctx);
-        let short_split = coin::split(&mut offer.escrow_base, fill, ctx);
-        let short_pos = OptionPosition<C> { id: short_pos_id, owner: offer.owner, market_id: object::id(market), option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, side: 1, quantity: fill, premium_per_unit: 0, opened_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), collateral_locked: coin::zero<C>(ctx) };
+            let short_split = coin::split(&mut offer_or_long.escrow_base, fill, ctx);
+            let short_pos = OptionPosition<C> { id: short_pos_id, owner: offer_or_long.owner, market_id: object::id(market), option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, side: 1, quantity: fill, premium_per_unit: 0, opened_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), collateral_locked: coin::zero<C>(ctx) };
         let escrow_obj = ShortUnderlyingEscrow<Base> { id: object::new(ctx), position_id: object::id(&short_pos), escrow_base: short_split };
-        transfer::share_object(long_pos);
         transfer::share_object(short_pos);
         transfer::share_object(escrow_obj);
+        };
+        transfer::share_object(long_pos);
         // Update remaining
-        offer.remaining_qty = offer.remaining_qty - fill;
+        offer_or_long.remaining_qty = offer_or_long.remaining_qty - fill;
         escrow.remaining_qty = escrow.remaining_qty - fill;
         market.total_open_interest = market.total_open_interest + fill;
         let cur_buyer = if (table::contains(&market.user_open_interest, escrow.owner)) { *table::borrow(&market.user_open_interest, escrow.owner) } else { 0 };
         if (table::contains(&market.user_open_interest, escrow.owner)) { let _ = table::remove(&mut market.user_open_interest, escrow.owner); };
         table::add(&mut market.user_open_interest, escrow.owner, cur_buyer + fill);
-        event::emit(OptionMatched { market_id: object::id(market), buyer: escrow.owner, writer: offer.owner, option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, quantity: fill, premium_per_unit: escrow.premium_per_unit, fee_paid: 0, unxv_discount_applied: false, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        event::emit(OptionOpened { market_id: object::id(market), buyer: escrow.owner, writer: offer.owner, quantity: fill, premium_per_unit: escrow.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(OptionMatched { market_id: object::id(market), buyer: escrow.owner, writer: offer_or_long.owner, option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, quantity: fill, premium_per_unit: escrow.premium_per_unit, fee_paid: fee_to_collect, unxv_discount_applied: discount_applied, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(OptionOpened { market_id: object::id(market), buyer: escrow.owner, writer: offer_or_long.owner, quantity: fill, premium_per_unit: escrow.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /*******************************
@@ -1095,7 +1232,7 @@ module unxversal::options {
     *******************************/
     public entry fun settle_positions_cash<C>(
         reg: &mut OptionsRegistry,
-        market: &OptionMarket,
+        market: &mut OptionMarket,
         long_pos: &mut OptionPosition<C>,
         short_pos: &mut OptionPosition<C>,
         quantity: u64,
@@ -1128,19 +1265,19 @@ module unxversal::options {
         let cur_coll = coin::value(&short_pos.collateral_locked);
         if (cur_coll < maint_needed) {
             event::emit(MarginCallTriggered { short_owner: short_pos.owner, market_id: object::id(market), required_collateral: maint_needed, current_collateral: cur_coll, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        }
+        };
 
         // Pay long from short collateral
         let mut to_long = coin::zero<C>(ctx);
-        if (net_to_long > 0) { let p = coin::split(&mut short_pos.collateral_locked, net_to_long, ctx); coin::join(&mut to_long, p); }
+        if (net_to_long > 0) { let p = coin::split(&mut short_pos.collateral_locked, net_to_long, ctx); coin::join(&mut to_long, p); };
         transfer::public_transfer(to_long, long_pos.owner);
 
         if (fee > 0) {
             let mut fee_coin = coin::split(&mut short_pos.collateral_locked, fee, ctx);
             let bot_cut = (coin::value(&fee_coin) * reg.settlement_bot_reward_bps) / 10_000;
-            if (bot_cut > 0) { let bot_coin = coin::split(&mut fee_coin, bot_cut, ctx); TreasuryMod::deposit_collateral(treasury, bot_coin, b"options_settlement_bot".to_string(), ctx.sender(), ctx); }
+            if (bot_cut > 0) { let bot_coin = coin::split(&mut fee_coin, bot_cut, ctx); TreasuryMod::deposit_collateral(treasury, bot_coin, b"options_settlement_bot".to_string(), ctx.sender(), ctx); };
             TreasuryMod::deposit_collateral(treasury, fee_coin, b"options_settlement".to_string(), ctx.sender(), ctx);
-        }
+        };
 
         // Return remaining proportional collateral to short when fully settled externally (not handled here)
         long_pos.quantity = long_pos.quantity - quantity;
@@ -1177,18 +1314,187 @@ module unxversal::options {
         // Update positions and OI
         long_pos.quantity = long_pos.quantity - quantity;
         short_pos.quantity = short_pos.quantity - quantity;
-        if (market.total_open_interest >= quantity) { market.total_open_interest = market.total_open_interest - quantity; }
+        if (market.total_open_interest >= quantity) { market.total_open_interest = market.total_open_interest - quantity; };
         if (table::contains(&market.user_open_interest, long_pos.owner)) {
-            let cur = *table::borrow(&market.user_open_interest, long_pos.owner);
-            let newv = if (cur > quantity) { cur - quantity } else { 0 };
-            let _ = table::remove(&mut market.user_open_interest, long_pos.owner);
+            let _old = table::remove(&mut market.user_open_interest, long_pos.owner);
+            let newv = if (_old > quantity) { _old - quantity } else { 0 };
             table::add(&mut market.user_open_interest, long_pos.owner, newv);
-        }
-        // If escrow empty, delete it
-        if (coin::value(&escrow.escrow_base) == 0) {
-            let ShortUnderlyingEscrow<Base> { id, position_id: _, escrow_base: _ } = *escrow;
-            object::delete(id);
-        }
+        };
+        // If escrow empty, leave object to be cleaned up by a separate GC path
+        // (cannot move out of &mut reference here)
+    }
+
+    /*******************************
+    * Physical exercise for PUTs (long delivers Base, short pays Quote)
+    *******************************/
+    public entry fun exercise_physical_put<Base: store, C: store>(
+        market: &mut OptionMarket,
+        long_pos: &mut OptionPosition<C>,
+        short_pos: &mut OptionPosition<C>,
+        mut base_from_long: Coin<Base>,
+        quantity: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(market.option_type == b"PUT".to_string(), E_BAD_PARAMS);
+        assert!(market.settlement_type == b"PHYSICAL".to_string() || market.settlement_type == b"BOTH".to_string(), E_BAD_PARAMS);
+        assert!(quantity > 0 && quantity <= long_pos.quantity && quantity <= short_pos.quantity, E_AMOUNT);
+        // Long must deliver exactly the underlying base units for the exercised quantity
+        let have_base = coin::value(&base_from_long);
+        assert!(have_base == quantity, E_AMOUNT);
+        // Short pays strike * quantity in quote collateral to long
+        let quote_owed = market.strike_price * quantity;
+        if (quote_owed > 0) {
+            let to_long = coin::split(&mut short_pos.collateral_locked, quote_owed, ctx);
+            transfer::public_transfer(to_long, long_pos.owner);
+        };
+        // Deliver base to short
+        transfer::public_transfer(base_from_long, short_pos.owner);
+
+        // Update positions and OI
+        long_pos.quantity = long_pos.quantity - quantity;
+        short_pos.quantity = short_pos.quantity - quantity;
+        if (market.total_open_interest >= quantity) { market.total_open_interest = market.total_open_interest - quantity; };
+        if (table::contains(&market.user_open_interest, long_pos.owner)) {
+            let _old = table::remove(&mut market.user_open_interest, long_pos.owner);
+            let newv = if (_old > quantity) { _old - quantity } else { 0 };
+            table::add(&mut market.user_open_interest, long_pos.owner, newv);
+        };
+        // No fee charged on physical PUT exercise to match CALL behavior
+    }
+
+    /// Exercise PUT from bound long escrow (symmetric to CALL escrow path)
+    public entry fun exercise_physical_put_from_escrow<Base: store, C: store>(
+        market: &mut OptionMarket,
+        long_pos: &mut OptionPosition<C>,
+        short_pos: &mut OptionPosition<C>,
+        escrow: &mut LongUnderlyingEscrow<Base>,
+        quantity: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(market.option_type == b"PUT".to_string(), E_BAD_PARAMS);
+        assert!(market.settlement_type == b"PHYSICAL".to_string() || market.settlement_type == b"BOTH".to_string(), E_BAD_PARAMS);
+        assert!(quantity > 0 && quantity <= long_pos.quantity && quantity <= short_pos.quantity, E_AMOUNT);
+        assert!(escrow.position_id == object::id(long_pos), E_MISMATCH);
+        // Short pays strike * quantity to long
+        let quote_owed = market.strike_price * quantity;
+        if (quote_owed > 0) { let pay = coin::split(&mut short_pos.collateral_locked, quote_owed, ctx); transfer::public_transfer(pay, long_pos.owner); };
+        // Deliver base from escrow to short
+        let deliver = coin::split(&mut escrow.escrow_base, quantity, ctx);
+        transfer::public_transfer(deliver, short_pos.owner);
+        // Update positions and OI
+        long_pos.quantity = long_pos.quantity - quantity;
+        short_pos.quantity = short_pos.quantity - quantity;
+        if (market.total_open_interest >= quantity) { market.total_open_interest = market.total_open_interest - quantity; };
+        if (table::contains(&market.user_open_interest, long_pos.owner)) {
+            let _old = table::remove(&mut market.user_open_interest, long_pos.owner);
+            let newv = if (_old > quantity) { _old - quantity } else { 0 };
+            table::add(&mut market.user_open_interest, long_pos.owner, newv);
+        };
+    }
+
+    /// Match physical PUT: consume long's Base escrow and short's cash offer; premium paid from PremiumEscrow<C>
+    public entry fun match_put_long_escrow_and_offer<Base: store, C: store>(
+        reg: &mut OptionsRegistry,
+        market: &mut OptionMarket,
+        mut long_escrow: LongUnderlyingEscrow<Base>,
+        mut offer: ShortOffer<C>,
+        mut prem: PremiumEscrow<C>,
+        max_fill_qty: u64,
+        mut unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &Aggregator,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        treasury: &mut Treasury<C>,
+        ctx: &mut TxContext
+    ) {
+        assert!(!reg.paused, E_PAUSED);
+        assert!(market.is_active && !market.is_expired && !market.paused, E_EXPIRED);
+        assert!(market.option_type == b"PUT".to_string(), E_BAD_PARAMS);
+        assert!(market.settlement_type == b"PHYSICAL".to_string() || market.settlement_type == b"BOTH".to_string(), E_BAD_PARAMS);
+        assert!(offer.market_id == object::id(market) && prem.market_id == object::id(market), E_MISMATCH);
+        let long_owner_base = coin::value(&long_escrow.escrow_base);
+        assert!(prem.premium_per_unit % market.tick_size == 0, E_PRICE);
+        assert!(offer.remaining_qty % market.contract_size == 0 && prem.remaining_qty % market.contract_size == 0, E_BAD_PARAMS);
+        assert!(prem.premium_per_unit >= offer.min_premium_per_unit, E_PRICE);
+        let a = if (offer.remaining_qty < prem.remaining_qty) { offer.remaining_qty } else { prem.remaining_qty };
+        let b = if (a < long_owner_base) { a } else { long_owner_base };
+        let fill = if (b < max_fill_qty) { b } else { max_fill_qty };
+        assert!(fill > 0 && fill % market.contract_size == 0, E_AMOUNT);
+        if (market.max_open_contracts_market > 0) { assert!(market.total_open_interest + fill <= market.max_open_contracts_market, E_BAD_PARAMS); };
+        if (market.max_oi_per_user > 0) { let cur = if (table::contains(&market.user_open_interest, prem.owner)) { *table::borrow(&market.user_open_interest, prem.owner) } else { 0 }; assert!(cur + fill <= market.max_oi_per_user, E_BAD_PARAMS); };
+
+        // Premium payment with optional UNXV discount
+        let premium_total = fill * prem.premium_per_unit;
+        let trade_fee_bps = if (market.trade_fee_bps_override > 0) { market.trade_fee_bps_override } else { reg.trade_fee_bps };
+        let trade_fee = (premium_total * trade_fee_bps) / 10_000;
+        let discount_collateral = (trade_fee * reg.unxv_discount_bps) / 10_000;
+        let mut discount_applied = false;
+        if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
+            let price_unxv_u64 = get_price_scaled_1e6(oracle_cfg, clock, unxv_price);
+            if (price_unxv_u64 > 0) {
+                let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
+                let mut merged = coin::zero<UNXV>(ctx);
+                let mut i = 0;
+                while (i < vector::length(&unxv_payment)) {
+                    let c = vector::pop_back(&mut unxv_payment);
+                    coin::join(&mut merged, c);
+                    i = i + 1;
+                };
+                let have = coin::value(&merged);
+                if (have >= unxv_needed) {
+                    let exact = coin::split(&mut merged, unxv_needed, ctx);
+                    let mut vecu = vector::empty<Coin<UNXV>>();
+                    vector::push_back(&mut vecu, exact);
+                    TreasuryMod::deposit_unxv(treasury, vecu, b"options_premium_trade".to_string(), prem.owner, ctx);
+                    transfer::public_transfer(merged, prem.owner);
+                    discount_applied = true;
+                } else { transfer::public_transfer(merged, prem.owner); }
+            }
+        };
+        let fee_to_collect = if (discount_applied) { if (trade_fee > discount_collateral) { trade_fee - discount_collateral } else { 0 } } else { trade_fee };
+        let net_to_writer = if (premium_total > fee_to_collect) { premium_total - fee_to_collect } else { 0 };
+        if (net_to_writer > 0) { let to_writer = coin::split(&mut prem.escrow_collateral, net_to_writer, ctx); transfer::public_transfer(to_writer, offer.owner); };
+        if (fee_to_collect > 0) { let fee_coin = coin::split(&mut prem.escrow_collateral, fee_to_collect, ctx); TreasuryMod::deposit_collateral(treasury, fee_coin, b"options_premium_trade".to_string(), prem.owner, ctx); };
+
+        // Create positions
+        let long_pos = OptionPosition<C> { id: object::new(ctx), owner: prem.owner, market_id: object::id(market), option_type: b"PUT".to_string(), strike_price: market.strike_price, expiry_ms: market.expiry_ms, side: 0, quantity: fill, premium_per_unit: prem.premium_per_unit, opened_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), collateral_locked: coin::zero<C>(ctx) };
+        let notional_fill = fill * market.strike_price;
+        let short_needed = (notional_fill * market.init_margin_bps_short) / 10_000;
+        let short_locked = coin::split(&mut offer.collateral_locked, short_needed, ctx);
+        let short_pos = OptionPosition<C> { id: object::new(ctx), owner: offer.owner, market_id: object::id(market), option_type: b"PUT".to_string(), strike_price: market.strike_price, expiry_ms: market.expiry_ms, side: 1, quantity: fill, premium_per_unit: 0, opened_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), collateral_locked: short_locked };
+
+        // Bind exactly 'fill' Base to long position
+        let LongUnderlyingEscrow<Base> { id: old_id, owner: _, position_id: _, mut escrow_base } = long_escrow;
+        let deliver = coin::split(&mut escrow_base, fill, ctx);
+        // refund remainder to long owner
+        transfer::public_transfer(escrow_base, prem.owner);
+        object::delete(old_id);
+        let bound = LongUnderlyingEscrow<Base> { id: object::new(ctx), owner: prem.owner, position_id: object::id(&long_pos), escrow_base: deliver };
+
+        // Share created/updated objects
+        transfer::share_object(long_pos);
+        transfer::share_object(short_pos);
+        transfer::share_object(bound);
+
+        // Update remainders and stats
+        offer.remaining_qty = offer.remaining_qty - fill;
+        prem.remaining_qty = prem.remaining_qty - fill;
+        market.total_open_interest = market.total_open_interest + fill;
+        market.total_volume_premium = market.total_volume_premium + premium_total;
+        market.last_trade_premium = prem.premium_per_unit;
+        let cur_long = if (table::contains(&market.user_open_interest, prem.owner)) { *table::borrow(&market.user_open_interest, prem.owner) } else { 0 };
+        if (table::contains(&market.user_open_interest, prem.owner)) { let _ = table::remove(&mut market.user_open_interest, prem.owner); };
+        table::add(&mut market.user_open_interest, prem.owner, cur_long + fill);
+        event::emit(OptionMatched { market_id: object::id(market), buyer: prem.owner, writer: offer.owner, option_type: b"PUT".to_string(), strike_price: market.strike_price, expiry_ms: market.expiry_ms, quantity: fill, premium_per_unit: prem.premium_per_unit, fee_paid: fee_to_collect, unxv_discount_applied: discount_applied, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(OptionOpened { market_id: object::id(market), buyer: prem.owner, writer: offer.owner, quantity: fill, premium_per_unit: prem.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    /// GC function to delete an empty ShortUnderlyingEscrow<Base> object once fully delivered
+    public entry fun gc_underlying_escrow<Base: store>(escrow: ShortUnderlyingEscrow<Base>, _ctx: &mut TxContext) {
+        assert!(coin::value(&escrow.escrow_base) == 0, E_BAD_PARAMS);
+        let ShortUnderlyingEscrow<Base> { id, position_id: _, escrow_base } = escrow;
+        coin::destroy_zero(escrow_base);
+        object::delete(id);
     }
 
     public entry fun emit_physical_delivery_completed(
