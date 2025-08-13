@@ -5,17 +5,11 @@
 ///   add / remove feeds
 /// * `get_latest_price` returns a fresh `I64` price after staleness + ID checks
 /// * Includes Display metadata so wallets can show a friendly label
+
 module unxversal::oracle {
-    /*******************************
-    * Imports
-    *******************************/
-    use sui::tx_context::TxContext;
-    use sui::transfer;
-    use sui::package;
-    use sui::object;
+    // Default aliases for TxContext/object/transfer are available without explicit `use`
     use sui::clock::Clock;          // block‑timestamp source
-    use sui::vec_set::VecSet;
-    use std::string::String;
+    use sui::vec_set::{Self as vec_set, VecSet};
     use pyth::price_info;
     use pyth::price_identifier;
     use pyth::price;
@@ -23,17 +17,13 @@ module unxversal::oracle {
     use pyth::i64::{Self as I64Mod, I64};
     use pyth::pyth;                 // get_price_no_older_than
 
-    /// Refer to admin allow‑list & caps from synthetics module
+    /// Refer to admin caps from synthetics module
     use unxversal::synthetics::{SynthRegistry, AdminCap};
 
-    /*******************************
-    * Error codes
-    *******************************/
+
     const E_INVALID_FEED: u64   = 1;   // Price‑feed ID not allowed
-    const E_STALE_PRICE: u64    = 2;   // Price older than `max_age`
-    const E_NOT_ADMIN: u64      = 3;   // Caller lacks admin rights
-    const E_BAD_PRICE: u64      = 4;   // Non‑positive price
-    const E_OVERFLOW: u64       = 5;   // Overflow during scaling
+    const E_BAD_PRICE: u64      = 2;   // Non‑positive price
+    const E_OVERFLOW: u64       = 3;   // Overflow during scaling
 
     /*******************************
     * OracleConfig – shared object storing the allow‑list
@@ -45,65 +35,57 @@ module unxversal::oracle {
     }
 
     /*******************************
-    * Helper – assert caller is admin (reuse registry logic)
+    * Helper – admin check
+    * Rely on possession of AdminCap since registry allow‑list is private
     *******************************/
-    fun assert_is_admin(registry: &SynthRegistry, addr: address) {
-        // `assert_is_admin` from synthetics is private, so inline equivalent
-        use sui::vec_set::{contains};
-        assert!(contains(&registry.admin_addrs, addr), E_NOT_ADMIN);
-    }
+    fun assert_has_admin_cap(_admin: &AdminCap) { /* possession is sufficient */ }
 
     /*******************************
     * INIT  – called once via synthetics deployment script
     * Creates OracleConfig shared object + Display metadata.
     *******************************/
-    public fun init(registry: &SynthRegistry, ctx: &mut TxContext) {
-        // Only run if OracleConfig doesn’t already exist (no strict OTW here)
-        // Caller must be admin
-        assert_is_admin(registry, ctx.sender());
+    /// One‑Time Witness enforcing single‑run init
+    public struct ORACLE has drop {}
 
-        let config = OracleConfig {
-            id: object::new(ctx),
-            allowed_feeds: VecSet::empty(),
-            max_age_sec: 60,
-        };
+    fun init(_otw: ORACLE, ctx: &mut TxContext) {
+        let config = OracleConfig { id: object::new(ctx), allowed_feeds: vec_set::empty<vector<u8>>(), max_age_sec: 60 };
         transfer::share_object(config);
     }
 
     /*******************************
     * Admin functions – mutate allow‑list or staleness window
     *******************************/
-    public entry fun add_feed_id(
-        _admin: &AdminCap,
-        registry: &SynthRegistry,
+    public fun add_feed_id(
+        admin: &AdminCap,
+        _registry: &SynthRegistry,
         cfg: &mut OracleConfig,
         feed: vector<u8>,
-        ctx: &TxContext
+        _ctx: &TxContext
     ) {
-        assert_is_admin(registry, ctx.sender());
-        VecSet::add(&mut cfg.allowed_feeds, feed);
+        assert_has_admin_cap(admin);
+        vec_set::insert(&mut cfg.allowed_feeds, feed);
     }
 
-    public entry fun remove_feed_id(
-        _admin: &AdminCap,
-        registry: &SynthRegistry,
+    public fun remove_feed_id(
+        admin: &AdminCap,
+        _registry: &SynthRegistry,
         cfg: &mut OracleConfig,
         feed: vector<u8>,
-        ctx: &TxContext
+        _ctx: &TxContext
     ) {
-        assert_is_admin(registry, ctx.sender());
-        VecSet::remove(&mut cfg.allowed_feeds, feed);
+        assert_has_admin_cap(admin);
+        vec_set::remove(&mut cfg.allowed_feeds, &feed);
     }
 
     /// Optional granular setter for staleness allowance
-    public entry fun set_max_age(
-        _admin: &AdminCap,
-        registry: &SynthRegistry,
+    public fun set_max_age(
+        admin: &AdminCap,
+        _registry: &SynthRegistry,
         cfg: &mut OracleConfig,
         new_max_age: u64,
-        ctx: &TxContext
+        _ctx: &TxContext
     ) {
-        assert_is_admin(registry, ctx.sender());
+        assert_has_admin_cap(admin);
         cfg.max_age_sec = new_max_age;
     }
 
@@ -125,7 +107,7 @@ module unxversal::oracle {
         // Verify feed ID in allow‑list
         let info = price_info::get_price_info_from_price_info_object(price_info_object);
         let pid  = price_identifier::get_bytes(&price_info::get_price_identifier(&info));
-        assert!(VecSet::contains(&cfg.allowed_feeds, pid), E_INVALID_FEED);
+        assert!(vec_set::contains(&cfg.allowed_feeds, &pid), E_INVALID_FEED);
 
         // Return price as signed‑64 integer (Pyth expo already encoded)
         price::get_price(&price_struct)
@@ -135,6 +117,7 @@ module unxversal::oracle {
      * Fixed‑point normalization helpers
      *******************************/
     const SCALE_POW10_1E6: u64 = 6; // micro‑USD
+    const U64_MAX_LITERAL: u64 = 18_446_744_073_709_551_615;
 
     fun pow10_u128(mut n: u64): u128 {
         let mut acc: u128 = 1u128;
@@ -194,7 +177,7 @@ module unxversal::oracle {
             let div = pow10_u128(adj_mag);
             raw_u128 / div
         };
-        assert!(scaled_u128 <= (u64::MAX as u128), E_OVERFLOW);
+        assert!(scaled_u128 <= (U64_MAX_LITERAL as u128), E_OVERFLOW);
         scaled_u128 as u64
     }
 }

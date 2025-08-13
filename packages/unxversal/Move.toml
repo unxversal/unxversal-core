@@ -18,6 +18,7 @@ rev = "sui/mainnet"
 
 [addresses]
 unxversal="0x0"
+pyth="0x0"
 
 [dev-dependencies]
 
