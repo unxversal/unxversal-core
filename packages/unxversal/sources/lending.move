@@ -23,7 +23,7 @@ module unxversal::lending {
     use sui::vec_set::{Self as vec_set, VecSet};
 
     // Synthetics integration
-    use pyth::price_info::PriceInfoObject;
+    use switchboard::aggregator::Aggregator;
     use unxversal::oracle::{OracleConfig, get_price_scaled_1e6};
     use unxversal::treasury::Treasury;
     use unxversal::unxv::UNXV;
@@ -404,9 +404,9 @@ module unxversal::lending {
         amount: u64,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
-        price_self: &PriceInfoObject,
+        price_self: &Aggregator,
         symbols: vector<String>,
-        prices: vector<PriceInfoObject>,
+        prices: vector<u64>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, 1000);
@@ -454,9 +454,9 @@ module unxversal::lending {
         amount: u64,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
-        price_debt: &PriceInfoObject,
+        price_debt: &Aggregator,
         symbols: vector<String>,
-        prices: vector<PriceInfoObject>,
+        prices: vector<u64>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, 1000);
@@ -578,10 +578,10 @@ module unxversal::lending {
     public fun compute_ltv_capacity_usd(
         acct: &UserAccount,
         reg: &LendingRegistry,
-        oracle_cfg: &OracleConfig,
-        clock: &Clock,
+        _oracle_cfg: &OracleConfig,
+        _clock: &Clock,
         symbols: vector<String>,
-        prices: vector<PriceInfoObject>
+        prices: vector<u64>
     ): u128 {
         let mut cap: u128 = 0;
         let mut i = 0;
@@ -591,8 +591,7 @@ module unxversal::lending {
                 let a = table::borrow(&reg.supported_assets, clone_string(&sym));
                 if (a.is_collateral) {
                     let units = *table::borrow(&acct.supply_balances, clone_string(&sym)) as u128;
-                    let p = vector::borrow(&prices, i);
-                    let px = get_price_scaled_1e6(oracle_cfg, clock, p) as u128;
+                    let px = (*vector::borrow(&prices, i)) as u128;
                     cap = cap + (units * px * (a.ltv_bps as u128)) / 10_000u128;
                 }
             };
@@ -607,18 +606,17 @@ module unxversal::lending {
     public fun check_account_health_coins(
         acct: &UserAccount,
         reg: &LendingRegistry,
-        oracle_cfg: &OracleConfig,
-        clock: &Clock,
+        _oracle_cfg: &OracleConfig,
+        _clock: &Clock,
         symbols: vector<String>,
-        prices: vector<PriceInfoObject>
+        prices: vector<u64>
     ): (u128, u128, bool) {
         let mut total_coll: u128 = 0;
         let mut total_debt: u128 = 0;
         let mut i = 0;
         while (i < vector::length(&symbols)) {
             let sym = *vector::borrow(&symbols, i);
-            let p = vector::borrow(&prices, i);
-            let px = get_price_scaled_1e6(oracle_cfg, clock, p) as u128; // micro-USD
+            let px = (*vector::borrow(&prices, i)) as u128; // micro-USD
             if (table::contains(&acct.supply_balances, clone_string(&sym))) {
                 let units = *table::borrow(&acct.supply_balances, clone_string(&sym)) as u128;
                 // only count as collateral if allowed
@@ -651,8 +649,8 @@ module unxversal::lending {
         debtor: &mut UserAccount,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
-        debt_price: &PriceInfoObject,
-        coll_price: &PriceInfoObject,
+        debt_price: &Aggregator,
+        coll_price: &Aggregator,
         mut payment: Coin<Debt>,
         repay_amount: u64,
         // Optional internal routing flags could be added here
@@ -670,7 +668,7 @@ module unxversal::lending {
             clock,
             // caller should pass full symbols/prices set off-chain; for simplicity, require two here
             vector::empty<String>(),
-            vector::empty<PriceInfoObject>()
+            vector::empty<u64>()
         );
         if (tot_debt > 0) {
             let ratio_bps = ((tot_coll * 10_000u128) / tot_debt) as u64;
@@ -779,12 +777,12 @@ module unxversal::lending {
         cfg: &CollateralConfig<C>,
         _oracle_cfg: &OracleConfig,
         clock: &Clock,
-        price_info: &PriceInfoObject,
+        price_info: &Aggregator,
         vault: &mut CollateralVault<C>,
         symbol: String,
         amount_units: u64,
         unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &PriceInfoObject,
+        unxv_price: &Aggregator,
         treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ): SynthFlashLoan {
@@ -795,6 +793,7 @@ module unxversal::lending {
             vault,
             synth_reg,
             clock,
+            _oracle_cfg,
             price_info,
             clone_string(&symbol),
             amount_units,
@@ -814,13 +813,13 @@ module unxversal::lending {
         cfg: &CollateralConfig<C>,
         _oracle_cfg: &OracleConfig,
         clock: &Clock,
-        price_info: &PriceInfoObject,
+        price_info: &Aggregator,
         vault: &mut CollateralVault<C>,
         loan_amount_units: u64,
         loan_fee_units: u64,
         loan_symbol: String,
         unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &PriceInfoObject,
+        unxv_price: &Aggregator,
         treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
@@ -834,6 +833,7 @@ module unxversal::lending {
             vault,
             synth_reg,
             clock,
+            _oracle_cfg,
             price_info,
             clone_string(&symbol),
             total_burn,
@@ -922,14 +922,15 @@ module unxversal::lending {
         synth_reg: &mut SynthRegistry,
         cfg: &CollateralConfig<C>,
         clock: &Clock,
-        price_info: &PriceInfoObject,
+        oracle_cfg: &OracleConfig,
+        price_info: &Aggregator,
         vault: &mut CollateralVault<C>,
         reg: &mut LendingRegistry,
         acct: &mut UserAccount,
         symbol: String,
         units: u64,
         unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &PriceInfoObject,
+        unxv_price: &Aggregator,
         treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
@@ -944,6 +945,7 @@ module unxversal::lending {
             vault,
             synth_reg,
             clock,
+            oracle_cfg,
             price_info,
             clone_string(&symbol),
             units,
@@ -965,14 +967,15 @@ module unxversal::lending {
         synth_reg: &mut SynthRegistry,
         cfg: &CollateralConfig<C>,
         clock: &Clock,
-        price_info: &PriceInfoObject,
+        oracle_cfg: &OracleConfig,
+        price_info: &Aggregator,
         vault: &mut CollateralVault<C>,
         reg: &mut LendingRegistry,
         acct: &mut UserAccount,
         symbol: String,
         units: u64,
         unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &PriceInfoObject,
+        unxv_price: &Aggregator,
         treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
@@ -987,6 +990,7 @@ module unxversal::lending {
             vault,
             synth_reg,
             clock,
+            oracle_cfg,
             price_info,
             clone_string(&symbol),
             units,
@@ -1036,8 +1040,8 @@ module unxversal::lending {
         cfg: &CollateralConfig<C>,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
-        price_synth: &PriceInfoObject,
-        price_usdc: &PriceInfoObject,
+        price_synth: &Aggregator,
+        price_usdc: &Aggregator,
         vault: &mut CollateralVault<C>,
         pool_usdc: &mut LendingPool<C>,
         treasury: &mut Treasury<C>,
@@ -1058,6 +1062,7 @@ module unxversal::lending {
             vault,
             synth_reg,
             clock,
+            oracle_cfg,
             price_synth,
             clone_string(&symbol),
             repay_units,
