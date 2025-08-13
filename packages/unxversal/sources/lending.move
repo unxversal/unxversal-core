@@ -320,7 +320,7 @@ module unxversal::lending {
         table::add(&mut reg.lending_pools, clone_string(&asset_symbol), id);
 
         // Display for pool type
-        let publisher = package::claim(package::Publisher { id: object::new(ctx) }, ctx);
+        let publisher = package::claim(otw, ctx);
         let mut disp_pool = display::new<LendingPool<T>>(&publisher, ctx);
         disp_pool.add(b"name".to_string(),        b"Unxversal Lending Pool".to_string());
         disp_pool.add(b"asset".to_string(),       b"{asset}".to_string());
@@ -345,7 +345,7 @@ module unxversal::lending {
         };
         transfer::share_object(acct);
         // Display for account
-        let publisher = package::claim(package::Publisher { id: object::new(ctx) }, ctx);
+        let publisher = package::claim(otw, ctx);
         let mut disp_acct = display::new<UserAccount>(&publisher, ctx);
         disp_acct.add(b"name".to_string(),        b"Unxversal Lending Account".to_string());
         disp_acct.add(b"description".to_string(), b"Tracks a user's supplied and borrowed balances".to_string());
@@ -802,12 +802,12 @@ module unxversal::lending {
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         price_info: &PriceInfoObject,
-        vault: &mut CollateralVault,
+        vault: &mut CollateralVault<C>,
         symbol: String,
         amount_units: u64,
         unxv_payment: vector<Coin<UNXV>>,
         unxv_price: &PriceInfoObject,
-        treasury: &mut Treasury,
+        treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ): SynthFlashLoan {
         assert!(amount_units > 0, E_ZERO_AMOUNT);
@@ -836,11 +836,11 @@ module unxversal::lending {
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         price_info: &PriceInfoObject,
-        vault: &mut CollateralVault,
+        vault: &mut CollateralVault<C>,
         loan: SynthFlashLoan,
         unxv_payment: vector<Coin<UNXV>>,
         unxv_price: &PriceInfoObject,
-        treasury: &mut Treasury,
+        treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
         let SynthFlashLoan { symbol, amount_units, fee_units } = loan;
@@ -877,7 +877,7 @@ module unxversal::lending {
         let m = SynthMarket { symbol: clone_string(&symbol), reserve_factor_bps, total_borrow_units: 0, total_liquidity: 0, reserve_units: 0 };
         table::add(&mut reg.synth_markets, symbol, m);
         // Display for SynthMarket
-        let publisher = package::claim(package::Publisher { id: object::new(ctx) }, ctx);
+        let publisher = package::claim(otw, ctx);
         let mut disp = display::new<SynthMarket>(&publisher, ctx);
         disp.add(b"name".to_string(), b"Unxversal Synth Market".to_string());
         disp.add(b"symbol".to_string(), b"{symbol}".to_string());
@@ -950,14 +950,14 @@ module unxversal::lending {
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         price_info: &PriceInfoObject,
-        vault: &mut CollateralVault,
+        vault: &mut CollateralVault<C>,
         reg: &mut LendingRegistry,
         acct: &mut UserAccount,
         symbol: String,
         units: u64,
         unxv_payment: vector<Coin<UNXV>>,
         unxv_price: &PriceInfoObject,
-        treasury: &mut Treasury,
+        treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, 1000);
@@ -993,14 +993,14 @@ module unxversal::lending {
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         price_info: &PriceInfoObject,
-        vault: &mut CollateralVault,
+        vault: &mut CollateralVault<C>,
         reg: &mut LendingRegistry,
         acct: &mut UserAccount,
         symbol: String,
         units: u64,
         unxv_payment: vector<Coin<UNXV>>,
         unxv_price: &PriceInfoObject,
-        treasury: &mut Treasury,
+        treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, 1000);
@@ -1040,7 +1040,7 @@ module unxversal::lending {
         apr_bps: u64
     ) {
         assert!(!reg.paused, 1000);
-        let mut m = Table::borrow_mut(&mut reg.synth_markets, &symbol);
+        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
         if (m.total_borrow_units == 0 || dt_ms == 0 || apr_bps == 0) { return; };
         let year_ms = 31_536_000_000u128;
         let delta = ((m.total_borrow_units as u128) * (apr_bps as u128) * (dt_ms as u128)) / (10_000u128 * year_ms);
@@ -1063,7 +1063,7 @@ module unxversal::lending {
         clock: &Clock,
         price_synth: &PriceInfoObject,
         price_usdc: &PriceInfoObject,
-        vault: &mut CollateralVault,
+        vault: &mut CollateralVault<C>,
         pool_usdc: &mut LendingPool<C>,
         debtor: &mut UserAccount,
         symbol: String,
@@ -1073,8 +1073,8 @@ module unxversal::lending {
     ) {
         assert!(!reg.paused, 1000);
         assert!(repay_units > 0, E_ZERO_AMOUNT);
-        assert!(Table::contains(&debtor.synth_borrow_units, &symbol), E_UNKNOWN_ASSET);
-        let cur = *Table::borrow(&debtor.synth_borrow_units, &symbol);
+        assert!(table::contains(&debtor.synth_borrow_units, clone_string(&symbol)), E_UNKNOWN_ASSET);
+        let cur = *table::borrow(&debtor.synth_borrow_units, clone_string(&symbol));
         assert!(repay_units <= cur, E_OVER_REPAY);
         // Burn exposure on debtor
         Synth::burn_synthetic(
@@ -1091,8 +1091,8 @@ module unxversal::lending {
             ctx
         );
         let newb = cur - repay_units;
-        Table::insert(&mut debtor.synth_borrow_units, clone_string(&symbol), newb);
-        let mut m = Table::borrow_mut(&mut reg.synth_markets, &symbol);
+        table::add(&mut debtor.synth_borrow_units, clone_string(&symbol), newb);
+        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
         m.total_borrow_units = m.total_borrow_units - repay_units;
         // Determine collateral to seize (value + bonus) from synth market liquidity
         let px = get_price_scaled_1e6(oracle_cfg, clock, price_synth) as u128; // micro-USD per unit
