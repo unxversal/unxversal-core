@@ -2,62 +2,28 @@
 
 [move]
 version = 3
-manifest_digest = "80D8F976B256DDCC58551D66FBB76539272A36681AF96C33684C8362B0776B18"
-deps_digest = "04732BFEF428F74DE262001DC455D76B909EBC394B034A9A15CC095E4BDD9CEF"
-dependencies = [
-  { id = "Bridge", name = "Bridge" },
-  { id = "MoveStdlib", name = "MoveStdlib" },
-  { id = "Sui", name = "Sui" },
-  { id = "SuiSystem", name = "SuiSystem" },
-]
+manifest_digest = "858967D89676D5B5925FFE7429761E77CCE02543F8E475AE0F5E9885922BCB0F"
+deps_digest = "F9B494B64F0615AED0E98FC12A85B85ECD2BC5185C22D30E7F67786BB52E507C"
 dev-dependencies = [
-  { id = "Pyth", name = "Pyth" },
-  { id = "Wormhole", name = "Wormhole" },
-]
-
-[[move.package]]
-id = "Bridge"
-source = { git = "https://github.com/MystenLabs/sui.git", rev = "b448b1d971bd6c1aac8ef4eee4305943806d5d5b", subdir = "crates/sui-framework/packages/bridge" }
-
-dependencies = [
-  { id = "MoveStdlib", name = "MoveStdlib" },
   { id = "Sui", name = "Sui" },
-  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "Switchboard", name = "Switchboard" },
 ]
 
 [[move.package]]
 id = "MoveStdlib"
-source = { git = "https://github.com/MystenLabs/sui.git", rev = "b448b1d971bd6c1aac8ef4eee4305943806d5d5b", subdir = "crates/sui-framework/packages/move-stdlib" }
-
-[[move.package]]
-id = "Pyth"
-source = { git = "https://github.com/pyth-network/pyth-crosschain.git", rev = "sui-contract-testnet", subdir = "target_chains/sui/contracts" }
-
-dependencies = [
-  { id = "Sui", name = "Sui" },
-  { id = "Wormhole", name = "Wormhole" },
-]
+source = { git = "https://github.com/MystenLabs/sui.git", rev = "framework/testnet", subdir = "crates/sui-framework/packages/move-stdlib" }
 
 [[move.package]]
 id = "Sui"
-source = { git = "https://github.com/MystenLabs/sui.git", rev = "b448b1d971bd6c1aac8ef4eee4305943806d5d5b", subdir = "crates/sui-framework/packages/sui-framework" }
+source = { git = "https://github.com/MystenLabs/sui.git", rev = "framework/testnet", subdir = "crates/sui-framework/packages/sui-framework" }
 
 dependencies = [
   { id = "MoveStdlib", name = "MoveStdlib" },
 ]
 
 [[move.package]]
-id = "SuiSystem"
-source = { git = "https://github.com/MystenLabs/sui.git", rev = "b448b1d971bd6c1aac8ef4eee4305943806d5d5b", subdir = "crates/sui-framework/packages/sui-system" }
-
-dependencies = [
-  { id = "MoveStdlib", name = "MoveStdlib" },
-  { id = "Sui", name = "Sui" },
-]
-
-[[move.package]]
-id = "Wormhole"
-source = { git = "https://github.com/wormhole-foundation/wormhole.git", rev = "sui/testnet", subdir = "sui/wormhole" }
+id = "Switchboard"
+source = { git = "https://github.com/switchboard-xyz/sui.git", rev = "testnet", subdir = "on_demand/" }
 
 dependencies = [
   { id = "Sui", name = "Sui" },

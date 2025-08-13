@@ -6,30 +6,30 @@ license = "Apache 2.0"
 authors = ["Joshua Okolo (unxvjoshua@gmail.com)"]
 
 [dependencies]
-[dependencies.Pyth]
-git = "https://github.com/pyth-network/pyth-crosschain.git"
-subdir = "target_chains/sui/contracts"
-rev = "sui-contract-mainnet"
- 
-[dependencies.Wormhole]
-git = "https://github.com/wormhole-foundation/wormhole.git"
-subdir = "sui/wormhole"
-rev = "sui/mainnet"
+
+[dependencies.Switchboard]
+git = "https://github.com/switchboard-xyz/sui.git"
+subdir = "on_demand/"
+rev = "mainnet"
+
+[dependencies.Sui]
+git = "https://github.com/MystenLabs/sui.git"
+subdir = "crates/sui-framework/packages/sui-framework"
+rev = "framework/mainnet"
 
 [addresses]
-unxversal="0x0"
-pyth="0x0"
+unxversal = "0x0"
 
 [dev-dependencies]
 
-[dev-dependencies.Pyth]
-git = "https://github.com/pyth-network/pyth-crosschain.git"
-subdir = "target_chains/sui/contracts"
-rev = "sui-contract-testnet"
- 
-[dev-dependencies.Wormhole]
-git = "https://github.com/wormhole-foundation/wormhole.git"
-subdir = "sui/wormhole"
-rev = "sui/testnet"
+[dev-dependencies.Switchboard]
+git = "https://github.com/switchboard-xyz/sui.git"
+subdir = "on_demand/"
+rev = "testnet"
+
+[dev-dependencies.Sui]
+git = "https://github.com/MystenLabs/sui.git"
+subdir = "crates/sui-framework/packages/sui-framework"
+rev = "framework/testnet"
 
 [dev-addresses]

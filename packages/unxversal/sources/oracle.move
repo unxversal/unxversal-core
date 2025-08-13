@@ -9,28 +9,22 @@
 module unxversal::oracle {
     // Default aliases for TxContext/object/transfer are available without explicit `use`
     use sui::clock::Clock;          // block‑timestamp source
-    use sui::vec_set::{Self as vec_set, VecSet};
-    use pyth::price_info;
-    use pyth::price_identifier;
-    use pyth::price;
-    use pyth::price_info::PriceInfoObject;
-    use pyth::i64::{Self as I64Mod, I64};
-    use pyth::pyth;                 // get_price_no_older_than
+    use switchboard::aggregator::{Self as aggregator, Aggregator};
+    use switchboard::decimal::{Self as decimal};
 
     /// Refer to admin caps from synthetics module
     use unxversal::synthetics::{SynthRegistry, AdminCap};
 
 
-    const E_INVALID_FEED: u64   = 1;   // Price‑feed ID not allowed
-    const E_BAD_PRICE: u64      = 2;   // Non‑positive price
-    const E_OVERFLOW: u64       = 3;   // Overflow during scaling
+    const E_BAD_PRICE: u64 = 1;      // Non‑positive price
+    const E_STALE: u64    = 2;      // Update too old
+    const E_OVERFLOW: u64 = 3;      // Overflow during scaling
 
     /*******************************
     * OracleConfig – shared object storing the allow‑list
     *******************************/
     public struct OracleConfig has key, store {
         id: UID,
-        allowed_feeds: VecSet<vector<u8>>,   // Set of raw feed‑ID bytes
         max_age_sec: u64,                    // Staleness tolerance (default 60)
     }
 
@@ -48,36 +42,15 @@ module unxversal::oracle {
     public struct ORACLE has drop {}
 
     fun init(_otw: ORACLE, ctx: &mut TxContext) {
-        let config = OracleConfig { id: object::new(ctx), allowed_feeds: vec_set::empty<vector<u8>>(), max_age_sec: 60 };
+        let config = OracleConfig { id: object::new(ctx), max_age_sec: 60 };
         transfer::share_object(config);
     }
 
-    /*******************************
-    * Admin functions – mutate allow‑list or staleness window
-    *******************************/
-    public fun add_feed_id(
-        admin: &AdminCap,
-        _registry: &SynthRegistry,
-        cfg: &mut OracleConfig,
-        feed: vector<u8>,
-        _ctx: &TxContext
-    ) {
-        assert_has_admin_cap(admin);
-        vec_set::insert(&mut cfg.allowed_feeds, feed);
-    }
-
-    public fun remove_feed_id(
-        admin: &AdminCap,
-        _registry: &SynthRegistry,
-        cfg: &mut OracleConfig,
-        feed: vector<u8>,
-        _ctx: &TxContext
-    ) {
-        assert_has_admin_cap(admin);
-        vec_set::remove(&mut cfg.allowed_feeds, &feed);
-    }
+    
+    // Switchboard integration does not maintain an on-chain allow-list here.
 
     /// Optional granular setter for staleness allowance
+
     public fun set_max_age(
         admin: &AdminCap,
         _registry: &SynthRegistry,
@@ -90,94 +63,28 @@ module unxversal::oracle {
     }
 
     /*******************************
-    * Public read – validated price fetch
+    * Public read – Switchboard aggregator value (scaled to 1e6)
     *******************************/
-    public fun get_latest_price(
+    public fun get_price_scaled_1e6(
         cfg: &OracleConfig,
         clock: &Clock,
-        price_info_object: &PriceInfoObject
-    ): I64 {
-        // Enforce staleness
-        let price_struct = pyth::get_price_no_older_than(
-            price_info_object,
-            clock,
-            cfg.max_age_sec
-        );
+        aggregator_obj: &Aggregator
+    ): u64 {
+        let cur = aggregator::current_result(aggregator_obj);
+        let latest_ms = aggregator::max_timestamp_ms(cur);
+        let now_ms = sui::clock::timestamp_ms(clock);
+        let age_ms = if (now_ms > latest_ms) { now_ms - latest_ms } else { 0 };
+        assert!(age_ms <= cfg.max_age_sec * 1000, E_STALE);
 
-        // Verify feed ID in allow‑list
-        let info = price_info::get_price_info_from_price_info_object(price_info_object);
-        let pid  = price_identifier::get_bytes(&price_info::get_price_identifier(&info));
-        assert!(vec_set::contains(&cfg.allowed_feeds, &pid), E_INVALID_FEED);
-
-        // Return price as signed‑64 integer (Pyth expo already encoded)
-        price::get_price(&price_struct)
+        let dec = aggregator::result(cur);
+        let v = decimal::value(dec);
+        assert!(v > 0, E_BAD_PRICE);
+        assert!(v <= (U64_MAX_LITERAL as u128), E_OVERFLOW);
+        v as u64
     }
 
     /*******************************
      * Fixed‑point normalization helpers
      *******************************/
-    const SCALE_POW10_1E6: u64 = 6; // micro‑USD
     const U64_MAX_LITERAL: u64 = 18_446_744_073_709_551_615;
-
-    fun pow10_u128(mut n: u64): u128 {
-        let mut acc: u128 = 1u128;
-        while (n > 0) {
-            acc = acc * 10u128;
-            n = n - 1;
-        };
-        acc
-    }
-
-    /// Convert Pyth I64 (signed) to non‑negative u64 magnitude. Aborts if negative.
-    fun i64_to_u64_non_negative(x: &I64): u64 {
-        assert!(!I64Mod::get_is_negative(x), E_BAD_PRICE);
-        I64Mod::get_magnitude_if_positive(x)
-    }
-
-    /// Returns price scaled to 1e6 (micro‑USD) as u64 (uses u128 internally)
-    public fun get_price_scaled_1e6(
-        cfg: &OracleConfig,
-        clock: &Clock,
-        price_info_object: &PriceInfoObject
-    ): u64 {
-        let price_struct = pyth::get_price_no_older_than(price_info_object, clock, cfg.max_age_sec);
-        // Raw price is signed I64
-        let raw_i64 = price::get_price(&price_struct);
-        // Abort if negative or zero
-        let raw_mag = i64_to_u64_non_negative(&raw_i64);
-        assert!(raw_mag > 0, E_BAD_PRICE);
-
-        // Exponent is signed I64
-        let expo = price::get_expo(&price_struct);
-        let expo_is_neg = I64Mod::get_is_negative(&expo);
-        let expo_mag = if (expo_is_neg) { I64Mod::get_magnitude_if_negative(&expo) } else { I64Mod::get_magnitude_if_positive(&expo) };
-
-        // Compute adjustment: adj = 6 (micro‑USD) + expo
-        // Represent as sign + magnitude without relying on signed ints
-        let mut adj_is_neg = false;
-        let mut adj_mag: u64 = 0;
-        if (expo_is_neg) {
-            if (expo_mag > SCALE_POW10_1E6) {
-                adj_is_neg = true;
-                adj_mag = expo_mag - SCALE_POW10_1E6;
-            } else {
-                adj_is_neg = false;
-                adj_mag = SCALE_POW10_1E6 - expo_mag;
-            }
-        } else {
-            adj_is_neg = false;
-            adj_mag = SCALE_POW10_1E6 + expo_mag;
-        };
-
-        let raw_u128 = (raw_mag as u128);
-        let scaled_u128 = if (!adj_is_neg) {
-            let mul = pow10_u128(adj_mag);
-            raw_u128 * mul
-        } else {
-            let div = pow10_u128(adj_mag);
-            raw_u128 / div
-        };
-        assert!(scaled_u128 <= (U64_MAX_LITERAL as u128), E_OVERFLOW);
-        scaled_u128 as u64
-    }
 }
