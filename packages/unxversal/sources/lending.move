@@ -1,3 +1,4 @@
+#[allow(lint(public_entry))]
 module unxversal::lending {
     /*******************************
     * Unxversal Lending – Phase 1
@@ -160,7 +161,7 @@ module unxversal::lending {
 
     const U64_MAX_LITERAL: u64 = 18_446_744_073_709_551_615;
     const E_VAULT_NOT_HEALTHY: u64 = 12;
-    const E_SYMBOL_MISMATCH: u64 = 13;
+    
 
     fun clone_string(s: &String): String {
         let src = string::as_bytes(s);
@@ -170,17 +171,7 @@ module unxversal::lending {
         string::utf8(out)
     }
 
-    fun copy_vector_u8(src: &vector<u8>): vector<u8> {
-        let len = vector::length(src);
-        let mut dst = vector::empty<u8>();
-        let mut i = 0;
-        while (i < len) {
-            let b = vector::borrow(src, i);
-            vector::push_back(&mut dst, *b);
-            i = i + 1;
-        };
-        dst
-    }
+    
 
     fun units_from_scaled(scaled: u64, index: u64): u64 {
         if (index == 0) { return 0; };
@@ -198,10 +189,7 @@ module unxversal::lending {
         if (v > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { v as u64 }
     }
 
-    /*******************************
-    * FlashLoan proof object
-    *******************************/
-    // Hot potato for coin flash loans (no abilities)
+    /// Flash loan proof object
     public struct FlashLoan<phantom T> has store, drop { amount: u64, fee: u64, asset: String }
 
     // Hot potato for synthetic flash loans (no abilities) – must be consumed in same tx
@@ -756,18 +744,18 @@ module unxversal::lending {
     /*******************************
     * Flash Loans – simple fee, same-tx repay enforced by API usage
     *******************************/
-    public entry fun initiate_flash_loan<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, amount: u64, ctx: &mut TxContext) {
+    public entry fun initiate_flash_loan<T>(_reg: &LendingRegistry, pool: &mut LendingPool<T>, amount: u64, ctx: &mut TxContext) {
         assert!(amount > 0, E_ZERO_AMOUNT);
         let cash = BalanceMod::value(&pool.cash);
         assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
-        let fee = (amount * reg.global_params.flash_loan_fee_bps) / 10_000;
+        let fee = (amount * _reg.global_params.flash_loan_fee_bps) / 10_000;
         let out_bal = BalanceMod::split(&mut pool.cash, amount);
         let out = coin::from_balance(out_bal, ctx);
         event::emit(FlashLoanInitiated { asset: clone_string(&pool.asset), amount, fee, borrower: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         transfer::public_transfer(out, ctx.sender());
     }
 
-    public entry fun repay_flash_loan<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, mut principal: Coin<T>, proof_amount: u64, proof_fee: u64, proof_asset: String, ctx: &mut TxContext) {
+    public entry fun repay_flash_loan<T>(_reg: &LendingRegistry, pool: &mut LendingPool<T>, mut principal: Coin<T>, proof_amount: u64, proof_fee: u64, proof_asset: String, ctx: &mut TxContext) {
         let due = proof_amount + proof_fee;
         let have = coin::value(&principal);
         assert!(have >= due, E_INSUFFICIENT_LIQUIDITY);
@@ -786,10 +774,10 @@ module unxversal::lending {
     * Synthetic Flash Loans – mint & burn within same tx (hot potato)
     *******************************/
     public entry fun initiate_synth_flash_loan<C>(
-        reg: &LendingRegistry,
+        _reg: &LendingRegistry,
         synth_reg: &mut SynthRegistry,
         cfg: &CollateralConfig<C>,
-        oracle_cfg: &OracleConfig,
+        _oracle_cfg: &OracleConfig,
         clock: &Clock,
         price_info: &PriceInfoObject,
         vault: &mut CollateralVault<C>,
@@ -815,7 +803,7 @@ module unxversal::lending {
             treasury,
             ctx
         );
-        let fee_units = (amount_units * reg.global_params.flash_loan_fee_bps) / 10_000;
+        let fee_units = (amount_units * _reg.global_params.flash_loan_fee_bps) / 10_000;
         event::emit(SynthFlashLoanInitiated { symbol: clone_string(&symbol), amount_units, fee_units, borrower: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         SynthFlashLoan { symbol, amount_units, fee_units }
     }
@@ -824,7 +812,7 @@ module unxversal::lending {
         _reg: &LendingRegistry,
         synth_reg: &mut SynthRegistry,
         cfg: &CollateralConfig<C>,
-        oracle_cfg: &OracleConfig,
+        _oracle_cfg: &OracleConfig,
         clock: &Clock,
         price_info: &PriceInfoObject,
         vault: &mut CollateralVault<C>,
