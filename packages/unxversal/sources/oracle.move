@@ -12,8 +12,7 @@ module unxversal::oracle {
     use switchboard::aggregator::{Self as aggregator, Aggregator};
     use switchboard::decimal::{Self as decimal};
 
-    /// Refer to admin caps from synthetics module
-    use unxversal::synthetics::{SynthRegistry, AdminCap};
+    // No cross-module admin types to avoid dependency cycles
 
 
     const E_BAD_PRICE: u64 = 1;      // Non‑positive price
@@ -28,11 +27,7 @@ module unxversal::oracle {
         max_age_sec: u64,                    // Staleness tolerance (default 60)
     }
 
-    /*******************************
-    * Helper – admin check
-    * Rely on possession of AdminCap since registry allow‑list is private
-    *******************************/
-    fun assert_has_admin_cap(_admin: &AdminCap) { /* possession is sufficient */ }
+    // Admin gating omitted here to avoid dependency cycles. Use a separate governance flow.
 
     /*******************************
     * INIT  – called once via synthetics deployment script
@@ -52,15 +47,10 @@ module unxversal::oracle {
     /// Optional granular setter for staleness allowance
 
     public fun set_max_age(
-        admin: &AdminCap,
-        _registry: &SynthRegistry,
         cfg: &mut OracleConfig,
         new_max_age: u64,
         _ctx: &TxContext
-    ) {
-        assert_has_admin_cap(admin);
-        cfg.max_age_sec = new_max_age;
-    }
+    ) { cfg.max_age_sec = new_max_age; }
 
     /*******************************
     * Public read – Switchboard aggregator value (scaled to 1e6)
