@@ -63,7 +63,7 @@ module unxversal::lending {
     /*******************************
     * Config & models
     *******************************/
-    public struct GlobalParams has store {
+    public struct GlobalParams has store, drop {
         reserve_factor_bps: u64,   // portion of interest directed to reserves
         flash_loan_fee_bps: u64,   // fee applied to flash loans
     }
@@ -198,10 +198,10 @@ module unxversal::lending {
     * FlashLoan proof object
     *******************************/
     // Hot potato for coin flash loans (no abilities)
-    public struct FlashLoan<phantom T> { amount: u64, fee: u64, asset: String }
+    public struct FlashLoan<phantom T> has drop { amount: u64, fee: u64, asset: String }
 
     // Hot potato for synthetic flash loans (no abilities) – must be consumed in same tx
-    public struct SynthFlashLoan { symbol: String, amount_units: u64, fee_units: u64 }
+    public struct SynthFlashLoan has drop { symbol: String, amount_units: u64, fee_units: u64 }
 
     /*******************************
     * Admin helper
@@ -392,7 +392,7 @@ module unxversal::lending {
         symbols: vector<String>,
         prices: vector<&PriceInfoObject>,
         ctx: &mut TxContext
-    ): Coin<T> {
+    ) {
         assert!(!reg.paused, 1000);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
         assert!(amount > 0, E_ZERO_AMOUNT);
@@ -425,7 +425,7 @@ module unxversal::lending {
         }
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(AssetWithdrawn { user: ctx.sender(), asset: sym, amount, remaining_balance: new_units, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        out
+        transfer::public_transfer(out, ctx.sender());
     }
 
     /*******************************
@@ -442,7 +442,7 @@ module unxversal::lending {
         symbols: vector<String>,
         prices: vector<&PriceInfoObject>,
         ctx: &mut TxContext
-    ): Coin<T> {
+    ) {
         assert!(!reg.paused, 1000);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
         assert!(amount > 0, E_ZERO_AMOUNT);
@@ -470,7 +470,7 @@ module unxversal::lending {
         let out = coin::from_balance(out_bal, ctx);
         let new_units = units_from_scaled(new_scaled, pool.borrow_index);
         event::emit(AssetBorrowed { user: ctx.sender(), asset: sym, amount, new_borrow_balance: new_units, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        out
+        transfer::public_transfer(out, ctx.sender());
     }
 
     public entry fun repay<T>(_reg: &LendingRegistry, pool: &mut LendingPool<T>, acct: &mut UserAccount, payment: Coin<T>, ctx: &mut TxContext) {
@@ -541,7 +541,7 @@ module unxversal::lending {
         // update totals: total_borrows += total_borrows * borrow_factor
         let old_tb = pool.total_borrows as u128;
         let tb = old_tb + (old_tb * borrow_factor);
-        let delta_borrows = if tb > old_tb { tb - old_tb } else { 0 };
+        let delta_borrows = if (tb > old_tb) { tb - old_tb } else { 0 };
         // reserve factor portion
         let rf_bps = get_reserve_factor_bps(reg, &pool.asset) as u128;
         let reserves_added = (delta_borrows * rf_bps) / 10_000u128;
@@ -678,7 +678,7 @@ module unxversal::lending {
         repay_amount: u64,
         // Optional internal routing flags could be added here
         ctx: &mut TxContext
-    ): Coin<Coll> {
+    ) {
         // Enforce same-asset liquidations: debt and collateral symbols must match
         assert!(debt_pool.asset == coll_pool.asset, E_SYMBOL_MISMATCH);
         assert!(repay_amount > 0, E_ZERO_AMOUNT);
@@ -740,7 +740,7 @@ module unxversal::lending {
         // send seized collateral to liquidator
         let out_bal = BalanceMod::split(&mut coll_pool.cash, seize_u64);
         let out = coin::from_balance(out_bal, ctx);
-        out
+        transfer::public_transfer(out, ctx.sender());
     }
 
     /*******************************
@@ -766,7 +766,7 @@ module unxversal::lending {
     /*******************************
     * Flash Loans – simple fee, same-tx repay enforced by API usage
     *******************************/
-    public entry fun initiate_flash_loan<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, amount: u64, ctx: &mut TxContext): (Coin<T>, FlashLoan<T>) {
+    public entry fun initiate_flash_loan<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, amount: u64, ctx: &mut TxContext) {
         assert!(amount > 0, E_ZERO_AMOUNT);
         let cash = BalanceMod::value(&pool.cash);
         assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
@@ -774,7 +774,8 @@ module unxversal::lending {
         let out_bal = BalanceMod::split(&mut pool.cash, amount);
         let out = coin::from_balance(out_bal, ctx);
         event::emit(FlashLoanInitiated { asset: clone_string(&pool.asset), amount, fee, borrower: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        (out, FlashLoan<T> { amount, fee, asset: clone_string(&pool.asset) })
+        transfer::public_transfer(out, ctx.sender());
+        transfer::public_transfer(FlashLoan<T> { amount, fee, asset: clone_string(&pool.asset) }, ctx.sender());
     }
 
     public entry fun repay_flash_loan<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, mut principal: Coin<T>, proof: FlashLoan<T>, ctx: &mut TxContext) {
@@ -923,7 +924,7 @@ module unxversal::lending {
         acct: &mut UserAccount,
         amount: u64,
         ctx: &mut TxContext
-    ): Coin<C> {
+    ) {
         assert!(!reg.paused, 1000);
         assert!(amount > 0, E_ZERO_AMOUNT);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
@@ -941,7 +942,7 @@ module unxversal::lending {
         m.total_liquidity = m.total_liquidity - amount;
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(SynthLiquidityWithdrawn { user: ctx.sender(), symbol: market_symbol, amount: amount, remaining_balance: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        out
+        transfer::public_transfer(out, ctx.sender());
     }
 
     public entry fun borrow_synth(
@@ -1069,7 +1070,7 @@ module unxversal::lending {
         repay_units: u64,
         bonus_bps: u64,
         ctx: &mut TxContext
-    ): Coin<C> {
+    ) {
         assert!(!reg.paused, 1000);
         assert!(repay_units > 0, E_ZERO_AMOUNT);
         assert!(Table::contains(&debtor.synth_borrow_units, &symbol), E_UNKNOWN_ASSET);
@@ -1104,7 +1105,7 @@ module unxversal::lending {
         let out_bal = BalanceMod::split(&mut pool_usdc.cash, seize_units);
         let out = coin::from_balance(out_bal, ctx);
         event::emit(SynthLiquidated { symbol, repay_units, collateral_seized: seize_units, bot_reward: ((seize_units as u128) - val) as u64, liquidator: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        out
+        transfer::public_transfer(out, ctx.sender());
     }
 }
 
