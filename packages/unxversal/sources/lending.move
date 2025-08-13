@@ -8,12 +8,8 @@ module unxversal::lending {
     * - Object Display registered for Registry, Pool, Account
     *******************************/
 
-    use sui::tx_context::TxContext;
-    use sui::transfer;
     use sui::display;
-    use sui::object;
     use sui::package;
-    use sui::package::Publisher;
     use sui::types;
     use sui::event;
     use sui::clock::Clock;
@@ -24,7 +20,6 @@ module unxversal::lending {
 
     use std::string::{Self as string, String};
     use sui::vec_set::{Self as vec_set, VecSet};
-    use std::vector;
 
     // Synthetics integration
     use pyth::price_info::PriceInfoObject;
@@ -129,7 +124,7 @@ module unxversal::lending {
     public struct SynthRepaid has copy, drop { user: address, symbol: String, units: u64, remaining_borrow_units: u64, timestamp: u64 }
 
     /// Pair type for returning symbol/feed lists without tuple type arguments
-    public struct SymbolFeedEntry has copy, drop { symbol: String, feed: vector<u8> }
+    
 
     /*******************************
     * User account
@@ -656,20 +651,7 @@ module unxversal::lending {
     /*******************************
     * Read-only helpers (for bots/indexers)
     *******************************/
-    public fun list_supported_assets(_reg: &LendingRegistry): vector<String> { vector::empty<String>() }
-
-    public fun get_asset_config(reg: &LendingRegistry, symbol: &String): &AssetConfig { table::borrow(&reg.supported_assets, clone_string(symbol)) }
-
-    public fun list_pools(_reg: &LendingRegistry): vector<String> { vector::empty<String>() }
-
-    public fun get_coin_oracle_feed(reg: &LendingRegistry, symbol: &String): vector<u8> {
-        let k = clone_string(symbol);
-        if (table::contains(&reg.coin_oracle_feeds, k)) { copy_vector_u8(table::borrow(&reg.coin_oracle_feeds, clone_string(symbol))) } else { b"".to_string().into_bytes() }
-    }
-
-    public fun list_coin_oracle_feeds(_reg: &LendingRegistry): vector<SymbolFeedEntry> { vector::empty<SymbolFeedEntry>() }
-
-    public fun protocol_metrics<C>(_reg: &LendingRegistry): (u128, u128, u128) { (0, 0, 0) }
+    
 
     /*******************************
     * Liquidation (coins): liquidator repays debtor's debt asset and seizes collateral
@@ -688,8 +670,7 @@ module unxversal::lending {
         // Optional internal routing flags could be added here
         ctx: &mut TxContext
     ) {
-        // Enforce same-asset liquidations: debt and collateral symbols must match
-        assert!(debt_pool.asset == coll_pool.asset, E_SYMBOL_MISMATCH);
+        // Cross-asset liquidation: debt and collateral may differ. Validate per-asset positions and configs below.
         assert!(repay_amount > 0, E_ZERO_AMOUNT);
         let have = coin::value(&payment);
         assert!(have >= repay_amount, E_INSUFFICIENT_LIQUIDITY);
