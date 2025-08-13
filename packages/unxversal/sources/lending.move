@@ -420,7 +420,7 @@ module unxversal::lending {
         clock: &Clock,
         price_self: &PriceInfoObject,
         symbols: vector<String>,
-        prices: vector<&PriceInfoObject>,
+        prices: vector<PriceInfoObject>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, 1000);
@@ -446,13 +446,13 @@ module unxversal::lending {
             let a = table::borrow(&reg.supported_assets, clone_string(&sym));
             if (a.is_collateral) {
                 // compute current totals
-        let (tot_coll, tot_debt, _) = check_account_health_coins(acct, reg, oracle_cfg, clock, symbols, prices);
+                let (tot_coll, tot_debt, _) = check_account_health_coins(acct, reg, oracle_cfg, clock, symbols, prices);
                 let px_self = get_price_scaled_1e6(oracle_cfg, clock, price_self) as u128;
                 let reduce_cap = ((amount as u128) * px_self * (a.ltv_bps as u128)) / 10_000u128;
                 let new_capacity = if (tot_coll > reduce_cap) { tot_coll - reduce_cap } else { 0 };
                 assert!(tot_debt <= new_capacity, E_VIOLATION);
             }
-        }
+        };
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(AssetWithdrawn { user: ctx.sender(), asset: sym, amount, remaining_balance: new_units, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         transfer::public_transfer(out, ctx.sender());
@@ -470,13 +470,13 @@ module unxversal::lending {
         clock: &Clock,
         price_debt: &PriceInfoObject,
         symbols: vector<String>,
-        prices: vector<&PriceInfoObject>,
+        prices: vector<PriceInfoObject>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, 1000);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
         assert!(amount > 0, E_ZERO_AMOUNT);
-        accrue_pool_interest(pool);
+        accrue_pool_interest(reg, pool, ctx);
         // check pool liquidity
         let cash = BalanceMod::value(&pool.cash);
         assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
@@ -595,7 +595,7 @@ module unxversal::lending {
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         symbols: vector<String>,
-        prices: vector<&PriceInfoObject>
+        prices: vector<PriceInfoObject>
     ): u128 {
         let mut cap: u128 = 0;
         let mut i = 0;
@@ -605,7 +605,7 @@ module unxversal::lending {
                 let a = table::borrow(&reg.supported_assets, clone_string(&sym));
                 if (a.is_collateral) {
                     let units = *table::borrow(&acct.supply_balances, clone_string(&sym)) as u128;
-                    let p = *vector::borrow(&prices, i);
+                    let p = vector::borrow(&prices, i);
                     let px = get_price_scaled_1e6(oracle_cfg, clock, p) as u128;
                     cap = cap + (units * px * (a.ltv_bps as u128)) / 10_000u128;
                 }
@@ -624,14 +624,14 @@ module unxversal::lending {
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         symbols: vector<String>,
-        prices: vector<&PriceInfoObject>
+        prices: vector<PriceInfoObject>
     ): (u128, u128, bool) {
         let mut total_coll: u128 = 0;
         let mut total_debt: u128 = 0;
         let mut i = 0;
         while (i < vector::length(&symbols)) {
             let sym = *vector::borrow(&symbols, i);
-            let p = *vector::borrow(&prices, i);
+            let p = vector::borrow(&prices, i);
             let px = get_price_scaled_1e6(oracle_cfg, clock, p) as u128; // micro-USD
             if (table::contains(&acct.supply_balances, clone_string(&sym))) {
                 let units = *table::borrow(&acct.supply_balances, clone_string(&sym)) as u128;
@@ -722,7 +722,7 @@ module unxversal::lending {
             clock,
             // caller should pass full symbols/prices set off-chain; for simplicity, require two here
             vector::empty<String>(),
-            vector::empty<&PriceInfoObject>()
+            vector::empty<PriceInfoObject>()
         );
         if (tot_debt > 0) {
             let ratio_bps = ((tot_coll * 10_000u128) / tot_debt) as u64;
