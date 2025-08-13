@@ -288,7 +288,7 @@ module unxversal::dex {
                 transfer::public_transfer(to_maker, maker_addr);
             };
             TreasuryMod::deposit_collateral(treasury, fee_coin_all, b"otc_match".to_string(), if (taker_is_buyer) { buy.owner } else { sell.owner }, ctx);
-        }
+        };
 
         // Update remaining
         buy.remaining_base = buy.remaining_base - fill;
@@ -408,14 +408,14 @@ module unxversal::dex {
                     transfer::public_transfer(merged, buy.owner);
                 }
             }
-        }
+        };
         let collateral_fee_to_collect = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
         let maker_rebate = (trade_fee * cfg.maker_rebate_bps) / 10_000;
         let collateral_net_to_seller = if (collateral_fee_to_collect <= collateral_owed) { collateral_owed - collateral_fee_to_collect } else { 0 };
         if (collateral_net_to_seller > 0) {
             let to_seller = coin::split(&mut buy.escrow_collateral, collateral_net_to_seller, ctx);
             transfer::public_transfer(to_seller, sell.owner);
-        }
+        };
         if (collateral_fee_to_collect > 0) {
             let fee_coin_all = coin::split(&mut buy.escrow_collateral, collateral_fee_to_collect, ctx);
             if (maker_rebate > 0 && maker_rebate < collateral_fee_to_collect) {
@@ -424,7 +424,7 @@ module unxversal::dex {
                 transfer::public_transfer(to_maker, maker_addr);
             };
             TreasuryMod::deposit_collateral(treasury, fee_coin_all, b"otc_match".to_string(), if (taker_is_buyer) { buy.owner } else { sell.owner }, ctx);
-        }
+        };
 
         // Update remaining
         buy.remaining_base = buy.remaining_base - fill;
