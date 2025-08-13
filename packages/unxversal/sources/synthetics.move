@@ -1167,6 +1167,11 @@ module unxversal::synthetics {
         assert!(vec_set::contains(&registry.admin_addrs, &addr), E_NOT_ADMIN);
     }
 
+    /// Public read-only helper for external modules to verify admin status
+    public fun is_admin(registry: &SynthRegistry, addr: address): bool {
+        vec_set::contains(&registry.admin_addrs, &addr)
+    }
+
     /// INIT – executed once on package publish
     fun init(otw: SYNTHETICS, ctx: &mut TxContext) {
         // 1️⃣ Ensure we really received the one‑time witness
