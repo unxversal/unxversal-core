@@ -266,6 +266,9 @@ module unxversal::dex {
         max_price: u64,
         buyer_base_store: &mut Coin<Base>,
         seller_collateral_store: &mut Coin<C>,
+        market: String,
+        base: String,
+        quote: String,
         ctx: &mut TxContext
     ) {
         assert!(!cfg.paused, E_PAUSED);
@@ -336,7 +339,11 @@ module unxversal::dex {
         sell.remaining_base = sell.remaining_base - fill;
 
         // Fee details are tracked in Treasury; external FeeCollected emission removed
-        event::emit(CoinOrderMatched { buy_order_id: object::id(buy), sell_order_id: object::id(sell), price: trade_price, size_base: fill, taker_is_buyer, fee_paid: collateral_fee_to_collect, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        let ts = sui::tx_context::epoch_timestamp_ms(ctx);
+        event::emit(CoinOrderMatched { buy_order_id: object::id(buy), sell_order_id: object::id(sell), price: trade_price, size_base: fill, taker_is_buyer, fee_paid: collateral_fee_to_collect, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, timestamp: ts });
+        // Generic swap event for downstream consumers
+        let (payer, receiver) = if (taker_is_buyer) { (buy.owner, sell.owner) } else { (sell.owner, buy.owner) };
+        event::emit(SwapExecuted { market, base, quote, price: trade_price, size: fill, payer, receiver, timestamp: ts });
     }
 
     /*******************************
@@ -453,6 +460,9 @@ module unxversal::dex {
         treasury: &mut Treasury<C>,
         min_price: u64,
         max_price: u64,
+        market: String,
+        base: String,
+        quote: String,
         ctx: &mut TxContext
     ) {
         assert!(!cfg.paused, E_PAUSED);
@@ -524,7 +534,11 @@ module unxversal::dex {
         sell.remaining_base = sell.remaining_base - fill;
 
         // Fee details are tracked in Treasury; external FeeCollected emission removed
-        event::emit(CoinOrderMatched { buy_order_id: object::id(buy), sell_order_id: object::id(sell), price: trade_price, size_base: fill, taker_is_buyer, fee_paid: collateral_fee_to_collect, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        let ts2 = sui::tx_context::epoch_timestamp_ms(ctx);
+        event::emit(CoinOrderMatched { buy_order_id: object::id(buy), sell_order_id: object::id(sell), price: trade_price, size_base: fill, taker_is_buyer, fee_paid: collateral_fee_to_collect, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, timestamp: ts2 });
+        // Generic swap event
+        let (payer2, receiver2) = if (taker_is_buyer) { (buy.owner, sell.owner) } else { (sell.owner, buy.owner) };
+        event::emit(SwapExecuted { market, base, quote, price: trade_price, size: fill, payer: payer2, receiver: receiver2, timestamp: ts2 });
     }
 
     /*******************************
