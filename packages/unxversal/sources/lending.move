@@ -11,13 +11,13 @@ module unxversal::lending {
 
     use sui::display;
     use sui::package;
+    use sui::package::Publisher;
     use sui::types;
     use sui::event;
     use sui::clock::Clock;
     use sui::balance::{Self as BalanceMod, Balance};
     use sui::coin::{Self as coin, Coin};
     use sui::table::{Self as table, Table};
-
 
     use std::string::{Self as string, String};
     use sui::vec_set::{Self as vec_set, VecSet};
@@ -86,7 +86,6 @@ module unxversal::lending {
     public struct LendingRegistry has key, store {
         id: UID,
         supported_assets: Table<String, AssetConfig>,
-        coin_oracle_feeds: Table<String, vector<u8>>, // optional mapping for coins
         lending_pools: Table<String, ID>,
         interest_rate_models: Table<String, InterestRateModel>,
         global_params: GlobalParams,
@@ -161,6 +160,7 @@ module unxversal::lending {
 
     const U64_MAX_LITERAL: u64 = 18_446_744_073_709_551_615;
     const E_VAULT_NOT_HEALTHY: u64 = 12;
+    const E_DEPRECATED: u64 = 13;
     
 
     fun clone_string(s: &String): String {
@@ -169,6 +169,57 @@ module unxversal::lending {
         let mut i = 0; let n = vector::length(src);
         while (i < n) { vector::push_back(&mut out, *vector::borrow(src, i)); i = i + 1; };
         string::utf8(out)
+    }
+
+    fun eq_string(a: &String, b: &String): bool {
+        let ab = string::as_bytes(a);
+        let bb = string::as_bytes(b);
+        let la = vector::length(ab);
+        let lb = vector::length(bb);
+        if (la != lb) { return false; };
+        let mut i = 0;
+        while (i < la) { if (*vector::borrow(ab, i) != *vector::borrow(bb, i)) { return false; }; i = i + 1; };
+        true
+    }
+
+    fun clone_string_vec(src: &vector<String>): vector<String> {
+        let mut out = vector::empty<String>();
+        let mut i = 0; let n = vector::length(src);
+        while (i < n) { let s = vector::borrow(src, i); vector::push_back(&mut out, clone_string(s)); i = i + 1; };
+        out
+    }
+
+    /// Rank coin debts by descending debt_value = units * price (micro-USD)
+    public fun rank_coin_debt_order(
+        acct: &UserAccount,
+        symbols: &vector<String>,
+        prices: &vector<u64>
+    ): vector<String> {
+        let mut work_syms = clone_string_vec(symbols);
+        let mut values = vector::empty<u64>();
+        let mut i = 0; let n = vector::length(&work_syms);
+        while (i < n) {
+            let s = *vector::borrow(&work_syms, i);
+            let units = if (table::contains(&acct.borrow_balances, clone_string(&s))) { *table::borrow(&acct.borrow_balances, clone_string(&s)) } else { 0 };
+            let px = *vector::borrow(prices, i);
+            let dv = if (units > 0 && px > 0) { units * px } else { 0 };
+            vector::push_back(&mut values, dv);
+            i = i + 1;
+        };
+        let mut ordered = vector::empty<String>();
+        let mut k = 0; while (k < n) {
+            let mut best_v: u64 = 0; let mut best_i: u64 = 0; let mut found = false;
+            let mut j = 0; while (j < n) { let vj = *vector::borrow(&values, j); if (vj > best_v) { best_v = vj; best_i = j; found = true; }; j = j + 1; };
+            if (!found || best_v == 0) { break; };
+            let top_sym = vector::borrow(&work_syms, best_i);
+            vector::push_back(&mut ordered, clone_string(top_sym));
+            // mark consumed by zeroing that slot
+            let mut new_vals = vector::empty<u64>();
+            let mut t = 0; while (t < n) { let cur = *vector::borrow(&values, t); if (t == best_i) { vector::push_back(&mut new_vals, 0); } else { vector::push_back(&mut new_vals, cur); }; t = t + 1; };
+            values = new_vals;
+            k = k + 1;
+        };
+        ordered
     }
 
     
@@ -214,7 +265,6 @@ module unxversal::lending {
         let reg = LendingRegistry {
             id: object::new(ctx),
             supported_assets: table::new<String, AssetConfig>(ctx),
-            coin_oracle_feeds: table::new<String, vector<u8>>(ctx),
             lending_pools: table::new<String, ID>(ctx),
             interest_rate_models: table::new<String, InterestRateModel>(ctx),
             global_params: gp,
@@ -328,7 +378,7 @@ module unxversal::lending {
     /*******************************
     * Pool lifecycle (admin-only)
     *******************************/
-    public entry fun create_pool<T>(_admin: &LendingAdminCap, reg: &mut LendingRegistry, asset_symbol: String, ctx: &mut TxContext) {
+    public entry fun create_pool<T>(_admin: &LendingAdminCap, reg: &mut LendingRegistry, asset_symbol: String, publisher: &Publisher, ctx: &mut TxContext) {
         assert_is_admin(reg, ctx.sender());
         assert!(!reg.paused, 1000);
         assert!(table::contains(&reg.supported_assets, clone_string(&asset_symbol)), E_UNKNOWN_ASSET);
@@ -347,6 +397,13 @@ module unxversal::lending {
             current_borrow_rate_bps: 0,
         };
         let id = object::id(&pool);
+        // Register a Display for the concrete pool type T at creation time
+        let mut disp_pool = display::new<LendingPool<T>>(publisher, ctx);
+        disp_pool.add(b"name".to_string(),        b"Unxversal Lending Pool".to_string());
+        disp_pool.add(b"asset".to_string(),       b"{asset}".to_string());
+        disp_pool.add(b"description".to_string(), b"Lending pool for a specific asset".to_string());
+        disp_pool.update_version();
+        transfer::public_transfer(disp_pool, ctx.sender());
         transfer::share_object(pool);
         table::add(&mut reg.lending_pools, clone_string(&asset_symbol), id);
 
@@ -653,6 +710,8 @@ module unxversal::lending {
         coll_price: &Aggregator,
         mut payment: Coin<Debt>,
         repay_amount: u64,
+        symbols: vector<String>,
+        prices: vector<u64>,
         // Optional internal routing flags could be added here
         ctx: &mut TxContext
     ) {
@@ -666,9 +725,8 @@ module unxversal::lending {
             reg,
             oracle_cfg,
             clock,
-            // caller should pass full symbols/prices set off-chain; for simplicity, require two here
-            vector::empty<String>(),
-            vector::empty<u64>()
+            symbols,
+            prices
         );
         if (tot_debt > 0) {
             let ratio_bps = ((tot_coll * 10_000u128) / tot_debt) as u64;
@@ -918,6 +976,7 @@ module unxversal::lending {
         transfer::public_transfer(out, ctx.sender());
     }
 
+    /// Deprecated: use borrow_synth_multi to enforce aggregate CR across all open debts
     public entry fun borrow_synth<C>(
         synth_reg: &mut SynthRegistry,
         cfg: &CollateralConfig<C>,
@@ -938,22 +997,8 @@ module unxversal::lending {
         assert!(units > 0, E_ZERO_AMOUNT);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
         assert!(table::contains(&reg.synth_markets, clone_string(&symbol)), E_UNKNOWN_ASSET);
-        // Health gate: use synthetics check to ensure vault is healthy before minting
-        // (delegate to synthetics' own ratio checks inside mint_synthetic)
-        Synth::mint_synthetic(
-            cfg,
-            vault,
-            synth_reg,
-            clock,
-            oracle_cfg,
-            price_info,
-            clone_string(&symbol),
-            units,
-            unxv_payment,
-            unxv_price,
-            treasury,
-            ctx
-        );
+        // Enforce deprecation at runtime to steer callers to multi variant
+        assert!(false, E_DEPRECATED);
         let cur = if (table::contains(&acct.synth_borrow_units, clone_string(&symbol))) { *table::borrow(&acct.synth_borrow_units, clone_string(&symbol)) } else { 0 };
         let newb = cur + units;
         table::add(&mut acct.synth_borrow_units, clone_string(&symbol), newb);
@@ -961,6 +1006,55 @@ module unxversal::lending {
         m.total_borrow_units = m.total_borrow_units + units;
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(SynthBorrowed { user: ctx.sender(), symbol, units, new_borrow_units: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    /// Aggregate-checked borrow: calls mint_synthetic_multi to enforce shared-collateral CR across all open debts
+    public entry fun borrow_synth_multi<C>(
+        synth_reg: &mut SynthRegistry,
+        cfg: &CollateralConfig<C>,
+        // aggregate inputs
+        symbols: vector<String>,
+        prices: vector<u64>,
+        target_symbol: String,
+        target_price: u64,
+        units: u64,
+        unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &Aggregator,
+        clock: &Clock,
+        oracle_cfg: &OracleConfig,
+        vault: &mut CollateralVault<C>,
+        reg: &mut LendingRegistry,
+        acct: &mut UserAccount,
+        treasury: &mut Treasury<C>,
+        ctx: &mut TxContext
+    ) {
+        assert!(!reg.paused, 1000);
+        assert!(units > 0, E_ZERO_AMOUNT);
+        assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
+        assert!(table::contains(&reg.synth_markets, clone_string(&target_symbol)), E_UNKNOWN_ASSET);
+        Synth::mint_synthetic_multi(
+            cfg,
+            vault,
+            synth_reg,
+            symbols,
+            prices,
+            clone_string(&target_symbol),
+            target_price,
+            units,
+            unxv_payment,
+            unxv_price,
+            clock,
+            oracle_cfg,
+            treasury,
+            ctx
+        );
+        let cur = if (table::contains(&acct.synth_borrow_units, clone_string(&target_symbol))) { *table::borrow(&acct.synth_borrow_units, clone_string(&target_symbol)) } else { 0 };
+        let newb = cur + units;
+        table::add(&mut acct.synth_borrow_units, clone_string(&target_symbol), newb);
+        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&target_symbol));
+        m.total_borrow_units = m.total_borrow_units + units;
+        acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
+        event::emit(SynthBorrowed { user: ctx.sender(), symbol: target_symbol, units, new_borrow_units: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public entry fun repay_synth<C>(
