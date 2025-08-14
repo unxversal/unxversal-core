@@ -18,6 +18,7 @@ module unxversal::treasury {
     * Errors
     *******************************/
     const E_ZERO_AMOUNT: u64 = 1;
+    
 
     /*******************************
     * Events

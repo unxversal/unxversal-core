@@ -70,17 +70,17 @@ module unxversal::unxv {
         ctx: &mut TxContext
     ) {
         // merge vector into single coin and track amount
-        let mut i = 0;
         let mut burned: u64 = 0;
         let mut merged = coin::zero<UNXV>(ctx);
-        while (i < vector::length(&coins)) {
+        while (!vector::is_empty(&coins)) {
             let c = vector::pop_back(&mut coins);
             burned = burned + coin::value(&c);
             coin::join(&mut merged, c);
-            i = i + 1;
         };
         // burn on‑chain
         coin::burn(&mut sc.cap, merged);
         sc.current = sc.current - burned;
+        // consume the emptied vector of non-drop coins
+        vector::destroy_empty<Coin<UNXV>>(coins);
     }
 }

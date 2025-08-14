@@ -8,28 +8,13 @@ authors = ["Joshua Okolo (unxvjoshua@gmail.com)"]
 [dependencies]
 
 [dependencies.Switchboard]
-git = "https://github.com/switchboard-xyz/sui.git"
-subdir = "on_demand/"
-rev = "mainnet"
-
-[dependencies.Sui]
-git = "https://github.com/MystenLabs/sui.git"
-subdir = "crates/sui-framework/packages/sui-framework"
-rev = "framework/mainnet"
+local = "../sui/on_demand"
 
 [addresses]
 unxversal = "0x0"
+# switchboard = "0xe6717fb7c9d44706bf8ce8a651e25c0a7902d32cb0ff40c0976251ce8ac25655"
 
 [dev-dependencies]
 
-[dev-dependencies.Switchboard]
-git = "https://github.com/switchboard-xyz/sui.git"
-subdir = "on_demand/"
-rev = "testnet"
-
-[dev-dependencies.Sui]
-git = "https://github.com/MystenLabs/sui.git"
-subdir = "crates/sui-framework/packages/sui-framework"
-rev = "framework/testnet"
-
 [dev-addresses]
+# switchboard = "0x578b91ec9dcc505439b2f0ec761c23ad2c533a1c23b0467f6c4ae3d9686709f6"
