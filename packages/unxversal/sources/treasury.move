@@ -18,7 +18,7 @@ module unxversal::treasury {
     * Errors
     *******************************/
     const E_ZERO_AMOUNT: u64 = 1;
-    
+
 
     /*******************************
     * Events
@@ -51,9 +51,10 @@ module unxversal::treasury {
     *******************************/
     entry fun init_treasury<C>(ctx: &mut TxContext) {
         let t = Treasury<C> { id: object::new(ctx), collateral: balance::zero<C>(), unxv: balance::zero<UNXV>(), cfg: TreasuryCfg { unxv_burn_bps: 0 } };
+        let tid = object::id(&t);
+        event::emit(TreasuryInitialized { treasury_id: tid, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         transfer::share_object(t);
         transfer::public_transfer(TreasuryCap { id: object::new(ctx) }, ctx.sender());
-        event::emit(TreasuryInitialized { treasury_id: object::id(&t), by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     entry fun init_treasury_with_display<C>(publisher: &Publisher, ctx: &mut TxContext) {
@@ -69,7 +70,7 @@ module unxversal::treasury {
     /*******************************
     * Deposits (anyone)
     *******************************/
-    entry fun deposit_collateral<C>(treasury: &mut Treasury<C>, mut c: Coin<C>, source: String, payer: address, ctx: &mut TxContext) {
+    public(package) fun deposit_collateral<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &TxContext) {
         let amount = coin::value(&c);
         assert!(amount > 0, E_ZERO_AMOUNT);
         let bal = coin::into_balance(c);
@@ -77,20 +78,19 @@ module unxversal::treasury {
         event::emit(FeeReceived { source, asset: b"COLLATERAL".to_string(), amount, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
-    entry fun deposit_unxv<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {
+    public(package) fun deposit_unxv<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {
         let mut merged = coin::zero<UNXV>(ctx);
-        let mut i = 0;
         let mut total: u64 = 0;
-        while (i < vector::length(&v)) {
+        while (!vector::is_empty(&v)) {
             let c = vector::pop_back(&mut v);
             total = total + coin::value(&c);
             coin::join(&mut merged, c);
-            i = i + 1;
         };
         assert!(total > 0, E_ZERO_AMOUNT);
         let bal = coin::into_balance(merged);
         balance::join(&mut treasury.unxv, bal);
         event::emit(FeeReceived { source, asset: b"UNXV".to_string(), amount: total, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        vector::destroy_empty<Coin<UNXV>>(v);
         // Note: actual burning requires SupplyCap; use burn_unxv below
     }
 
@@ -133,7 +133,7 @@ module unxversal::treasury {
     public fun treasury_address<C>(t: &Treasury<C>): address { object::uid_to_address(&t.id) }
 
     // Cross-module deposit helpers (callable from other unxversal modules)
-    public(package) fun deposit_collateral_ext<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &mut TxContext) {
+    public(package) fun deposit_collateral_ext<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &TxContext) {
         let amount = coin::value(&c);
         assert!(amount > 0, E_ZERO_AMOUNT);
         let bal = coin::into_balance(c);
@@ -143,17 +143,17 @@ module unxversal::treasury {
 
     public(package) fun deposit_unxv_ext<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {
         let mut merged = coin::zero<UNXV>(ctx);
-        let mut i = 0; let mut total: u64 = 0;
-        while (i < vector::length(&v)) {
+        let mut total: u64 = 0;
+        while (!vector::is_empty(&v)) {
             let c = vector::pop_back(&mut v);
             total = total + coin::value(&c);
             coin::join(&mut merged, c);
-            i = i + 1;
         };
         assert!(total > 0, E_ZERO_AMOUNT);
         let bal = coin::into_balance(merged);
         balance::join(&mut treasury.unxv, bal);
         event::emit(FeeReceived { source, asset: b"UNXV".to_string(), amount: total, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        vector::destroy_empty<Coin<UNXV>>(v);
     }
 }
 
