@@ -49,6 +49,59 @@ module unxversal::synthetics {
         dst
     }
 
+    // Clone a vector<String> (deep copy)
+    fun clone_string_vec(src: &vector<String>): vector<String> {
+        let mut out = vector::empty<String>();
+        let mut i = 0; let n = vector::length(src);
+        while (i < n) { let s = vector::borrow(src, i); vector::push_back(&mut out, clone_string(s)); i = i + 1; };
+        out
+    }
+
+    // String equality by bytes
+    fun eq_string(a: &String, b: &String): bool {
+        let ab = string::as_bytes(a);
+        let bb = string::as_bytes(b);
+        let la = vector::length(ab);
+        let lb = vector::length(bb);
+        if (la != lb) { return false; };
+        let mut i = 0;
+        while (i < la) {
+            if (*vector::borrow(ab, i) != *vector::borrow(bb, i)) { return false; };
+            i = i + 1;
+        };
+        true
+    }
+
+    // Track a symbol in a vector<String> if it is not present
+    fun push_symbol_if_missing(list: &mut vector<String>, sym: &String) {
+        let mut i = 0; let n = vector::length(list);
+        while (i < n) { let cur = vector::borrow(list, i); if (eq_string(cur, sym)) { return; }; i = i + 1; };
+        vector::push_back(list, clone_string(sym));
+    }
+
+    // Remove a symbol from a vector<String> if present (first occurrence)
+    fun remove_symbol_if_present(list: &mut vector<String>, sym: &String) {
+        let mut out = vector::empty<String>();
+        let mut i = 0; let n = vector::length(list);
+        while (i < n) {
+            let cur = vector::borrow(list, i);
+            if (!eq_string(cur, sym)) { vector::push_back(&mut out, clone_string(cur)); };
+            i = i + 1;
+        };
+        *list = out;
+    }
+
+    // Lookup helper: find price for a symbol inside the parallel vectors. Returns 0 if not found.
+    fun price_for_symbol(symbols: &vector<String>, prices: &vector<u64>, sym: &String): u64 {
+        let mut i = 0; let n = vector::length(symbols);
+        while (i < n) {
+            let s = vector::borrow(symbols, i);
+            if (eq_string(s, sym)) { return *vector::borrow(prices, i); };
+            i = i + 1;
+        };
+        0
+    }
+
     // Local price scaling helper (micro-USD), avoids dependency cycle with oracle module
     // Using Switchboard's aggregator recency; no per-call max-age here
     const U64_MAX_LITERAL: u64 = 18_446_744_073_709_551_615;
@@ -143,6 +196,8 @@ module unxversal::synthetics {
         synthetics: Table<String, SyntheticAsset>,
         /// Map **symbol → Pyth feed bytes** for oracle lookup.
         oracle_feeds: Table<String, vector<u8>>,
+        /// Listing helper – list of all listed synthetic symbols
+        listed_symbols: vector<String>,
         /// System-wide configurable risk / fee parameters.
         global_params: GlobalParams,
         /// Emergency-circuit-breaker flag.
@@ -254,6 +309,8 @@ module unxversal::synthetics {
         collateral: Balance<C>,
         /// symbol → synthetic debt amount
         synthetic_debt: Table<String, u64>,
+        /// Helper list to enumerate symbols with non‑zero debt
+        debt_symbols: vector<String>,
         last_update_ms: u64,
     }
 
@@ -335,6 +392,8 @@ module unxversal::synthetics {
         table::add(&mut registry.synthetics, sym_for_synth, asset_entry);
         let sym_for_oracle = clone_string(&asset_symbol);
         table::add(&mut registry.oracle_feeds, sym_for_oracle, pyth_feed_id);
+        // track listing for read‑only enumeration
+        vector::push_back(&mut registry.listed_symbols, clone_string(&asset_symbol));
         registry.num_synthetics = registry.num_synthetics + 1;
         assert!(registry.num_synthetics <= registry.global_params.max_synthetics, E_ASSET_EXISTS);
 
@@ -449,11 +508,13 @@ module unxversal::synthetics {
 
         let coin_zero = balance::zero<C>();
         let debt_table = table::new<String, u64>(ctx);
+        let debt_syms = vector::empty<String>();
         let vault = CollateralVault<C> {
             id: object::new(ctx),
             owner: ctx.sender(),
             collateral: coin_zero,
             synthetic_debt: debt_table,
+            debt_symbols: debt_syms,
             last_update_ms: sui::tx_context::epoch_timestamp_ms(ctx),
         };
         transfer::share_object(vault);
@@ -503,6 +564,48 @@ module unxversal::synthetics {
         coin_out
     }
 
+    /// Multi-asset withdrawal: checks aggregate health using caller-supplied symbol/price vectors
+    public fun withdraw_collateral_multi<C>(
+        cfg: &CollateralConfig<C>,
+        vault: &mut CollateralVault<C>,
+        registry: &SynthRegistry,
+        symbols: vector<String>,
+        prices: vector<u64>,
+        amount: u64,
+        ctx: &mut TxContext
+    ): Coin<C> {
+        assert!(!registry.paused, 1000);
+        assert!(vault.owner == ctx.sender(), E_NOT_OWNER);
+        assert_cfg_matches(registry, cfg);
+        // Compute post-withdraw ratio vs max min_collateral_ratio among open debts
+        // First: total debt value
+        let mut total_debt_value: u64 = 0; let mut max_min_ccr = registry.global_params.min_collateral_ratio;
+        let mut i = 0; let n = vector::length(&symbols);
+        while (i < n) {
+            let sym = *vector::borrow(&symbols, i);
+            let px = *vector::borrow(&prices, i);
+            if (table::contains(&vault.synthetic_debt, clone_string(&sym))) {
+                let du = *table::borrow(&vault.synthetic_debt, clone_string(&sym));
+                if (du > 0) {
+                    assert!(px > 0, E_BAD_PRICE);
+                    total_debt_value = total_debt_value + (du * px);
+                    let a = table::borrow(&registry.synthetics, clone_string(&sym));
+                    let m = if (a.min_collateral_ratio > 0) { a.min_collateral_ratio } else { registry.global_params.min_collateral_ratio };
+                    if (m > max_min_ccr) { max_min_ccr = m; };
+                };
+            };
+            i = i + 1;
+        };
+        let collateral_after = if (balance::value(&vault.collateral) > amount) { balance::value(&vault.collateral) - amount } else { 0 };
+        let ratio_after = if (total_debt_value == 0) { U64_MAX_LITERAL } else { (collateral_after * 10_000) / total_debt_value };
+        assert!(ratio_after >= max_min_ccr, E_VAULT_NOT_HEALTHY);
+        let bal_out = balance::split(&mut vault.collateral, amount);
+        let coin_out = coin::from_balance(bal_out, ctx);
+        vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
+        event::emit(CollateralWithdrawn { vault_id: object::id(vault), amount, withdrawer: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        coin_out
+    }
+
     /// Phase‑2 – mint / burn flows
     fun mint_synthetic_internal<C>(
         vault: &mut CollateralVault<C>,
@@ -530,6 +633,8 @@ module unxversal::synthetics {
         if (table::contains(debt_table, clone_string(&synthetic_symbol))) {
             let k_rm = clone_string(&synthetic_symbol);
             let _ = table::remove(debt_table, k_rm);
+        } else {
+            push_symbol_if_missing(&mut vault.debt_symbols, &synthetic_symbol);
         };
         table::add(debt_table, synthetic_symbol, new_debt);
         asset.total_supply = asset.total_supply + amount;
@@ -557,6 +662,7 @@ module unxversal::synthetics {
         let k_rm = clone_string(&synthetic_symbol);
         let _ = table::remove(debt_table, k_rm);
         table::add(debt_table, synthetic_symbol, new_debt);
+        if (new_debt == 0) { remove_symbol_if_present(&mut vault.debt_symbols, &synthetic_symbol); };
         asset.total_supply = asset.total_supply - amount;
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
     }
@@ -651,6 +757,8 @@ module unxversal::synthetics {
         // Update debt, supply
         if (table::contains(debt_table, clone_string(&synthetic_symbol))) {
             let _ = table::remove(debt_table, clone_string(&synthetic_symbol));
+        } else {
+            push_symbol_if_missing(&mut vault.debt_symbols, &synthetic_symbol);
         };
         table::add(debt_table, clone_string(&synthetic_symbol), new_debt);
         asset.total_supply = asset.total_supply + amount;
@@ -711,6 +819,92 @@ module unxversal::synthetics {
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
     }
 
+    /// Multi-asset mint: gate by aggregate CCR using caller-supplied vectors; mint one target synth
+    public fun mint_synthetic_multi<C>(
+        cfg: &CollateralConfig<C>,
+        vault: &mut CollateralVault<C>,
+        registry: &mut SynthRegistry,
+        symbols: vector<String>,
+        prices: vector<u64>,
+        target_symbol: String,
+        target_price: u64,
+        amount: u64,
+        unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &Aggregator,
+        clock: &Clock,
+        oracle_cfg: &OracleConfig,
+        treasury: &mut Treasury<C>,
+        ctx: &mut TxContext
+    ) {
+        assert!(!registry.paused, 1000);
+        assert_cfg_matches(registry, cfg);
+        // compute total debt including the new target mint
+        let mut total_debt_value: u64 = 0; let mut max_min_ccr = registry.global_params.min_collateral_ratio;
+        let mut i = 0; let n = vector::length(&symbols);
+        while (i < n) {
+            let sym = *vector::borrow(&symbols, i);
+            let px = *vector::borrow(&prices, i);
+            if (table::contains(&vault.synthetic_debt, clone_string(&sym))) {
+                let du = *table::borrow(&vault.synthetic_debt, clone_string(&sym));
+                if (du > 0) {
+                    assert!(px > 0, E_BAD_PRICE);
+                    total_debt_value = total_debt_value + (du * px);
+                    let a = table::borrow(&registry.synthetics, clone_string(&sym));
+                    let m = if (a.min_collateral_ratio > 0) { a.min_collateral_ratio } else { registry.global_params.min_collateral_ratio };
+                    if (m > max_min_ccr) { max_min_ccr = m; };
+                };
+            };
+            i = i + 1;
+        };
+        // add target increment
+        assert!(target_price > 0, E_BAD_PRICE);
+        total_debt_value = total_debt_value + (amount * target_price);
+        let akey = clone_string(&target_symbol);
+        let mut asset = table::borrow_mut(&mut registry.synthetics, akey);
+        let tgt_min = if (asset.min_collateral_ratio > 0) { asset.min_collateral_ratio } else { registry.global_params.min_collateral_ratio };
+        if (tgt_min > max_min_ccr) { max_min_ccr = tgt_min; };
+        let collateral_value = balance::value(&vault.collateral);
+        let ratio_after = if (total_debt_value == 0) { U64_MAX_LITERAL } else { (collateral_value * 10_000) / total_debt_value };
+        assert!(ratio_after >= max_min_ccr, E_RATIO_TOO_LOW);
+
+        // Update debt and supply
+        let debt_table = &mut vault.synthetic_debt;
+        let old = if (table::contains(debt_table, clone_string(&target_symbol))) { *table::borrow(debt_table, clone_string(&target_symbol)) } else { 0 };
+        let newd = old + amount;
+        if (table::contains(debt_table, clone_string(&target_symbol))) { let _ = table::remove(debt_table, clone_string(&target_symbol)); } else { push_symbol_if_missing(&mut vault.debt_symbols, &target_symbol); };
+        table::add(debt_table, clone_string(&target_symbol), newd);
+        asset.total_supply = asset.total_supply + amount;
+
+        // Mint fee with UNXV discount (reuse target_price)
+        let mint_bps = if (asset.mint_fee_bps > 0) { asset.mint_fee_bps } else { registry.global_params.mint_fee };
+        let notional = amount * target_price;
+        let base_fee = (notional * mint_bps) / 10_000;
+        let discount_collateral = (base_fee * registry.global_params.unxv_discount_bps) / 10_000;
+        let mut discount_applied = false;
+        if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
+            let price_unxv_u64 = get_price_scaled_1e6(clock, oracle_cfg, unxv_price);
+            if (price_unxv_u64 > 0) {
+                let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
+                let mut merged = coin::zero<UNXV>(ctx);
+                let mut j = 0;
+                while (j < vector::length(&unxv_payment)) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); j = j + 1; };
+                let have = coin::value(&merged);
+                if (have >= unxv_needed) {
+                    let exact = coin::split(&mut merged, unxv_needed, ctx);
+                    let mut vecu = vector::empty<Coin<UNXV>>();
+                    vector::push_back(&mut vecu, exact);
+                    TreasuryMod::deposit_unxv(treasury, vecu, b"mint".to_string(), vault.owner, ctx);
+                    transfer::public_transfer(merged, vault.owner);
+                    discount_applied = true;
+                } else { transfer::public_transfer(merged, vault.owner); }
+            }
+        };
+        let fee_to_collect = if (discount_applied) { base_fee - discount_collateral } else { base_fee };
+        if (fee_to_collect > 0) { let fee_bal = balance::split(&mut vault.collateral, fee_to_collect); let fee_coin = coin::from_balance(fee_bal, ctx); TreasuryMod::deposit_collateral(treasury, fee_coin, b"mint".to_string(), ctx.sender(), ctx); };
+        event::emit(SyntheticMinted { vault_id: object::id(vault), synthetic_type: target_symbol, amount_minted: amount, collateral_deposit: 0, minter: ctx.sender(), new_collateral_ratio: ratio_after, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
+    }
+
     public fun burn_synthetic<C>(
         cfg: &CollateralConfig<C>,
         vault: &mut CollateralVault<C>,
@@ -736,6 +930,7 @@ module unxversal::synthetics {
         let new_debt = old_debt - amount;
         let _ = table::remove(debt_table, clone_string(&synthetic_symbol));
         table::add(debt_table, clone_string(&synthetic_symbol), new_debt);
+        if (new_debt == 0) { remove_symbol_if_present(&mut vault.debt_symbols, &synthetic_symbol); };
         asset.total_supply = asset.total_supply - amount;
 
         // Fee for burn – allow UNXV discount; per-asset override
@@ -850,10 +1045,8 @@ module unxversal::synthetics {
         (ratio, liq)
     }
 
-    // Listing keys is not supported by sui::table; expose per-symbol APIs instead.
-    // Keeping a stub that returns an empty list to avoid breaking external callers.
     /// Helper getters for bots/indexers
-    public fun list_vault_debt_symbols<C>(_vault: &CollateralVault<C>): vector<String> { vector::empty<String>() }
+    public fun list_vault_debt_symbols<C>(vault: &CollateralVault<C>): vector<String> { clone_string_vec(&vault.debt_symbols) }
     public fun get_vault_debt<C>(vault: &CollateralVault<C>, symbol: &String): u64 {
         let k = clone_string(symbol);
         if (table::contains(&vault.synthetic_debt, k)) {
@@ -1069,7 +1262,7 @@ module unxversal::synthetics {
 
     /// Read-only helpers (bots/indexers)
     /// List all listed synthetic symbols
-    public fun list_synthetics(_registry: &SynthRegistry): vector<String> { vector::empty<String>() }
+    public fun list_synthetics(registry: &SynthRegistry): vector<String> { clone_string_vec(&registry.listed_symbols) }
 
     /// Get read-only reference to a listed synthetic asset
     public fun get_synthetic(registry: &SynthRegistry, symbol: &String): &SyntheticAsset { table::borrow(&registry.synthetics, clone_string(symbol)) }
@@ -1162,6 +1355,66 @@ module unxversal::synthetics {
         });
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
     }
+
+    /// Multi-asset liquidation: gate by aggregate ratio against max liquidation threshold across open debts
+    public fun liquidate_vault_multi<C>(
+        registry: &mut SynthRegistry,
+        vault: &mut CollateralVault<C>,
+        symbols: vector<String>,
+        prices: vector<u64>,
+        target_symbol: String,
+        repay_amount: u64,
+        liquidator: address,
+        treasury: &mut Treasury<C>,
+        ctx: &mut TxContext
+    ) {
+        assert!(!registry.paused, 1000);
+        // compute aggregate ratio and max threshold
+        let mut total_debt_value: u64 = 0; let mut max_th = registry.global_params.liquidation_threshold;
+        let mut i = 0; let n = vector::length(&symbols);
+        while (i < n) {
+            let sym = *vector::borrow(&symbols, i);
+            let px = *vector::borrow(&prices, i);
+            if (table::contains(&vault.synthetic_debt, clone_string(&sym))) {
+                let du = *table::borrow(&vault.synthetic_debt, clone_string(&sym));
+                if (du > 0) {
+                    assert!(px > 0, E_BAD_PRICE);
+                    total_debt_value = total_debt_value + (du * px);
+                    let a = table::borrow(&registry.synthetics, clone_string(&sym));
+                    let th = if (a.liquidation_threshold_bps > 0) { a.liquidation_threshold_bps } else { registry.global_params.liquidation_threshold };
+                    if (th > max_th) { max_th = th; };
+                };
+            };
+            i = i + 1;
+        };
+        let collateral_value = balance::value(&vault.collateral);
+        let ratio = if (total_debt_value == 0) { U64_MAX_LITERAL } else { (collateral_value * 10_000) / total_debt_value };
+        assert!(ratio < max_th, E_VAULT_NOT_HEALTHY);
+
+        // Proceed to repay target asset like single-asset path
+        let outstanding = if (table::contains(&vault.synthetic_debt, clone_string(&target_symbol))) { *table::borrow(&vault.synthetic_debt, clone_string(&target_symbol)) } else { 0 };
+        let repay = if (repay_amount > outstanding) { outstanding } else { repay_amount };
+        assert!(repay > 0, E_INVALID_ORDER);
+        let px_target = price_for_symbol(&symbols, &prices, &target_symbol);
+        assert!(px_target > 0, E_BAD_PRICE);
+        let notional = repay * px_target;
+        let asset_for_liq = table::borrow(&registry.synthetics, clone_string(&target_symbol));
+        let liq_pen_bps = if (asset_for_liq.liquidation_penalty_bps > 0) { asset_for_liq.liquidation_penalty_bps } else { registry.global_params.liquidation_penalty };
+        let penalty = (notional * liq_pen_bps) / 10_000;
+        let seize = notional + penalty;
+
+        let new_debt = outstanding - repay;
+        if (table::contains(&vault.synthetic_debt, clone_string(&target_symbol))) { let _ = table::remove(&mut vault.synthetic_debt, clone_string(&target_symbol)); };
+        table::add(&mut vault.synthetic_debt, clone_string(&target_symbol), new_debt);
+        if (new_debt == 0) { remove_symbol_if_present(&mut vault.debt_symbols, &target_symbol); };
+        let mut seized_coin = { let seized_bal = balance::split(&mut vault.collateral, seize); coin::from_balance(seized_bal, ctx) };
+        let bot_cut = (seize * registry.global_params.bot_split) / 10_000;
+        let to_bot = coin::split(&mut seized_coin, bot_cut, ctx);
+        transfer::public_transfer(to_bot, liquidator);
+        TreasuryMod::deposit_collateral(treasury, seized_coin, b"liquidation".to_string(), liquidator, ctx);
+        event::emit(LiquidationExecuted { vault_id: object::id(vault), liquidator, liquidated_amount: repay, collateral_seized: seize, liquidation_penalty: penalty, synthetic_type: target_symbol, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
+    }
     /// Internal helper – assert caller is in allow‑list
     fun assert_is_admin(registry: &SynthRegistry, addr: address) {
         assert!(vec_set::contains(&registry.admin_addrs, &addr), E_NOT_ADMIN);
@@ -1187,7 +1440,7 @@ module unxversal::synthetics {
             liquidation_penalty: 500,         // 5%
             max_synthetics: 100,
             stability_fee: 200,               // 2% APY
-            bot_split: 4_000,                 // 10%
+            bot_split: 1_000,                 // 10%
             mint_fee: 50,                     // 0.5%
             burn_fee: 30,                     // 0.3%
             unxv_discount_bps: 2_000,         // 20% discount when paying with UNXV
@@ -1197,6 +1450,7 @@ module unxversal::synthetics {
         // 4️⃣ Create empty tables and admin allow‑list (deployer is first admin)
         let syn_table = table::new<String, SyntheticAsset>(ctx);
         let feed_table = table::new<String, vector<u8>>(ctx);
+        let listed_symbols = vector::empty<String>();
         let mut admins = vec_set::empty<address>();
         vec_set::insert(&mut admins, ctx.sender());
 
@@ -1209,6 +1463,7 @@ module unxversal::synthetics {
             id: object::new(ctx),
             synthetics: syn_table,
             oracle_feeds: feed_table,
+            listed_symbols,
             global_params: params,
             paused: false,
             admin_addrs: admins,
@@ -1260,10 +1515,7 @@ module unxversal::synthetics {
         synth_disp.update_version();
         transfer::public_transfer(synth_disp, ctx.sender());
 
-        // Register CollateralVault display for the chosen collateral type.
-        // This init assumes a concrete C will be provided in a follow-up call from setup flows.
-        // For convenience, initialize a generic display template for a placeholder coin type (e.g., UNXV)
-        init_vault_display<UNXV>(&publisher, ctx);
+        // CollateralVault display is registered when governance binds the concrete collateral via set_collateral<C>()
 
         // OracleConfig display is registered within the oracle module to avoid dependency cycles.
     }
@@ -1296,9 +1548,11 @@ module unxversal::synthetics {
 
     /// Bind the system to a specific collateral coin type C exactly once.
     /// Creates and shares a `CollateralConfig<C>` object and records its ID in the registry.
-    public entry fun set_collateral<C>(
+    /// Also registers Display metadata for `CollateralVault<C>` using a provided `Publisher`.
+    public fun set_collateral<C>(
         _admin: &AdminCap,
         registry: &mut SynthRegistry,
+        publisher: &Publisher,
         ctx: &mut TxContext
     ) {
         // Allow‑list enforcement
@@ -1311,10 +1565,12 @@ module unxversal::synthetics {
         registry.collateral_cfg_id = option::some<ID>(cfg_id);
         // Expose the config as a shared object so other modules can reference it
         transfer::share_object(cfg);
+        // Register display for the concrete collateral type now that C is bound
+        init_vault_display<C>(publisher, ctx);
     }
 
     /// Update the registry's treasury reference to the concrete `Treasury<C>` selected by governance.
-    public entry fun set_registry_treasury<C>(
+    public fun set_registry_treasury<C>(
         _admin: &AdminCap,
         registry: &mut SynthRegistry,
         treasury: &Treasury<C>,
