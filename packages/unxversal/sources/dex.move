@@ -6,8 +6,9 @@ module unxversal::dex {
     *******************************/
     use sui::tx_context::TxContext;
     use sui::transfer;
+    use sui::display;
+    use sui::package::Publisher;
     use sui::coin::{Self as coin, Coin};
-    use sui::balance::{Self as balance, Balance};
     use sui::clock::Clock;
     use sui::event;
     use std::string::String;
@@ -20,7 +21,6 @@ module unxversal::dex {
     use unxversal::oracle::{OracleConfig, get_price_scaled_1e6};
     // Removed cross-module FeeCollected emission; fees are accounted in Treasury
     use unxversal::treasury::{Self as TreasuryMod, Treasury};
-    use sui::vec_set::{Self as vec_set};
 
     fun assert_is_admin(registry: &SynthRegistry, addr: address) { assert!(SyntheticsMod::is_admin(registry, addr), E_NOT_ADMIN); }
 
@@ -28,6 +28,10 @@ module unxversal::dex {
     const E_ZERO_AMOUNT: u64 = 2;
     const E_PAUSED: u64 = 3;
     const E_NOT_ADMIN: u64 = 4;
+    const E_EXPIRED: u64 = 5;
+    const E_NOT_CROSSED: u64 = 6;
+    const E_BAD_BOUNDS: u64 = 7;
+    
 
     /*******************************
     * Events & Config
@@ -110,6 +114,43 @@ module unxversal::dex {
             paused: false,
         };
         transfer::share_object(cfg);
+    }
+
+    // Display registration for better wallet/indexer UX
+    public entry fun init_dex_displays<Base: store, C: store>(publisher: &Publisher, ctx: &mut TxContext) {
+        let mut d_cfg = display::new<DexConfig>(publisher, ctx);
+        d_cfg.add(b"name".to_string(), b"Unxversal DEX Config".to_string());
+        d_cfg.add(b"description".to_string(), b"Global parameters for the Unxversal on-chain DEX".to_string());
+        d_cfg.update_version();
+        transfer::public_transfer(d_cfg, ctx.sender());
+
+        let mut d_sell = display::new<CoinOrderSell<Base>>(publisher, ctx);
+        d_sell.add(b"name".to_string(), b"Sell {remaining_base} @ {price}".to_string());
+        d_sell.add(b"description".to_string(), b"Escrowed sell order".to_string());
+        d_sell.add(b"expiry_ms".to_string(), b"{expiry_ms}".to_string());
+        d_sell.update_version();
+        transfer::public_transfer(d_sell, ctx.sender());
+
+        let mut d_buy = display::new<CoinOrderBuy<Base, C>>(publisher, ctx);
+        d_buy.add(b"name".to_string(), b"Buy {remaining_base} @ {price}".to_string());
+        d_buy.add(b"description".to_string(), b"Escrowed buy order".to_string());
+        d_buy.add(b"expiry_ms".to_string(), b"{expiry_ms}".to_string());
+        d_buy.update_version();
+        transfer::public_transfer(d_buy, ctx.sender());
+
+        let mut d_vs = display::new<VaultOrderSell<Base>>(publisher, ctx);
+        d_vs.add(b"name".to_string(), b"Vault Sell {remaining_base} @ {price}".to_string());
+        d_vs.add(b"description".to_string(), b"Vault-mode sell order".to_string());
+        d_vs.add(b"expiry_ms".to_string(), b"{expiry_ms}".to_string());
+        d_vs.update_version();
+        transfer::public_transfer(d_vs, ctx.sender());
+
+        let mut d_vb = display::new<VaultOrderBuy<Base, C>>(publisher, ctx);
+        d_vb.add(b"name".to_string(), b"Vault Buy {remaining_base} @ {price}".to_string());
+        d_vb.add(b"description".to_string(), b"Vault-mode buy order".to_string());
+        d_vb.add(b"expiry_ms".to_string(), b"{expiry_ms}".to_string());
+        d_vb.update_version();
+        transfer::public_transfer(d_vb, ctx.sender());
     }
 
     public entry fun set_trade_fee_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.trade_fee_bps = bps; }
@@ -229,11 +270,11 @@ module unxversal::dex {
     ) {
         assert!(!cfg.paused, E_PAUSED);
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
-        if (buy.expiry_ms != 0) { assert!(now <= buy.expiry_ms, E_PAUSED); };
-        if (sell.expiry_ms != 0) { assert!(now <= sell.expiry_ms, E_PAUSED); };
-        assert!(buy.price >= sell.price, E_PAUSED);
+        if (buy.expiry_ms != 0) { assert!(now <= buy.expiry_ms, E_EXPIRED); };
+        if (sell.expiry_ms != 0) { assert!(now <= sell.expiry_ms, E_EXPIRED); };
+        assert!(buy.price >= sell.price, E_NOT_CROSSED);
         let trade_price = if (taker_is_buyer) { sell.price } else { buy.price };
-        assert!(trade_price >= min_price && trade_price <= max_price, E_PAUSED);
+        assert!(trade_price >= min_price && trade_price <= max_price, E_BAD_BOUNDS);
         let a = if (buy.remaining_base < sell.remaining_base) { buy.remaining_base } else { sell.remaining_base };
         let fill = if (a < max_fill_base) { a } else { max_fill_base };
         assert!(fill > 0, E_ZERO_AMOUNT);
@@ -290,7 +331,7 @@ module unxversal::dex {
             TreasuryMod::deposit_collateral(treasury, fee_coin_all, b"otc_match".to_string(), if (taker_is_buyer) { buy.owner } else { sell.owner }, ctx);
         };
 
-        // Update remaining
+        // Update remaining (allow external GC helpers to clean up empties)
         buy.remaining_base = buy.remaining_base - fill;
         sell.remaining_base = sell.remaining_base - fill;
 
@@ -326,6 +367,17 @@ module unxversal::dex {
         order
     }
 
+    // Entry wrappers that place and share coin orders in one call (matchable by others)
+    public entry fun place_and_share_coin_sell_order<Base: store>(cfg: &DexConfig, price: u64, size_base: u64, base: Coin<Base>, expiry_ms: u64, ctx: &mut TxContext) {
+        let order = place_coin_sell_order(cfg, price, size_base, base, expiry_ms, ctx);
+        transfer::share_object(order);
+    }
+
+    public entry fun place_and_share_coin_buy_order<Base: store, C: store>(cfg: &DexConfig, price: u64, size_base: u64, collateral: Coin<C>, expiry_ms: u64, ctx: &mut TxContext) {
+        let order = place_coin_buy_order<Base, C>(cfg, price, size_base, collateral, expiry_ms, ctx);
+        transfer::share_object(order);
+    }
+
     public entry fun cancel_coin_sell_order<Base: store>(order: CoinOrderSell<Base>, ctx: &mut TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
         let order_id = object::id(&order);
@@ -341,6 +393,47 @@ module unxversal::dex {
         let CoinOrderBuy<Base, C> { id, owner, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_collateral } = order;
         transfer::public_transfer(escrow_collateral, owner);
         event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        object::delete(id);
+    }
+
+    // Expiry lifecycle helpers – anyone can cancel expired orders to return funds
+    public entry fun cancel_coin_sell_if_expired<Base: store>(order: CoinOrderSell<Base>, ctx: &mut TxContext) {
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
+        let order_id = object::id(&order);
+        let CoinOrderSell<Base> { id, owner, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_base } = order;
+        transfer::public_transfer(escrow_base, owner);
+        event::emit(CoinOrderCancelled { order_id, owner, timestamp: now });
+        object::delete(id);
+    }
+
+    public entry fun cancel_coin_buy_if_expired<Base: store, C: store>(order: CoinOrderBuy<Base, C>, ctx: &mut TxContext) {
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
+        let order_id = object::id(&order);
+        let CoinOrderBuy<Base, C> { id, owner, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_collateral } = order;
+        transfer::public_transfer(escrow_collateral, owner);
+        event::emit(CoinOrderCancelled { order_id, owner, timestamp: now });
+        object::delete(id);
+    }
+
+    public entry fun cancel_vault_sell_if_expired<Base: store>(order: VaultOrderSell<Base>, to_store: &mut Coin<Base>, ctx: &mut TxContext) {
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
+        let order_id = object::id(&order);
+        let VaultOrderSell<Base> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_base } = order;
+        coin::join(to_store, escrow_base);
+        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: now });
+        object::delete(id);
+    }
+
+    public entry fun cancel_vault_buy_if_expired<Base: store, C: store>(order: VaultOrderBuy<Base, C>, to_store: &mut Coin<C>, ctx: &mut TxContext) {
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
+        let order_id = object::id(&order);
+        let VaultOrderBuy<Base, C> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_collateral } = order;
+        coin::join(to_store, escrow_collateral);
+        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: now });
         object::delete(id);
     }
 
@@ -364,13 +457,13 @@ module unxversal::dex {
     ) {
         assert!(!cfg.paused, E_PAUSED);
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
-        if (buy.expiry_ms != 0) { assert!(now <= buy.expiry_ms, E_PAUSED); };
-        if (sell.expiry_ms != 0) { assert!(now <= sell.expiry_ms, E_PAUSED); };
+        if (buy.expiry_ms != 0) { assert!(now <= buy.expiry_ms, E_EXPIRED); };
+        if (sell.expiry_ms != 0) { assert!(now <= sell.expiry_ms, E_EXPIRED); };
         // Crossed
-        assert!(buy.price >= sell.price, E_PAUSED);
+        assert!(buy.price >= sell.price, E_NOT_CROSSED);
         let trade_price = if (taker_is_buyer) { sell.price } else { buy.price };
         // Slippage bounds
-        assert!(trade_price >= min_price && trade_price <= max_price, E_PAUSED);
+        assert!(trade_price >= min_price && trade_price <= max_price, E_BAD_BOUNDS);
         let a = if (buy.remaining_base < sell.remaining_base) { buy.remaining_base } else { sell.remaining_base };
         let fill = if (a < max_fill_base) { a } else { max_fill_base };
         assert!(fill > 0, E_ZERO_AMOUNT);
@@ -426,7 +519,7 @@ module unxversal::dex {
             TreasuryMod::deposit_collateral(treasury, fee_coin_all, b"otc_match".to_string(), if (taker_is_buyer) { buy.owner } else { sell.owner }, ctx);
         };
 
-        // Update remaining
+        // Update remaining (orders can be GC'd by anyone using gc helpers when empty)
         buy.remaining_base = buy.remaining_base - fill;
         sell.remaining_base = sell.remaining_base - fill;
 
