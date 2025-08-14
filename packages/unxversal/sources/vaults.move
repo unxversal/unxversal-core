@@ -1,3 +1,4 @@
+/* legacy secondary module removed */
 module unxversal::vaults {
     /*******************************
     * Unxversal Vaults – Liquidity and Trader Vaults
@@ -9,16 +10,13 @@ module unxversal::vaults {
     * - TraderVault<C>: collateral-only, share accounting, manager stake, HWM performance fees
     * - Rich events and read-only helpers
     *******************************/
-
-    use sui::tx_context::TxContext;
-    use sui::transfer;
-    use sui::object;
+    
     use sui::event;
     use sui::clock::Clock;
     use sui::coin::{Self as coin, Coin};
     use std::string::{Self as string, String};
     use sui::table::{Self as table, Table};
-    use std::vector;
+    
     use sui::clock; // for timestamp_ms
 
     // Collateral coin is generic; avoid direct USDC dependency
@@ -70,9 +68,9 @@ module unxversal::vaults {
     public struct LPDeposit has copy, drop { vault_id: ID, lp: address, collateral_amount: u64, shares_issued: u64, total_shares_after: u64, timestamp: u64 }
     public struct LPWithdrawal has copy, drop { vault_id: ID, lp: address, shares_redeemed: u64, collateral_paid: u64, base_paid: u64, pro_rata_mode: bool, timestamp: u64 }
     public struct LiquidityVaultShutdown has copy, drop { vault_id: ID, by: address, timestamp: u64 }
-    public struct VaultDexOrderTracked has copy, drop { vault_id: ID, order_id: ID, side: u8, price: u64, size_base: u64, created_at_ms: u64, expiry_ms: u64 }
+    // Removed unused VaultDexOrderTracked (order tracking handled via DEX events and active_orders IDs)
 
-    public struct LiquidityVault<Base: store, C: store> has key, store {
+    public struct LiquidityVault<phantom Base: store, phantom C: store> has key, store {
         id: UID,
         manager: address,
         base_symbol: String,
@@ -111,7 +109,7 @@ module unxversal::vaults {
     public struct PerformanceFeesCalculated has copy, drop { vault_id: ID, hwm_before_1e6: u64, hwm_after_1e6: u64, perf_fee_bps: u64, manager_fee_collateral: u64, protocol_fee_collateral: u64, timestamp: u64 }
     public struct TraderVaultShutdown has copy, drop { vault_id: ID, by: address, timestamp: u64 }
 
-    public struct TraderVault<C: store> has key, store {
+    public struct TraderVault<phantom C: store> has key, store {
         id: UID,
         manager: address,
         // Balances
@@ -134,13 +132,13 @@ module unxversal::vaults {
     /*******************************
     * Registry initialization
     *******************************/
-    public entry fun init_liquidity_registry<C>(registry: &SynthRegistry, treasury: &Treasury<C>, ctx: &mut TxContext) {
+    public fun init_liquidity_registry<C>(registry: &SynthRegistry, treasury: &Treasury<C>, ctx: &mut TxContext) {
         assert_is_admin(registry, ctx.sender());
         let r = LiquidityRegistry { id: object::new(ctx), treasury_id: object::id(treasury), paused: false, min_cash_bps: 500, default_management_fee_bps: 0 };
         transfer::share_object(r);
     }
 
-    public entry fun init_trader_registry<C>(registry: &SynthRegistry, treasury: &Treasury<C>, ctx: &mut TxContext) {
+    public fun init_trader_registry<C>(registry: &SynthRegistry, treasury: &Treasury<C>, ctx: &mut TxContext) {
         assert_is_admin(registry, ctx.sender());
         let r = TraderVaultRegistry { id: object::new(ctx), treasury_id: object::id(treasury), paused: false, min_manager_stake_bps: 500, default_perf_fee_bps: 1000, protocol_perf_fee_bps: 0 };
         transfer::share_object(r);
@@ -149,23 +147,23 @@ module unxversal::vaults {
     /*******************************
     * Admin setters (via SynthRegistry allow-list)
     *******************************/
-    public entry fun set_liquidity_min_cash(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut LiquidityRegistry, bps: u64, _ctx: &TxContext) { assert_is_admin(registry, _ctx.sender()); cfg.min_cash_bps = bps; }
-    public entry fun pause_liquidity(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut LiquidityRegistry, _ctx: &TxContext) { assert_is_admin(registry, _ctx.sender()); cfg.paused = true; }
-    public entry fun resume_liquidity(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut LiquidityRegistry, _ctx: &TxContext) { assert_is_admin(registry, _ctx.sender()); cfg.paused = false; }
+    public fun set_liquidity_min_cash(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut LiquidityRegistry, bps: u64, _ctx: &TxContext) { assert_is_admin(registry, _ctx.sender()); cfg.min_cash_bps = bps; }
+    public fun pause_liquidity(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut LiquidityRegistry, _ctx: &TxContext) { assert_is_admin(registry, _ctx.sender()); cfg.paused = true; }
+    public fun resume_liquidity(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut LiquidityRegistry, _ctx: &TxContext) { assert_is_admin(registry, _ctx.sender()); cfg.paused = false; }
 
-    public entry fun set_trader_params(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut TraderVaultRegistry, min_stake_bps: u64, perf_fee_bps: u64, protocol_fee_bps: u64, _ctx: &TxContext) {
+    public fun set_trader_params(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut TraderVaultRegistry, min_stake_bps: u64, perf_fee_bps: u64, protocol_fee_bps: u64, _ctx: &TxContext) {
         assert_is_admin(registry, _ctx.sender());
         cfg.min_manager_stake_bps = min_stake_bps;
         cfg.default_perf_fee_bps = perf_fee_bps;
         cfg.protocol_perf_fee_bps = protocol_fee_bps;
     }
-    public entry fun pause_trader(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut TraderVaultRegistry, _ctx: &TxContext) { assert_is_admin(registry, _ctx.sender()); cfg.paused = true; }
-    public entry fun resume_trader(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut TraderVaultRegistry, _ctx: &TxContext) { assert_is_admin(registry, _ctx.sender()); cfg.paused = false; }
+    public fun pause_trader(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut TraderVaultRegistry, _ctx: &TxContext) { assert_is_admin(registry, _ctx.sender()); cfg.paused = true; }
+    public fun resume_trader(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut TraderVaultRegistry, _ctx: &TxContext) { assert_is_admin(registry, _ctx.sender()); cfg.paused = false; }
 
     /*******************************
     * LiquidityVault lifecycle
     *******************************/
-    public entry fun create_liquidity_vault<Base: store, C: store>(
+    public fun create_liquidity_vault<Base: store, C: store>(
         cfg: &LiquidityRegistry,
         base_symbol: String,
         clock_obj: &Clock,
@@ -191,23 +189,15 @@ module unxversal::vaults {
         transfer::share_object(v)
     }
 
-    /// Compute NAV in collateral terms (micro-USD) using base price if base holdings > 0
-    fun liquidity_nav_collateral_1e6<Base: store, C: store>(v: &LiquidityVault<Base, C>, oracle_cfg: &OracleConfig, clock: &Clock, base_price: &Aggregator): u128 {
-        // Note: we cannot map symbol->feed on-chain here; the caller must provide the Aggregator matching base_symbol
-        let collateral_v = coin::value(&v.usdc) as u128;
-        let base_amt = coin::value(&v.base) as u128;
-        if (base_amt == 0u128) { return collateral_v * 1_000_000u128; };
-        let px = get_price_scaled_1e6(oracle_cfg, clock, base_price) as u128; // micro-USD per 1 base
-        collateral_v * 1_000_000u128 + (base_amt * px)
-    }
+    
 
-    public entry fun lp_deposit_collateral<Base: store, C: store>(
+    public fun lp_deposit_collateral<Base: store, C: store>(
         v: &mut LiquidityVault<Base, C>,
         cfg: &LiquidityRegistry,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
         base_price: &Aggregator,
-        mut amount: Coin<C>,
+        amount: Coin<C>,
         ctx: &mut TxContext
     ) {
         assert!(!cfg.paused && !v.shutdown, E_PAUSED);
@@ -229,12 +219,12 @@ module unxversal::vaults {
     fun nav_liquidity_collateral_1e6<Base: store, C: store>(v: &LiquidityVault<Base, C>, oracle_cfg: &OracleConfig, clock: &Clock, base_price: &Aggregator): u64 {
         let collateral_v = coin::value(&v.usdc) as u128;
         let base_amt = coin::value(&v.base) as u128;
-        if (base_amt == 0u128) { return (collateral_v * 1_000_000u128) as u64; };
-        let px = get_price_scaled_1e6(oracle_cfg, clock, base_price) as u128;
-        (collateral_v * 1_000_000u128 + base_amt * px) as u64
+        let px: u128 = if (base_amt == 0u128) { 0u128 } else { get_price_scaled_1e6(oracle_cfg, clock, base_price) as u128 };
+        let nav_u128 = (collateral_v * 1_000_000u128) + (base_amt * px);
+        nav_u128 as u64
     }
 
-    public entry fun lp_withdraw_collateral<Base: store, C: store>(
+    public fun lp_withdraw_collateral<Base: store, C: store>(
         v: &mut LiquidityVault<Base, C>,
         cfg: &LiquidityRegistry,
         oracle_cfg: &OracleConfig,
@@ -242,7 +232,7 @@ module unxversal::vaults {
         base_price: &Aggregator,
         shares_to_redeem: u64,
         ctx: &mut TxContext
-    ) {
+    ): Coin<C> {
         assert!(!cfg.paused, E_PAUSED);
         let mut bal = if (table::contains(&v.shares, ctx.sender())) { *table::borrow(&v.shares, ctx.sender()) } else { 0 };
         assert!(bal >= shares_to_redeem && shares_to_redeem > 0, E_NOT_INVESTOR);
@@ -257,16 +247,16 @@ module unxversal::vaults {
         table::add(&mut v.shares, ctx.sender(), bal);
         v.total_shares = v.total_shares - shares_to_redeem;
         event::emit(LPWithdrawal { vault_id: object::id(v), lp: ctx.sender(), shares_redeemed: shares_to_redeem, collateral_paid: payout_collateral as u64, base_paid: 0, pro_rata_mode: false, timestamp: clock::timestamp_ms(clock) });
-        transfer::public_transfer(coin_out, ctx.sender());
+        coin_out
     }
 
     /// Emergency pro-rata withdrawal distributes current collateral and Base holdings proportionally
-    public entry fun lp_emergency_withdraw_pro_rata<Base: store, C: store>(
+    public fun lp_emergency_withdraw_pro_rata<Base: store, C: store>(
         v: &mut LiquidityVault<Base, C>,
         shares_to_redeem: u64,
         clock: &Clock,
         ctx: &mut TxContext
-    ) {
+    ): (Coin<C>, Coin<Base>) {
         assert!(v.shutdown, E_PAUSED);
         let mut bal = if (table::contains(&v.shares, ctx.sender())) { *table::borrow(&v.shares, ctx.sender()) } else { 0 };
         assert!(bal >= shares_to_redeem && shares_to_redeem > 0, E_NOT_INVESTOR);
@@ -281,42 +271,41 @@ module unxversal::vaults {
         table::add(&mut v.shares, ctx.sender(), bal);
         v.total_shares = v.total_shares - shares_to_redeem;
         event::emit(LPWithdrawal { vault_id: object::id(v), lp: ctx.sender(), shares_redeemed: shares_to_redeem, collateral_paid: coin::value(&out_collateral), base_paid: coin::value(&out_base), pro_rata_mode: true, timestamp: clock::timestamp_ms(clock) });
-        transfer::public_transfer(out_collateral, ctx.sender());
-        transfer::public_transfer(out_base, ctx.sender());
+        (out_collateral, out_base)
     }
 
-    public entry fun shutdown_liquidity_vault<Base, C>(v: &mut LiquidityVault<Base, C>, clock: &Clock, ctx: &TxContext) { assert!(v.manager == ctx.sender(), E_NOT_MANAGER); v.shutdown = true; event::emit(LiquidityVaultShutdown { vault_id: object::id(v), by: ctx.sender(), timestamp: clock::timestamp_ms(clock) }); }
+    public fun shutdown_liquidity_vault<Base: store, C: store>(v: &mut LiquidityVault<Base, C>, clock: &Clock, ctx: &TxContext) { assert!(v.manager == ctx.sender(), E_NOT_MANAGER); v.shutdown = true; event::emit(LiquidityVaultShutdown { vault_id: object::id(v), by: ctx.sender(), timestamp: clock::timestamp_ms(clock) }); }
 
     /*******************************
     * LiquidityVault – DEX integration (vault-safe)
     *******************************/
-    public entry fun place_vault_sell<Base: store, C: store>(cfg: &DexConfig, v: &mut LiquidityVault<Base, C>, price: u64, size_base: u64, expiry_ms: u64, _clock: &Clock, ctx: &mut TxContext) {
+    public fun place_vault_sell<Base: store, C: store>(cfg: &DexConfig, v: &mut LiquidityVault<Base, C>, price: u64, size_base: u64, expiry_ms: u64, _clock: &Clock, ctx: &mut TxContext) {
         assert!(!v.shutdown, E_SHUTDOWN);
         assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
-        Dex::place_vault_sell_order::<Base>(cfg, price, size_base, &mut v.base, expiry_ms, ctx);
+        Dex::place_vault_sell_order<Base>(cfg, price, size_base, &mut v.base, expiry_ms, ctx);
     }
 
-    public entry fun place_vault_buy<Base: store, C: store>(cfg: &DexConfig, v: &mut LiquidityVault<Base, C>, price: u64, size_base: u64, expiry_ms: u64, _clock: &Clock, ctx: &mut TxContext) {
+    public fun place_vault_buy<Base: store, C: store>(cfg: &DexConfig, v: &mut LiquidityVault<Base, C>, price: u64, size_base: u64, expiry_ms: u64, _clock: &Clock, ctx: &mut TxContext) {
         assert!(!v.shutdown, E_SHUTDOWN);
         assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
         // Enforce min cash buffer pre-escrow
         let collateral_before = coin::value(&v.usdc);
         let collateral_needed = price * size_base;
         assert!(collateral_before >= collateral_needed, E_INSUFFICIENT_LIQUIDITY);
-        Dex::place_vault_buy_order::<Base, C>(cfg, price, size_base, &mut v.usdc, expiry_ms, ctx);
+        Dex::place_vault_buy_order<Base, C>(cfg, price, size_base, &mut v.usdc, expiry_ms, ctx);
     }
 
-    public entry fun cancel_vault_sell<Base, C>(v: &mut LiquidityVault<Base, C>, order: VaultOrderSell<Base>, ctx: &mut TxContext) {
+    public fun cancel_vault_sell<Base: store, C: store>(v: &mut LiquidityVault<Base, C>, order: VaultOrderSell<Base>, ctx: &mut TxContext) {
         assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
-        Dex::cancel_vault_sell_order::<Base>(order, &mut v.base, ctx);
+        Dex::cancel_vault_sell_order<Base>(order, &mut v.base, ctx);
     }
 
-    public entry fun cancel_vault_buy<Base, C>(v: &mut LiquidityVault<Base, C>, order: VaultOrderBuy<Base, C>, ctx: &mut TxContext) {
+    public fun cancel_vault_buy<Base: store, C: store>(v: &mut LiquidityVault<Base, C>, order: VaultOrderBuy<Base, C>, ctx: &mut TxContext) {
         assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
-        Dex::cancel_vault_buy_order::<Base, C>(order, &mut v.usdc, ctx);
+        Dex::cancel_vault_buy_order<Base, C>(order, &mut v.usdc, ctx);
     }
 
-    public entry fun match_vault_orders<Base, C>(
+    public fun match_vault_orders<Base: store, C: store>(
         cfg: &mut DexConfig,
         v_buy: &mut LiquidityVault<Base, C>,
         v_sell: &mut LiquidityVault<Base, C>,
@@ -333,7 +322,7 @@ module unxversal::vaults {
         max_price: u64,
         ctx: &mut TxContext
     ) {
-        Dex::match_vault_orders::<Base, C>(
+        Dex::match_vault_orders<Base, C>(
             cfg,
             buy,
             sell,
@@ -349,7 +338,7 @@ module unxversal::vaults {
             &mut v_buy.base,
             &mut v_sell.usdc,
             b"VAULT".to_string(),
-            v_buy.base_symbol.clone(),
+            clone_string(&v_buy.base_symbol),
             b"COLLATERAL".to_string(),
             ctx
         );
@@ -358,7 +347,7 @@ module unxversal::vaults {
     /*******************************
     * TraderVault lifecycle and accounting (collateral-only)
     *******************************/
-    public entry fun create_trader_vault<C>(
+    public fun create_trader_vault<C: store>(
         cfg: &TraderVaultRegistry,
         initial_stake: Coin<C>,
         ctx: &mut TxContext
@@ -366,7 +355,7 @@ module unxversal::vaults {
         assert!(!cfg.paused, E_PAUSED);
         let stake_amt = coin::value(&initial_stake);
         assert!(stake_amt > 0, E_ZERO_AMOUNT);
-        let mut shares_tbl = table::new<address, u64>(ctx);
+        let shares_tbl = table::new<address, u64>(ctx);
         let manager_addr = ctx.sender();
         let mut v = TraderVault<C> {
             id: object::new(ctx),
@@ -392,22 +381,22 @@ module unxversal::vaults {
         transfer::share_object(v)
     }
 
-    fun manager_stake_bps<C>(v: &TraderVault<C>): u64 {
-        if (v.total_shares == 0) { return 0; };
-        (v.manager_shares * 10_000) / v.total_shares
+    fun manager_stake_bps<C: store>(v: &TraderVault<C>): u64 {
+        if (v.total_shares == 0) { return 0 };
+        return (v.manager_shares * 10_000) / v.total_shares
     }
 
     /// Investors can deposit only if manager stake ≥ required bps
-    public entry fun investor_deposit<C>(
+    public fun investor_deposit<C: store>(
         v: &mut TraderVault<C>,
         cfg: &TraderVaultRegistry,
-        mut amount: Coin<C>,
+        amount: Coin<C>,
         ctx: &mut TxContext
     ) {
         assert!(!cfg.paused && !v.shutdown, E_PAUSED);
         // Check current stake before deposit
         let stake_bps = manager_stake_bps(v);
-        if (stake_bps < cfg.min_manager_stake_bps) { event::emit(StakeDeficit { vault_id: object::id(v), manager: v.manager, required_bps: cfg.min_manager_stake_bps, current_bps: stake_bps, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); abort E_STAKE_DEFICIT; };
+        if (stake_bps < cfg.min_manager_stake_bps) { event::emit(StakeDeficit { vault_id: object::id(v), manager: v.manager, required_bps: cfg.min_manager_stake_bps, current_bps: stake_bps, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); abort E_STAKE_DEFICIT };
         let deposit_amt = coin::value(&amount);
         assert!(deposit_amt > 0, E_ZERO_AMOUNT);
         let shares_issued = if (v.total_shares == 0) { deposit_amt } else { deposit_amt * v.total_shares / coin::value(&v.usdc) };
@@ -420,7 +409,7 @@ module unxversal::vaults {
     }
 
     /// Manager can add stake anytime (increases manager_shares proportionally)
-    public entry fun manager_add_stake<C>(v: &mut TraderVault<C>, mut stake: Coin<C>, ctx: &mut TxContext) {
+    public fun manager_add_stake<C: store>(v: &mut TraderVault<C>, stake: Coin<C>, ctx: &mut TxContext) {
         assert!(v.manager == ctx.sender() && !v.shutdown, E_NOT_MANAGER);
         let amt = coin::value(&stake);
         assert!(amt > 0, E_ZERO_AMOUNT);
@@ -436,9 +425,9 @@ module unxversal::vaults {
     }
 
     /// Manager unstake: only allowed if remains ≥ required bps or vault is shutdown
-    public entry fun manager_unstake<C>(v: &mut TraderVault<C>, cfg: &TraderVaultRegistry, shares_to_burn: u64, ctx: &mut TxContext) {
+    public fun manager_unstake<C: store>(v: &mut TraderVault<C>, cfg: &TraderVaultRegistry, shares_to_burn: u64, ctx: &mut TxContext) {
         assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
-        let mut mgr_pos = v.manager_shares;
+        let mgr_pos = v.manager_shares;
         assert!(shares_to_burn > 0 && mgr_pos >= shares_to_burn, E_NOT_INVESTOR);
         if (!v.shutdown) {
             // ensure post-unstake >= required
@@ -446,7 +435,7 @@ module unxversal::vaults {
             let mgr_post = v.manager_shares - shares_to_burn;
             let bps_post = if (total_post == 0) { 0 } else { (mgr_post * 10_000) / total_post };
             assert!(bps_post >= cfg.min_manager_stake_bps, E_STAKE_DEFICIT);
-        }
+        };
         // redeem pro-rata collateral
         let payout = (coin::value(&v.usdc) as u128) * (shares_to_burn as u128) / (v.total_shares as u128);
         let coin_out = coin::split(&mut v.usdc, payout as u64, ctx);
@@ -460,7 +449,7 @@ module unxversal::vaults {
         transfer::public_transfer(coin_out, ctx.sender());
     }
 
-    public entry fun investor_withdraw<C>(v: &mut TraderVault<C>, shares_to_redeem: u64, ctx: &mut TxContext) {
+    public fun investor_withdraw<C: store>(v: &mut TraderVault<C>, shares_to_redeem: u64, ctx: &mut TxContext): Coin<C> {
         let mut bal = if (table::contains(&v.shares, ctx.sender())) { *table::borrow(&v.shares, ctx.sender()) } else { 0 };
         assert!(shares_to_redeem > 0 && bal >= shares_to_redeem, E_NOT_INVESTOR);
         let payout = (coin::value(&v.usdc) as u128) * (shares_to_redeem as u128) / (v.total_shares as u128);
@@ -473,15 +462,15 @@ module unxversal::vaults {
         v.total_shares = v.total_shares - shares_to_redeem;
         if (ctx.sender() == v.manager) { v.manager_shares = v.manager_shares - shares_to_redeem; };
         event::emit(InvestorWithdrawal { vault_id: object::id(v), investor: ctx.sender(), shares_redeemed: shares_to_redeem, collateral_paid: payout as u64, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        transfer::public_transfer(coin_out, ctx.sender());
+        coin_out
     }
 
     /// Calculate performance fee vs HWM and accrue amounts (not paid out yet)
-    public entry fun crystallize_performance_fee<C>(v: &mut TraderVault<C>, cfg: &TraderVaultRegistry, _ctx: &mut TxContext) {
-        if (v.total_shares == 0) { return; }
+    public fun crystallize_performance_fee<C: store>(v: &mut TraderVault<C>, cfg: &TraderVaultRegistry, _ctx: &mut TxContext) {
+        if (v.total_shares == 0) { return };
         let nav = coin::value(&v.usdc) as u128;
         let nav_per_share_1e6 = (nav * 1_000_000u128 / (v.total_shares as u128)) as u64;
-        if (nav_per_share_1e6 <= v.hwm_nav_per_share_1e6) { return; }
+        if (nav_per_share_1e6 <= v.hwm_nav_per_share_1e6) { return };
         let gain_per_share_1e6 = nav_per_share_1e6 - v.hwm_nav_per_share_1e6;
         let gain_total_collateral = (gain_per_share_1e6 as u128) * (v.total_shares as u128) / 1_000_000u128;
         let manager_fee = (gain_total_collateral * (v.perf_fee_bps as u128)) / 10_000u128;
@@ -493,16 +482,16 @@ module unxversal::vaults {
     }
 
     /// Attempt to pay accrued fees if liquidity allows; protocol fee goes to Treasury
-    public entry fun pay_accrued_fees<C>(v: &mut TraderVault<C>, cfg: &TraderVaultRegistry, treasury: &mut Treasury<C>, ctx: &mut TxContext) {
+    public fun pay_accrued_fees<C: store>(v: &mut TraderVault<C>, _cfg: &TraderVaultRegistry, treasury: &mut Treasury<C>, ctx: &mut TxContext) {
         let available = coin::value(&v.usdc);
-        let mut pay_manager = if (v.accrued_manager_fee_collateral > available) { available } else { v.accrued_manager_fee_collateral };
-        let mut left = available - pay_manager;
+        let pay_manager = if (v.accrued_manager_fee_collateral > available) { available } else { v.accrued_manager_fee_collateral };
+        let left = available - pay_manager;
         let pay_protocol = if (v.accrued_protocol_fee_collateral > left) { left } else { v.accrued_protocol_fee_collateral };
         if (pay_manager > 0) {
             let out = coin::split(&mut v.usdc, pay_manager, ctx);
             transfer::public_transfer(out, v.manager);
             v.accrued_manager_fee_collateral = v.accrued_manager_fee_collateral - pay_manager;
-        }
+        };
         if (pay_protocol > 0) {
             let outp = coin::split(&mut v.usdc, pay_protocol, ctx);
             TreasuryMod::deposit_collateral_ext(treasury, outp, b"perf_fee".to_string(), v.manager, ctx);
@@ -510,942 +499,18 @@ module unxversal::vaults {
         }
     }
 
-    public entry fun shutdown_trader_vault<C>(v: &mut TraderVault<C>, ctx: &TxContext) { assert!(v.manager == ctx.sender(), E_NOT_MANAGER); v.shutdown = true; event::emit(TraderVaultShutdown { vault_id: object::id(v), by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
+    public fun shutdown_trader_vault<C: store>(v: &mut TraderVault<C>, ctx: &TxContext) { assert!(v.manager == ctx.sender(), E_NOT_MANAGER); v.shutdown = true; event::emit(TraderVaultShutdown { vault_id: object::id(v), by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
 
     /*******************************
     * Read-only helpers
     *******************************/
-    public fun liquidity_vault_balances<Base, C>(v: &LiquidityVault<Base, C>): (u64, u64, u64, u64) {
+    public fun liquidity_vault_balances<Base: store, C: store>(v: &LiquidityVault<Base, C>): (u64, u64, u64, u64) {
         (coin::value(&v.usdc), coin::value(&v.base), v.total_shares, vector::length(&v.active_orders) as u64)
     }
-    public fun liquidity_user_shares<Base, C>(v: &LiquidityVault<Base, C>, addr: address): u64 { if (table::contains(&v.shares, addr)) { *table::borrow(&v.shares, addr) } else { 0 } }
-    public fun liquidity_is_shutdown<Base, C>(v: &LiquidityVault<Base, C>): bool { v.shutdown }
+    public fun liquidity_user_shares<Base: store, C: store>(v: &LiquidityVault<Base, C>, addr: address): u64 { if (table::contains(&v.shares, addr)) { *table::borrow(&v.shares, addr) } else { 0 } }
+    public fun liquidity_is_shutdown<Base: store, C: store>(v: &LiquidityVault<Base, C>): bool { v.shutdown }
 
-    public fun trader_nav<C>(v: &TraderVault<C>): (u64, u64, u64) { (coin::value(&v.usdc), v.total_shares, v.hwm_nav_per_share_1e6) }
-    public fun trader_user_shares<C>(v: &TraderVault<C>, addr: address): u64 { if (table::contains(&v.shares, addr)) { *table::borrow(&v.shares, addr) } else { 0 } }
-    public fun trader_manager_stake_bps<C>(v: &TraderVault<C>): u64 { manager_stake_bps(v) }
+    public fun trader_nav<C: store>(v: &TraderVault<C>): (u64, u64, u64) { (coin::value(&v.usdc), v.total_shares, v.hwm_nav_per_share_1e6) }
+    public fun trader_user_shares<C: store>(v: &TraderVault<C>, addr: address): u64 { if (table::contains(&v.shares, addr)) { *table::borrow(&v.shares, addr) } else { 0 } }
+    public fun trader_manager_stake_bps<C: store>(v: &TraderVault<C>): u64 { manager_stake_bps(v) }
 }
-
-module unxversal::vaults {
-    /*******************************
-    * UnXversal Vaults - Unified Liquidity & Managed Vaults
-    *******************************/
-    use sui::event;
-    use sui::display;
-    use sui::package::Publisher;
-    use sui::clock::Clock;
-    use std::string::String;
-    use sui::table::{Self as table, Table};
-    use sui::vec_set::{Self as vec_set, VecSet};
-    use sui::coin::{Self as coin, Coin};
-    use sui::balance::{Self as balance, Balance};
-
-    use unxversal::synthetics::{Self as Synth, SynthRegistry, AdminCap, Order, CollateralVault, CollateralConfig};
-    use unxversal::dex::{Self as Dex, DexConfig, CoinOrderBuy, CoinOrderSell};
-    use unxversal::unxv_treasury::{Self as TreasuryMod, Treasury};
-    use unxversal::oracle::{OracleConfig, PriceInfoObject};
-    use unxversal::unxv::UNXV;
-    use unxversal::options::{Self as Opt, OptionsRegistry, OptionMarket, ShortOffer, PremiumEscrow, OptionPosition};
-    use unxversal::perpetuals::{Self as Perps, PerpsRegistry, PerpMarket};
-    use unxversal::futures::{Self as Futures, FuturesRegistry, FuturesContract};
-    use unxversal::gas_futures::{Self as GasFutures, GasFuturesRegistry, GasFuturesContract};
-
-    /*******************************
-    * Errors
-    *******************************/
-    const E_PAUSED: u64 = 1;
-    const E_NOT_MANAGER: u64 = 2;
-    const E_NOT_EXECUTOR: u64 = 3;
-    const E_ZERO_AMOUNT: u64 = 4;
-    const E_OVER_CAP: u64 = 6;
-    const E_MANAGED_ONLY: u64 = 7;
-    const E_BAD_SHARES: u64 = 8;
-    const E_TOO_SOON: u64 = 9;
-    const E_COLLATERAL_ALREADY_SET: u64 = 900;
-    /*******************************
-    * Common config structs
-    *******************************/
-    public struct Timelocks has store, drop, copy { withdraw_notice_sec: u64, param_cooldown_sec: u64 }
-    public struct FeeConfig has store, drop, copy { performance_bps: u64, management_bps: u64, protocol_skim_bps: u64, max_performance_bps: u64 }
-    public struct VaultRiskCaps has store, drop, copy { max_trade_notional_usd: u64, max_slippage_bps: u64 }
-
-    /*******************************
-    * MANAGED mode: Investor shares and withdrawals
-    *******************************/
-    public struct InvestorShares has key, store {
-        id: UID,
-        vault_id: ID,
-        investor: address,
-        shares_owned: u64,
-        avg_cost_micro_usd_per_share: u64,
-        created_at_ms: u64,
-    }
-
-    public struct WithdrawalRequest has key, store {
-        id: UID,
-        vault_id: ID,
-        investor: address,
-        shares: u64,
-        ready_at_ms: u64,
-        created_at_ms: u64,
-    }
-
-    /*******************************
-    * Registry (shared)
-    *******************************/
-    public struct VaultsRegistry has key, store {
-        id: UID,
-        treasury_id: ID,
-        paused: bool,
-        collateral_set: bool,
-        default_timelocks: Timelocks,
-        default_fee_cfg: FeeConfig,
-        global_caps: VaultRiskCaps,
-        tier_thresholds_unxv: vector<u64>,
-        tier_perf_ceiling_bps: vector<u64>,
-    }
-
-    /*******************************
-    * Vault (shared)
-    *******************************/
-    public struct Vault<phantom C> has key, store {
-        id: UID,
-        manager: address,
-        vault_type: u8,
-        balance: Balance<C>,
-        executor_addrs: VecSet<address>,
-        status: u8,
-        template_id: String,
-        risk_caps: VaultRiskCaps,
-        timelocks: Timelocks,
-        fee_cfg: FeeConfig,
-        last_nav_update_ms: u64,
-        last_fee_calc_ms: u64,
-        total_shares: u64,
-        manager_shares: u64,
-        required_stake_bps: u64,
-        high_water_mark_micro_usd_per_share: u64,
-        last_param_update_ms: u64,
-        staked_unxv: Balance<UNXV>,
-        dex_caps_usd: Table<String, u64>,
-        synth_caps_usd: Table<String, u64>,
-        perps_caps_usd: Table<String, u64>,
-        futures_caps_usd: Table<String, u64>,
-        gas_caps_usd: Table<String, u64>,
-        options_caps_usd: Table<String, u64>,
-    }
-
-    /*******************************
-    * Events
-    *******************************/
-    public struct VaultsRegistryInitialized has copy, drop { registry_id: ID, treasury_id: ID, by: address, timestamp: u64 }
-    public struct VaultCreated has copy, drop { vault_id: ID, vault_type: u8, manager: address, template_id: String, timestamp: u64 }
-    public struct VaultDeposit has copy, drop { vault_id: ID, asset: String, amount: u64, depositor: address, timestamp: u64 }
-    public struct VaultWithdrawn has copy, drop { vault_id: ID, asset: String, amount: u64, receiver: address, timestamp: u64 }
-    public struct VaultPaused has copy, drop { vault_id: ID, by: address, timestamp: u64 }
-    public struct VaultResumed has copy, drop { vault_id: ID, by: address, timestamp: u64 }
-    public struct ExecutorUpdated has copy, drop { vault_id: ID, executor: address, allowed: bool, by: address, timestamp: u64 }
-    public struct StrategyExecuted has copy, drop { vault_id: ID, template_id: String, op: String, notional_usd: u64, success: bool, timestamp: u64 }
-    public struct InvestorSharesIssued has copy, drop { vault_id: ID, investor: address, shares: u64, price_micro_usd_per_share: u64, timestamp: u64 }
-    public struct InvestorSharesBurned has copy, drop { vault_id: ID, investor: address, shares: u64, price_micro_usd_per_share: u64, amount_collateral: u64, timestamp: u64 }
-    public struct WithdrawalRequested has copy, drop { vault_id: ID, investor: address, shares: u64, ready_at_ms: u64, timestamp: u64 }
-    public struct VaultNavUpdated has copy, drop { vault_id: ID, nav_micro_usd_per_share: u64, total_assets_collateral: u64, timestamp: u64 }
-    public struct PerformanceFeesSettled has copy, drop { vault_id: ID, manager: address, manager_fee_collateral: u64, protocol_fee_collateral: u64, new_hwm_micro_usd_per_share: u64, timestamp: u64 }
-    public struct ManagementFeesAccrued has copy, drop { vault_id: ID, manager: address, manager_fee_collateral: u64, protocol_fee_collateral: u64, timestamp: u64 }
-    public struct VaultParamsUpdated has copy, drop { vault_id: ID, by: address, timestamp: u64 }
-    public struct VaultClosingStarted has copy, drop { vault_id: ID, by: address, timestamp: u64 }
-    public struct VaultClosed has copy, drop { vault_id: ID, by: address, timestamp: u64 }
-
-    /*******************************
-    * Helpers
-    *******************************/
-    fun assert_registry_active(r: &VaultsRegistry) { assert!(!r.paused, E_PAUSED); }
-    fun assert_vault_executor<C>(v: &Vault<C>, caller: address) {
-        if (caller == v.manager) { return };
-        assert!(vec_set::contains(&v.executor_addrs, &caller), E_NOT_EXECUTOR);
-    }
-
-    /*******************************
-    * Init & Display (removed)
-    */
-
-    /*******************************
-    * Registry controls (admin via SynthRegistry)
-    *******************************/
-    fun assert_is_admin(sr: &SynthRegistry, addr: address) {
-        assert!(Synth::check_is_admin(sr, addr), E_NOT_MANAGER);
-    }
-
-    public entry fun set_collateral(
-        _admin: &AdminCap,
-        registry: &mut VaultsRegistry,
-        sr: &SynthRegistry,
-        ctx: &mut TxContext
-    ) {
-        assert_is_admin(sr, tx_context::sender(ctx));
-        assert!(!registry.collateral_set, E_COLLATERAL_ALREADY_SET);
-        registry.collateral_set = true;
-    }
-
-    public entry fun pause_registry(_admin: &AdminCap, sr: &SynthRegistry, r: &mut VaultsRegistry, ctx: &TxContext) { assert_is_admin(sr, tx_context::sender(ctx)); r.paused = true; }
-    public entry fun resume_registry(_admin: &AdminCap, sr: &SynthRegistry, r: &mut VaultsRegistry, ctx: &TxContext) { assert_is_admin(sr, tx_context::sender(ctx)); r.paused = false; }
-    public fun set_default_timelocks(_admin: &AdminCap, sr: &SynthRegistry, r: &mut VaultsRegistry, t: Timelocks, ctx: &TxContext) { assert_is_admin(sr, tx_context::sender(ctx)); r.default_timelocks = t; }
-    public fun set_default_fee_cfg(_admin: &AdminCap, sr: &SynthRegistry, r: &mut VaultsRegistry, f: FeeConfig, ctx: &TxContext) { assert_is_admin(sr, tx_context::sender(ctx)); r.default_fee_cfg = f; }
-    public fun set_global_caps(_admin: &AdminCap, sr: &SynthRegistry, r: &mut VaultsRegistry, c: VaultRiskCaps, ctx: &TxContext) { assert_is_admin(sr, tx_context::sender(ctx)); r.global_caps = c; }
-    public entry fun set_unxv_tiers(_admin: &AdminCap, sr: &SynthRegistry, r: &mut VaultsRegistry, thresholds: vector<u64>, perf_caps_bps: vector<u64>, ctx: &TxContext) {
-        assert_is_admin(sr, tx_context::sender(ctx));
-        assert!(vector::length(&thresholds) == vector::length(&perf_caps_bps), E_ZERO_AMOUNT);
-        r.tier_thresholds_unxv = thresholds;
-        r.tier_perf_ceiling_bps = perf_caps_bps;
-    }
-
-    /*******************************
-    * Vault lifecycle (permissionless creation)
-    *******************************/
-    public entry fun create_vault<C>(
-        _cfg: &CollateralConfig<C>,
-        r: &VaultsRegistry,
-        vault_type: u8,
-        template_id: String,
-        ctx: &mut TxContext
-    ) {
-        assert_registry_active(r);
-        let v = Vault<C> {
-            id: object::new(ctx),
-            manager: tx_context::sender(ctx),
-            vault_type,
-            balance: balance::zero<C>(),
-            executor_addrs: vec_set::empty(),
-            status: 0,
-            template_id,
-            risk_caps: r.global_caps,
-            timelocks: r.default_timelocks,
-            fee_cfg: r.default_fee_cfg,
-            last_nav_update_ms: 0u64,
-            last_fee_calc_ms: 0u64,
-            total_shares: 0,
-            manager_shares: 0,
-            required_stake_bps: 500,
-            high_water_mark_micro_usd_per_share: 1_000_000,
-            last_param_update_ms: 0,
-            staked_unxv: balance::zero<UNXV>(),
-            dex_caps_usd: table::new<String, u64>(ctx),
-            synth_caps_usd: table::new<String, u64>(ctx),
-            perps_caps_usd: table::new<String, u64>(ctx),
-            futures_caps_usd: table::new<String, u64>(ctx),
-            gas_caps_usd: table::new<String, u64>(ctx),
-            options_caps_usd: table::new<String, u64>(ctx),
-        };
-        let vault_id = object::id(&v);
-        transfer::share_object(v);
-        event::emit(VaultCreated { vault_id, vault_type, manager: tx_context::sender(ctx), template_id, timestamp: 0u64 });
-    }
-
-    public fun deposit<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        coins: Coin<C>,
-        ctx: &mut TxContext
-    ) {
-        assert!(v.status == 0, E_PAUSED);
-        let amount = coins.value();
-        balance::join(&mut v.balance, coin::into_balance(coins));
-        event::emit(VaultDeposit { vault_id: object::id(v), asset: b"COLLATERAL".to_string(), amount, depositor: tx_context::sender(ctx), timestamp: 0u64 });
-    }
-
-    public fun withdraw<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        amount: u64,
-        ctx: &mut TxContext
-    ): Coin<C> {
-        assert!(v.status == 0 || v.status == 2, E_PAUSED);
-        assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER);
-        assert!(amount > 0, E_ZERO_AMOUNT);
-        let out_balance = balance::split(&mut v.balance, amount);
-        let out_coin = coin::from_balance(out_balance, ctx);
-        event::emit(VaultWithdrawn { vault_id: object::id(v), asset: b"COLLATERAL".to_string(), amount, receiver: v.manager, timestamp: 0u64 });
-        out_coin
-    }
-
-    public fun set_executor<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        exec: address,
-        allowed: bool,
-        ctx: &TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER);
-        if (allowed) { vec_set::insert(&mut v.executor_addrs, exec); } else { vec_set::remove(&mut v.executor_addrs, &exec); };
-        event::emit(ExecutorUpdated { vault_id: object::id(v), executor: exec, allowed, by: tx_context::sender(ctx), timestamp: 0u64 });
-    }
-
-    public fun pause_vault<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        ctx: &TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER);
-        v.status = 1;
-        event::emit(VaultPaused { vault_id: object::id(v), by: tx_context::sender(ctx), timestamp: 0u64 });
-    }
-    
-    public fun resume_vault<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        ctx: &TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER);
-        v.status = 0;
-        event::emit(VaultResumed { vault_id: object::id(v), by: tx_context::sender(ctx), timestamp: 0u64 });
-    }
-
-    fun assert_active_and_executor<C>(v: &Vault<C>, ctx: &TxContext) {
-        assert!(v.status == 0, E_PAUSED);
-        assert_vault_executor(v, tx_context::sender(ctx));
-    }
-
-    fun assert_managed<C>(v: &Vault<C>) {
-        assert!(v.vault_type == 1, E_MANAGED_ONLY);
-    }
-
-    fun aum<C>(v: &Vault<C>): u64 {
-        balance::value(&v.balance)
-    }
-
-    fun nav_micro_usd_per_share<C>(v: &Vault<C>): u64 {
-        if (v.total_shares == 0) { return 1_000_000 };
-        let total = aum(v) as u128;
-        let per = (total * 1_000_000u128) / (v.total_shares as u128);
-        per as u64
-    }
-
-    fun stake_ok<C>(v: &Vault<C>): bool {
-        if (v.vault_type != 1) { return true };
-        if (v.total_shares == 0) { return true };
-        let stake_bps = (v.manager_shares as u128) * 10_000u128 / (v.total_shares as u128);
-        (stake_bps as u64) >= v.required_stake_bps
-    }
-
-    public fun deposit_managed<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        collateral: Coin<C>,
-        as_manager_stake: bool,
-        ctx: &mut TxContext
-    ): InvestorShares {
-        assert_managed(v);
-        assert!(v.status == 0, E_PAUSED);
-        let amount = coin::value(&collateral);
-        assert!(amount > 0, E_ZERO_AMOUNT);
-        let shares: u64 = if (v.total_shares == 0) { amount } else { ((amount as u128) * (v.total_shares as u128) / (aum(v) as u128)) as u64 };
-        assert!(shares > 0, E_BAD_SHARES);
-        balance::join(&mut v.balance, coin::into_balance(collateral));
-        v.total_shares = v.total_shares + shares;
-        if (as_manager_stake) { v.manager_shares = v.manager_shares + shares; };
-        let nav_ps = nav_micro_usd_per_share(v);
-        event::emit(InvestorSharesIssued { vault_id: object::id(v), investor: tx_context::sender(ctx), shares, price_micro_usd_per_share: nav_ps, timestamp: 0u64 });
-        InvestorShares { id: object::new(ctx), vault_id: object::id(v), investor: tx_context::sender(ctx), shares_owned: shares, avg_cost_micro_usd_per_share: nav_ps, created_at_ms: 0u64 }
-    }
-
-    public fun request_withdrawal_managed<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        shares: u64,
-        inv: &mut InvestorShares,
-        ctx: &mut TxContext
-    ): WithdrawalRequest {
-        assert_managed(v);
-        assert!(inv.investor == tx_context::sender(ctx) && inv.vault_id == object::id(v), E_NOT_MANAGER);
-        assert!(shares > 0 && shares <= inv.shares_owned, E_BAD_SHARES);
-        let ready = 0u64 + v.timelocks.withdraw_notice_sec * 1000;
-        event::emit(WithdrawalRequested { vault_id: object::id(v), investor: tx_context::sender(ctx), shares, ready_at_ms: ready, timestamp: 0u64 });
-        WithdrawalRequest { id: object::new(ctx), vault_id: object::id(v), investor: tx_context::sender(ctx), shares, ready_at_ms: ready, created_at_ms: 0u64 }
-    }
-
-    public fun execute_withdrawal_managed<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        req: WithdrawalRequest,
-        inv: &mut InvestorShares,
-        ctx: &mut TxContext
-    ) {
-        assert_managed(v);
-        assert!(v.status == 0 || v.status == 2, E_PAUSED);
-        assert!(req.vault_id == object::id(v) && req.investor == inv.investor, E_NOT_MANAGER);
-        assert!(0u64 >= req.ready_at_ms, E_TOO_SOON);
-        let shares = req.shares;
-        assert!(shares > 0 && shares <= inv.shares_owned && shares <= v.total_shares, E_BAD_SHARES);
-        let total = aum(v) as u128;
-        let amount = ((total * (shares as u128)) / (v.total_shares as u128)) as u64;
-        if (amount > 0) {
-            let out_balance = balance::split(&mut v.balance, amount);
-            transfer::public_transfer(coin::from_balance(out_balance, ctx), inv.investor);
-        };
-        let nav_ps = nav_micro_usd_per_share(v);
-        inv.shares_owned = inv.shares_owned - shares;
-        v.total_shares = v.total_shares - shares;
-        if (inv.investor == v.manager) {
-            let ms = v.manager_shares;
-            v.manager_shares = if (ms >= shares) { ms - shares } else { 0 };
-        };
-        event::emit(InvestorSharesBurned { vault_id: object::id(v), investor: inv.investor, shares, price_micro_usd_per_share: nav_ps, amount_collateral: amount, timestamp: 0u64 });
-        let WithdrawalRequest { id, vault_id: _, investor: _, shares: _, ready_at_ms: _, created_at_ms: _ } = req;
-        object::delete(id);
-    }
-
-    public fun start_closing_vault<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        ctx: &TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER);
-        assert!(v.status == 0 || v.status == 1, E_PAUSED);
-        v.status = 2;
-        event::emit(VaultClosingStarted { vault_id: object::id(v), by: tx_context::sender(ctx), timestamp: 0u64 });
-    }
-
-    public fun finalize_close_vault<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        ctx: &TxContext
-    ) {
-        assert!(v.status == 2, E_PAUSED);
-        let bal = balance::value(&v.balance);
-        assert!(v.total_shares == 0 && bal == 0, E_BAD_SHARES);
-        v.status = 3;
-        event::emit(VaultClosed { vault_id: object::id(v), by: tx_context::sender(ctx), timestamp: 0u64 });
-    }
-
-    public fun update_nav_and_hwm<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        _ctx: &TxContext
-    ) {
-        if (v.vault_type != 1) { return };
-        let nav_ps = nav_micro_usd_per_share(v);
-        v.high_water_mark_micro_usd_per_share = if (nav_ps > v.high_water_mark_micro_usd_per_share) { nav_ps } else { v.high_water_mark_micro_usd_per_share };
-        v.last_nav_update_ms = 0u64;
-        event::emit(VaultNavUpdated { vault_id: object::id(v), nav_micro_usd_per_share: nav_ps, total_assets_collateral: aum(v), timestamp: 0u64 });
-    }
-
-    public fun settle_performance_fees<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        treasury: &mut Treasury<C>,
-        ctx: &mut TxContext
-    ) {
-        assert_managed(v);
-        let nav_ps = nav_micro_usd_per_share(v);
-        if (v.total_shares == 0) { return };
-        if (nav_ps <= v.high_water_mark_micro_usd_per_share) { return };
-        let profit_collateral = ((((nav_ps as u128) - (v.high_water_mark_micro_usd_per_share as u128)) * (v.total_shares as u128)) / 1_000_000u128) as u64;
-        if (profit_collateral == 0) { v.high_water_mark_micro_usd_per_share = nav_ps; return };
-        let fee = (profit_collateral * v.fee_cfg.performance_bps) / 10_000;
-        let protocol_cut = (fee * v.fee_cfg.protocol_skim_bps) / 10_000;
-        let manager_cut = if (fee >= protocol_cut) { fee - protocol_cut } else { 0 };
-        if (fee > 0) {
-            if (manager_cut > 0) {
-                let c_balance = balance::split(&mut v.balance, manager_cut);
-                transfer::public_transfer(coin::from_balance(c_balance, ctx), v.manager);
-            };
-            if (protocol_cut > 0) {
-                let c2_balance = balance::split(&mut v.balance, protocol_cut);
-                transfer::public_transfer(coin::from_balance(c2_balance, ctx), TreasuryMod::treasury_address(treasury));
-            };
-            event::emit(PerformanceFeesSettled { vault_id: object::id(v), manager: v.manager, manager_fee_collateral: manager_cut, protocol_fee_collateral: protocol_cut, new_hwm_micro_usd_per_share: nav_ps, timestamp: 0u64 });
-        };
-        v.high_water_mark_micro_usd_per_share = nav_ps;
-        v.last_fee_calc_ms = 0u64;
-    }
-
-    public fun accrue_management_fees<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        treasury: &mut Treasury<C>,
-        ctx: &mut TxContext
-    ) {
-        if (v.fee_cfg.management_bps == 0) { return };
-        let now = 0u64;
-        let last = v.last_fee_calc_ms;
-        if (now <= last) { return };
-        let elapsed = now - last;
-        let aum_value = balance::value(&v.balance);
-        if (aum_value == 0) { v.last_fee_calc_ms = now; return };
-        let year_ms = 31_536_000_000;
-        let fee = ((aum_value as u128) * (v.fee_cfg.management_bps as u128) * (elapsed as u128) / (10_000u128 * (year_ms as u128))) as u64;
-        if (fee == 0) { v.last_fee_calc_ms = now; return };
-        let protocol_cut = (fee * v.fee_cfg.protocol_skim_bps) / 10_000;
-        let manager_cut = if (fee >= protocol_cut) { fee - protocol_cut } else { 0 };
-        if (manager_cut > 0) {
-            let c_balance = balance::split(&mut v.balance, manager_cut);
-            transfer::public_transfer(coin::from_balance(c_balance, ctx), v.manager);
-        };
-        if (protocol_cut > 0) {
-            let c2_balance = balance::split(&mut v.balance, protocol_cut);
-            transfer::public_transfer(coin::from_balance(c2_balance, ctx), TreasuryMod::treasury_address(treasury));
-        };
-        v.last_fee_calc_ms = now;
-        event::emit(ManagementFeesAccrued { vault_id: object::id(v), manager: v.manager, manager_fee_collateral: manager_cut, protocol_fee_collateral: protocol_cut, timestamp: now });
-    }
-
-    public fun stake_unxv<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        mut unxv: vector<Coin<UNXV>>,
-        ctx: &mut TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER);
-        let mut merged = coin::zero<UNXV>(ctx);
-        while (!vector::is_empty(&unxv)) {
-            coin::join(&mut merged, vector::pop_back(&mut unxv));
-        };
-        balance::join(&mut v.staked_unxv, coin::into_balance(merged));
-        vector::destroy_empty(unxv);
-    }
-    
-    public fun unstake_unxv<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        amount: u64,
-        ctx: &mut TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER);
-        if (amount == 0) { return };
-        let out_balance = balance::split(&mut v.staked_unxv, amount);
-        transfer::public_transfer(coin::from_balance(out_balance, ctx), v.manager);
-    }
-    
-    public fun current_unxv_stake<C>(v: &Vault<C>): u64 { balance::value(&v.staked_unxv) }
-
-    fun current_tier_index<C>(r: &VaultsRegistry, v: &Vault<C>): u64 {
-        let staked = balance::value(&v.staked_unxv);
-        let mut tier: u64 = 0;
-        let n = vector::length(&r.tier_thresholds_unxv);
-        let mut i = 0; while (i < n) { let th = *vector::borrow(&r.tier_thresholds_unxv, i); if (staked >= th) { tier = i as u64; }; i = i + 1; };
-        tier
-    }
-
-    fun enforce_param_cooldown<C>(v: &Vault<C>) {
-        let now = 0u64;
-        let next = v.last_param_update_ms + v.timelocks.param_cooldown_sec * 1000;
-        assert!(now >= next, E_TOO_SOON);
-    }
-    
-    fun mark_param_update<C>(v: &mut Vault<C>) {
-        v.last_param_update_ms = 0u64;
-    }
-
-    public fun set_fee_cfg<C>(
-        _cfg: &CollateralConfig<C>,
-        r: &VaultsRegistry,
-        v: &mut Vault<C>,
-        fee: FeeConfig,
-        ctx: &TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER);
-        enforce_param_cooldown(v);
-        let tier = current_tier_index(r, v);
-        if (vector::length(&r.tier_perf_ceiling_bps) > 0) {
-            let cap = *vector::borrow(&r.tier_perf_ceiling_bps, tier);
-            assert!(fee.performance_bps <= cap, E_OVER_CAP);
-        };
-        v.fee_cfg = fee;
-        mark_param_update(v);
-        event::emit(VaultParamsUpdated { vault_id: object::id(v), by: tx_context::sender(ctx), timestamp: 0u64 });
-    }
-
-    public fun set_risk_caps<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        caps: VaultRiskCaps,
-        ctx: &TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER);
-        enforce_param_cooldown(v);
-        v.risk_caps = caps;
-        mark_param_update(v);
-        event::emit(VaultParamsUpdated { vault_id: object::id(v), by: tx_context::sender(ctx), timestamp: 0u64 });
-    }
-    
-    public fun set_timelocks<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        t: Timelocks,
-        ctx: &TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER);
-        enforce_param_cooldown(v);
-        v.timelocks = t;
-        mark_param_update(v);
-        event::emit(VaultParamsUpdated { vault_id: object::id(v), by: tx_context::sender(ctx), timestamp: 0u64 });
-    }
-    
-    public fun set_required_stake_bps<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        bps: u64,
-        ctx: &TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER);
-        enforce_param_cooldown(v);
-        v.required_stake_bps = bps;
-        mark_param_update(v);
-        event::emit(VaultParamsUpdated { vault_id: object::id(v), by: tx_context::sender(ctx), timestamp: 0u64 });
-    }
-
-    public fun set_cap_dex<C>(_cfg: &CollateralConfig<C>, v: &mut Vault<C>, key: String, cap_usd: u64, ctx: &TxContext) { assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER); enforce_param_cooldown(v); table::add(&mut v.dex_caps_usd, key, cap_usd); mark_param_update(v); }
-    public fun set_cap_synth<C>(_cfg: &CollateralConfig<C>, v: &mut Vault<C>, key: String, cap_usd: u64, ctx: &TxContext) { assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER); enforce_param_cooldown(v); table::add(&mut v.synth_caps_usd, key, cap_usd); mark_param_update(v); }
-    public fun set_cap_perps<C>(_cfg: &CollateralConfig<C>, v: &mut Vault<C>, key: String, cap_usd: u64, ctx: &TxContext) { assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER); enforce_param_cooldown(v); table::add(&mut v.perps_caps_usd, key, cap_usd); mark_param_update(v); }
-    public fun set_cap_futures<C>(_cfg: &CollateralConfig<C>, v: &mut Vault<C>, key: String, cap_usd: u64, ctx: &TxContext) { assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER); enforce_param_cooldown(v); table::add(&mut v.futures_caps_usd, key, cap_usd); mark_param_update(v); }
-    public fun set_cap_gas<C>(_cfg: &CollateralConfig<C>, v: &mut Vault<C>, key: String, cap_usd: u64, ctx: &TxContext) { assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER); enforce_param_cooldown(v); table::add(&mut v.gas_caps_usd, key, cap_usd); mark_param_update(v); }
-    public fun set_cap_options<C>(_cfg: &CollateralConfig<C>, v: &mut Vault<C>, key: String, cap_usd: u64, ctx: &TxContext) { assert!(tx_context::sender(ctx) == v.manager, E_NOT_MANAGER); enforce_param_cooldown(v); table::add(&mut v.options_caps_usd, key, cap_usd); mark_param_update(v); }
-
-    fun enforce_cap_key<C>(v: &Vault<C>, table: &Table<String, u64>, key: &String, notional_usd: u64) {
-        let cap = if (table::contains(table, *key)) { *table::borrow(table, *key) } else { v.risk_caps.max_trade_notional_usd };
-        if (cap > 0) { assert!(notional_usd <= cap, E_OVER_CAP); }
-    }
-
-    public fun exec_dex_place_buy<C, Base>(
-        _cfg: &CollateralConfig<C>,
-        v: &mut Vault<C>,
-        _dex_cfg: &DexConfig,
-        price: u64,
-        size_base: u64,
-        cap_key: String,
-        _expiry_ms: u64,
-        _ctx: &mut TxContext
-    ): CoinOrderBuy<Base, C> {
-        assert_active_and_executor(v, _ctx);
-        let need = price * size_base;
-        enforce_cap_key(v, &v.dex_caps_usd, &cap_key, need);
-        let _escrow_balance = balance::split(&mut v.balance, need);
-        event::emit(StrategyExecuted { vault_id: object::id(v), template_id: v.template_id, op: b"dex_place_buy".to_string(), notional_usd: need, success: true, timestamp: 0u64 });
-        abort 999
-    }
-
-    public fun exec_dex_place_sell<Base>(
-        v: &mut Vault<Base>,
-        dex_cfg: &DexConfig,
-        price: u64,
-        size_base: u64,
-        cap_key: String,
-        expiry_ms: u64,
-        ctx: &mut TxContext
-    ): CoinOrderSell<Base> {
-        assert_active_and_executor(v, ctx);
-        let notional = price * size_base;
-        enforce_cap_key(v, &v.dex_caps_usd, &cap_key, notional);
-        let have = balance::value(&v.balance);
-        assert!(have >= size_base, E_ZERO_AMOUNT);
-        let escrow_balance = balance::split(&mut v.balance, size_base);
-        let order = Dex::place_coin_sell_order<Base>(dex_cfg, price, size_base, coin::from_balance(escrow_balance, ctx), expiry_ms, ctx);
-        event::emit(StrategyExecuted { vault_id: object::id(v), template_id: v.template_id, op: b"dex_place_sell".to_string(), notional_usd: notional, success: true, timestamp: 0u64 });
-        order
-    }
-
-    public fun exec_dex_cancel_buy<C, Base>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        order: Dex::CoinOrderBuy<Base, C>,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        Dex::cancel_coin_buy_order<Base, C>(order, ctx);
-        event::emit(StrategyExecuted { vault_id: object::id(v), template_id: v.template_id, op: b"dex_cancel_buy".to_string(), notional_usd: 0, success: true, timestamp: 0u64 });
-    }
-
-    public fun exec_dex_cancel_sell<Base>(
-        v: &Vault<Base>,
-        order: Dex::CoinOrderSell<Base>,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        Dex::cancel_coin_sell_order<Base>(order, ctx);
-        event::emit(StrategyExecuted { vault_id: object::id(v), template_id: v.template_id, op: b"dex_cancel_sell".to_string(), notional_usd: 0, success: true, timestamp: 0u64 });
-    }
-
-    public fun exec_dex_match<C, Base>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        dex_cfg: &mut DexConfig,
-        buy: &mut Dex::CoinOrderBuy<Base, C>,
-        sell: &mut Dex::CoinOrderSell<Base>,
-        max_fill_base: u64,
-        taker_is_buyer: bool,
-        unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &PriceInfoObject,
-        oracle_cfg: &OracleConfig,
-        clock: &Clock,
-        treasury: &mut Treasury<C>,
-        min_price: u64,
-        max_price: u64,
-        cap_key: String,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        let worst_notional = max_price * max_fill_base;
-        enforce_cap_key(v, &v.dex_caps_usd, &cap_key, worst_notional);
-        Dex::match_coin_orders<Base, C>(dex_cfg, buy, sell, max_fill_base, taker_is_buyer, unxv_payment, unxv_price, oracle_cfg, clock, treasury, min_price, max_price, ctx);
-        event::emit(StrategyExecuted { vault_id: object::id(v), template_id: v.template_id, op: b"dex_match".to_string(), notional_usd: worst_notional, success: true, timestamp: 0u64 });
-    }
-
-    public fun exec_synth_place_order<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        reg: &SynthRegistry,
-        synth_vault: &CollateralVault<C>,
-        symbol: String,
-        side: u8,
-        price: u64,
-        size: u64,
-        cap_key: String,
-        expiry_ms: u64,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        let notional = price * size; enforce_cap_key(v, &v.synth_caps_usd, &cap_key, notional);
-        Synth::place_limit_order(reg, synth_vault, symbol, side, price, size, expiry_ms, ctx);
-    }
-
-    public fun exec_synth_cancel_order<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        order: &mut Order,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        Synth::cancel_order(order, ctx);
-    }
-
-    public fun exec_synth_match<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        reg: &mut SynthRegistry,
-        oracle_cfg: &OracleConfig,
-        clock: &Clock,
-        price_info: &PriceInfoObject,
-        buy: &mut Order,
-        sell: &mut Order,
-        buyer_vault: &mut CollateralVault<C>,
-        seller_vault: &mut CollateralVault<C>,
-        unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &PriceInfoObject,
-        taker_is_buyer: bool,
-        min_price: u64,
-        max_price: u64,
-        treasury: &mut Treasury<C>,
-        cap_key: String,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        let worst_notional = max_price * (if (Synth::get_order_remaining(buy) < Synth::get_order_remaining(sell)) { Synth::get_order_remaining(buy) } else { Synth::get_order_remaining(sell) });
-        enforce_cap_key(v, &v.synth_caps_usd, &cap_key, worst_notional);
-        Synth::match_orders(reg, oracle_cfg, clock, price_info, buy, sell, buyer_vault, seller_vault, unxv_payment, unxv_price, taker_is_buyer, min_price, max_price, treasury, ctx);
-    }
-
-    public fun exec_perps_record_fill<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        reg: &mut PerpsRegistry,
-        market: &mut PerpMarket,
-        price_micro_usd: u64,
-        size: u64,
-        taker_is_buyer: bool,
-        maker: address,
-        unxv_payment: vector<Coin<UNXV>>,
-        unxv_usd_price: &PriceInfoObject,
-        oracle_cfg: &OracleConfig,
-        clock: &Clock,
-        treasury: &mut Treasury<C>,
-        fee_payment: Coin<C>,
-        oi_increase: bool,
-        min_price: u64,
-        max_price: u64,
-        cap_key: String,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        let notional = size * price_micro_usd;
-        enforce_cap_key(v, &v.perps_caps_usd, &cap_key, notional);
-        Perps::record_fill(_cfg, reg, market, price_micro_usd, size, taker_is_buyer, maker, unxv_payment, unxv_usd_price, oracle_cfg, clock, treasury, fee_payment, oi_increase, min_price, max_price, ctx);
-    }
-
-    public fun exec_futures_record_fill<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        reg: &mut FuturesRegistry,
-        market: &mut FuturesContract,
-        price_micro_usd: u64,
-        size: u64,
-        taker_is_buyer: bool,
-        maker: address,
-        unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &PriceInfoObject,
-        oracle_cfg: &OracleConfig,
-        clock: &Clock,
-        treasury: &mut Treasury<C>,
-        fee_payment: Coin<C>,
-        oi_increase: bool,
-        cap_key: String,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        let notional = size * price_micro_usd;
-        enforce_cap_key(v, &v.futures_caps_usd, &cap_key, notional);
-        Futures::record_fill(_cfg, reg, market, price_micro_usd, size, taker_is_buyer, maker, unxv_payment, unxv_price, oracle_cfg, clock, treasury, fee_payment, oi_increase, ctx);
-    }
-
-    public fun exec_gas_record_fill<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        reg: &mut GasFuturesRegistry,
-        market: &mut GasFuturesContract,
-        price_micro_usd_per_gas: u64,
-        size: u64,
-        taker_is_buyer: bool,
-        maker: address,
-        unxv_payment: vector<Coin<UNXV>>,
-        sui_usd_price: &PriceInfoObject,
-        unxv_usd_price: &PriceInfoObject,
-        oracle_cfg: &OracleConfig,
-        clock: &Clock,
-        treasury: &mut Treasury<C>,
-        fee_payment: Coin<C>,
-        oi_increase: bool,
-        min_price: u64,
-        max_price: u64,
-        cap_key: String,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        let notional = size * price_micro_usd_per_gas;
-        enforce_cap_key(v, &v.gas_caps_usd, &cap_key, notional);
-        GasFutures::record_gas_fill(_cfg, reg, market, price_micro_usd_per_gas, size, taker_is_buyer, maker, unxv_payment, sui_usd_price, unxv_usd_price, oracle_cfg, clock, treasury, fee_payment, oi_increase, min_price, max_price, ctx);
-    }
-
-    public fun exec_options_place_short_offer<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        market: &OptionMarket,
-        quantity: u64,
-        _min_premium_per_unit: u64,
-        _collateral: Coin<C>,
-        cap_key: String,
-        ctx: &mut TxContext
-    ): ShortOffer<C> {
-        assert_active_and_executor(v, ctx);
-        let notional = quantity * Opt::get_market_strike_price(market);
-        enforce_cap_key(v, &v.options_caps_usd, &cap_key, notional);
-        abort 999
-    }
-
-    public fun exec_options_place_premium_escrow<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        _market: &mut OptionMarket,
-        quantity: u64,
-        premium_per_unit: u64,
-        _premium_payment: Coin<C>,
-        _expiry_cancel_ms: u64,
-        cap_key: String,
-        ctx: &mut TxContext
-    ): PremiumEscrow<C> {
-        assert_active_and_executor(v, ctx);
-        let notional = quantity * premium_per_unit;
-        enforce_cap_key(v, &v.options_caps_usd, &cap_key, notional);
-        abort 999
-    }
-
-    public fun exec_options_match_offer_and_escrow<C>(
-        cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        reg: &mut OptionsRegistry,
-        market: &mut OptionMarket,
-        offer: &mut ShortOffer<C>,
-        escrow: &mut PremiumEscrow<C>,
-        max_fill_qty: u64,
-        unxv_payment: Coin<UNXV>,
-        treasury: &mut Treasury<C>,
-        oracle_cfg: &OracleConfig,
-        clock: &Clock,
-        unxv_price: &PriceInfoObject,
-        cap_key: String,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        let notional = max_fill_qty * Opt::get_market_strike_price(market);
-        enforce_cap_key(v, &v.options_caps_usd, &cap_key, notional);
-        Opt::match_offer_and_escrow_public(cfg, reg, market, offer, escrow, max_fill_qty, unxv_payment, treasury, oracle_cfg, clock, unxv_price, ctx);
-    }
-
-    public fun exec_options_close_by_premium<C>(
-        _cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        _reg: &mut OptionsRegistry,
-        _market: &mut OptionMarket,
-        _long_pos: &mut OptionPosition<C>,
-        _short_pos: &mut OptionPosition<C>,
-        quantity: u64,
-        premium_per_unit: u64,
-        _payer_is_long: bool,
-        _premium_payment: Coin<C>,
-        _unxv_payment: vector<Coin<UNXV>>,
-        _oracle_cfg: &OracleConfig,
-        _clock: &Clock,
-        _unxv_price: &PriceInfoObject,
-        _treasury: &mut Treasury<C>,
-        cap_key: String,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        let notional = quantity * premium_per_unit;
-        enforce_cap_key(v, &v.options_caps_usd, &cap_key, notional);
-        abort 999
-    }
-
-    public fun exec_options_settle_cash<C>(
-        cfg: &CollateralConfig<C>,
-        v: &Vault<C>,
-        reg: &mut OptionsRegistry,
-        market: &mut OptionMarket,
-        long_pos: &mut OptionPosition<C>,
-        short_pos: &mut OptionPosition<C>,
-        quantity: u64,
-        treasury: &mut Treasury<C>,
-        ctx: &mut TxContext
-    ) {
-        assert_active_and_executor(v, ctx);
-        Opt::settle_positions_cash(cfg, reg, market, long_pos, short_pos, quantity, treasury, ctx);
-    }
-
-    public fun vault_status<C>(v: &Vault<C>): (u8, address, u8, String) { (v.vault_type, v.manager, v.status, v.template_id) }
-    public fun vault_caps<C>(v: &Vault<C>): (u64, u64) { (v.risk_caps.max_trade_notional_usd, v.risk_caps.max_slippage_bps) }
-    public fun vault_fee_cfg<C>(v: &Vault<C>): (u64, u64, u64, u64) { (v.fee_cfg.performance_bps, v.fee_cfg.management_bps, v.fee_cfg.protocol_skim_bps, v.fee_cfg.max_performance_bps) }
-    public fun vault_executors<C>(v: &Vault<C>): &VecSet<address> { &v.executor_addrs }
-    public fun vault_balance<C>(v: &Vault<C>): u64 { balance::value(&v.balance) }
-    public fun managed_stats<C>(v: &Vault<C>): (u64, u64, u64, u64, bool) { (v.total_shares, v.manager_shares, v.required_stake_bps, v.high_water_mark_micro_usd_per_share, stake_ok(v)) }
-    public fun vault_nav_micro_usd_per_share<C>(v: &Vault<C>): u64 { nav_micro_usd_per_share(v) }
-    public fun vault_current_tier_index<C>(r: &VaultsRegistry, v: &Vault<C>): u64 { current_tier_index(r, v) }
-    public fun vault_timelocks<C>(v: &Vault<C>): (u64, u64) { (v.timelocks.withdraw_notice_sec, v.timelocks.param_cooldown_sec) }
-    public fun vault_param_cooldown_next_ms<C>(v: &Vault<C>): u64 { v.last_param_update_ms + v.timelocks.param_cooldown_sec * 1000 }
-    public fun vault_hwm<C>(v: &Vault<C>): u64 { v.high_water_mark_micro_usd_per_share }
-    public fun vault_required_stake_bps<C>(v: &Vault<C>): u64 { v.required_stake_bps }
-    public fun get_cap_dex_key<C>(v: &Vault<C>, _key: &String): u64 { v.risk_caps.max_trade_notional_usd }
-    public fun get_cap_synth_key<C>(v: &Vault<C>, _key: &String): u64 { v.risk_caps.max_trade_notional_usd }
-    public fun get_cap_perps_key<C>(v: &Vault<C>, _key: &String): u64 { v.risk_caps.max_trade_notional_usd }
-    public fun get_cap_futures_key<C>(v: &Vault<C>, _key: &String): u64 { v.risk_caps.max_trade_notional_usd }
-    public fun get_cap_gas_key<C>(v: &Vault<C>, _key: &String): u64 { v.risk_caps.max_trade_notional_usd }
-    public fun get_cap_options_key<C>(v: &Vault<C>, _key: &String): u64 { v.risk_caps.max_trade_notional_usd }
-    public fun tier_config_lengths(r: &VaultsRegistry): u64 { vector::length(&r.tier_thresholds_unxv) as u64 }
-    public fun tier_threshold_at(r: &VaultsRegistry, idx: u64): u64 { *vector::borrow(&r.tier_thresholds_unxv, idx) }
-    public fun tier_perf_ceiling_at(r: &VaultsRegistry, idx: u64): u64 { *vector::borrow(&r.tier_perf_ceiling_bps, idx) }
-
-    public entry fun init_vault_display<C>(publisher: &Publisher, ctx: &mut TxContext) {
-        let mut disp = display::new<Vault<C>>(publisher, ctx);
-        disp.add(b"name".to_string(), b"Unxversal Vault".to_string());
-        disp.add(b"description".to_string(), b"Unified vault for liquidity and managed strategies".to_string());
-        disp.update_version();
-        transfer::public_transfer(disp, tx_context::sender(ctx));
-    }
-// The legacy secondary module present in older revisions has been removed below to avoid duplicates.
