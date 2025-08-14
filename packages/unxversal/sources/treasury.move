@@ -130,6 +130,30 @@ module unxversal::treasury {
 
     // Helper: returns the address of the Treasury object (useful for transfers)
     public fun treasury_address<C>(t: &Treasury<C>): address { object::uid_to_address(&t.id) }
+
+    // Cross-module deposit helpers (callable from other unxversal modules)
+    public(package) fun deposit_collateral_ext<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &mut TxContext) {
+        let amount = coin::value(&c);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        let bal = coin::into_balance(c);
+        balance::join(&mut treasury.collateral, bal);
+        event::emit(FeeReceived { source, asset: b"COLLATERAL".to_string(), amount, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    public(package) fun deposit_unxv_ext<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {
+        let mut merged = coin::zero<UNXV>(ctx);
+        let mut i = 0; let mut total: u64 = 0;
+        while (i < vector::length(&v)) {
+            let c = vector::pop_back(&mut v);
+            total = total + coin::value(&c);
+            coin::join(&mut merged, c);
+            i = i + 1;
+        };
+        assert!(total > 0, E_ZERO_AMOUNT);
+        let bal = coin::into_balance(merged);
+        balance::join(&mut treasury.unxv, bal);
+        event::emit(FeeReceived { source, asset: b"UNXV".to_string(), amount: total, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
 }
 
 
