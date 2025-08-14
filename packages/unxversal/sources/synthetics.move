@@ -1273,6 +1273,54 @@ module unxversal::synthetics {
         if (table::contains(&registry.oracle_feeds, k)) { copy_vector_u8(table::borrow(&registry.oracle_feeds, clone_string(symbol))) } else { b"".to_string().into_bytes() }
     }
 
+    /// Rank a vault's debts by contribution to total debt value (largest first).
+    /// Caller supplies parallel vectors of symbols and their current prices (micro-USD).
+    /// Returns a vector of symbols ordered by descending debt_value = debt_units * price.
+    public fun rank_vault_liquidation_order<C>(
+        vault: &CollateralVault<C>,
+        symbols: &vector<String>,
+        prices: &vector<u64>
+    ): vector<String> {
+        let mut work_syms = clone_string_vec(&vault.debt_symbols);
+        let mut values = vector::empty<u64>();
+        let mut i = 0; let n = vector::length(&work_syms);
+        while (i < n) {
+            let s = *vector::borrow(&work_syms, i);
+            let du = if (table::contains(&vault.synthetic_debt, clone_string(&s))) { *table::borrow(&vault.synthetic_debt, clone_string(&s)) } else { 0 };
+            let px = price_for_symbol(symbols, prices, &s);
+            let dv = if (du > 0 && px > 0) { du * px } else { 0 };
+            vector::push_back(&mut values, dv);
+            i = i + 1;
+        };
+
+        // Selection-like ordering: repeatedly pick max value
+        let mut ordered = vector::empty<String>();
+        let mut k = 0;
+        while (k < n) {
+            let mut best_v: u64 = 0; let mut best_i: u64 = 0; let mut found = false;
+            let mut j = 0;
+            while (j < n) {
+                let vj = *vector::borrow(&values, j);
+                if (vj > best_v) {
+                    best_v = vj; best_i = j; found = true;
+                };
+                j = j + 1;
+            };
+            if (!found || best_v == 0) { break; };
+            let top_sym = vector::borrow(&work_syms, best_i);
+            vector::push_back(&mut ordered, clone_string(top_sym));
+            // mark consumed
+            let mut tmp = 0u64; // placeholder to write back
+            // replace value at best_i with 0
+            // Since Move doesn't have direct set, rebuild values vector positionally
+            let mut new_vals = vector::empty<u64>();
+            let mut t = 0; while (t < n) { let cur = *vector::borrow(&values, t); if (t == best_i) { vector::push_back(&mut new_vals, tmp); } else { vector::push_back(&mut new_vals, cur); }; t = t + 1; };
+            values = new_vals;
+            k = k + 1;
+        };
+        ordered
+    }
+
     /// Compute collateral/debt values for a vault and return ratio bps
     public fun get_vault_values<C>(
         vault: &CollateralVault<C>,
@@ -1358,7 +1406,7 @@ module unxversal::synthetics {
 
     /// Multi-asset liquidation: gate by aggregate ratio against max liquidation threshold across open debts
     public fun liquidate_vault_multi<C>(
-        registry: &mut SynthRegistry,
+        _registry: &mut SynthRegistry,
         vault: &mut CollateralVault<C>,
         symbols: vector<String>,
         prices: vector<u64>,
@@ -1368,9 +1416,9 @@ module unxversal::synthetics {
         treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
-        assert!(!registry.paused, 1000);
+        assert!(!_registry.paused, 1000);
         // compute aggregate ratio and max threshold
-        let mut total_debt_value: u64 = 0; let mut max_th = registry.global_params.liquidation_threshold;
+        let mut total_debt_value: u64 = 0; let mut max_th = _registry.global_params.liquidation_threshold;
         let mut i = 0; let n = vector::length(&symbols);
         while (i < n) {
             let sym = *vector::borrow(&symbols, i);
@@ -1380,8 +1428,8 @@ module unxversal::synthetics {
                 if (du > 0) {
                     assert!(px > 0, E_BAD_PRICE);
                     total_debt_value = total_debt_value + (du * px);
-                    let a = table::borrow(&registry.synthetics, clone_string(&sym));
-                    let th = if (a.liquidation_threshold_bps > 0) { a.liquidation_threshold_bps } else { registry.global_params.liquidation_threshold };
+                    let a = table::borrow(&_registry.synthetics, clone_string(&sym));
+                    let th = if (a.liquidation_threshold_bps > 0) { a.liquidation_threshold_bps } else { _registry.global_params.liquidation_threshold };
                     if (th > max_th) { max_th = th; };
                 };
             };
@@ -1391,6 +1439,13 @@ module unxversal::synthetics {
         let ratio = if (total_debt_value == 0) { U64_MAX_LITERAL } else { (collateral_value * 10_000) / total_debt_value };
         assert!(ratio < max_th, E_VAULT_NOT_HEALTHY);
 
+        // Soft-order enforcement (optional): ensure target equals the top-ranked symbol if any
+        let ranked = rank_vault_liquidation_order(vault, &symbols, &prices);
+        if (vector::length(&ranked) > 0) {
+            let top = vector::borrow(&ranked, 0);
+            assert!(eq_string(top, &target_symbol), E_INVALID_ORDER);
+        };
+
         // Proceed to repay target asset like single-asset path
         let outstanding = if (table::contains(&vault.synthetic_debt, clone_string(&target_symbol))) { *table::borrow(&vault.synthetic_debt, clone_string(&target_symbol)) } else { 0 };
         let repay = if (repay_amount > outstanding) { outstanding } else { repay_amount };
@@ -1398,8 +1453,8 @@ module unxversal::synthetics {
         let px_target = price_for_symbol(&symbols, &prices, &target_symbol);
         assert!(px_target > 0, E_BAD_PRICE);
         let notional = repay * px_target;
-        let asset_for_liq = table::borrow(&registry.synthetics, clone_string(&target_symbol));
-        let liq_pen_bps = if (asset_for_liq.liquidation_penalty_bps > 0) { asset_for_liq.liquidation_penalty_bps } else { registry.global_params.liquidation_penalty };
+        let asset_for_liq = table::borrow(&_registry.synthetics, clone_string(&target_symbol));
+        let liq_pen_bps = if (asset_for_liq.liquidation_penalty_bps > 0) { asset_for_liq.liquidation_penalty_bps } else { _registry.global_params.liquidation_penalty };
         let penalty = (notional * liq_pen_bps) / 10_000;
         let seize = notional + penalty;
 
@@ -1408,7 +1463,7 @@ module unxversal::synthetics {
         table::add(&mut vault.synthetic_debt, clone_string(&target_symbol), new_debt);
         if (new_debt == 0) { remove_symbol_if_present(&mut vault.debt_symbols, &target_symbol); };
         let mut seized_coin = { let seized_bal = balance::split(&mut vault.collateral, seize); coin::from_balance(seized_bal, ctx) };
-        let bot_cut = (seize * registry.global_params.bot_split) / 10_000;
+        let bot_cut = (seize * _registry.global_params.bot_split) / 10_000;
         let to_bot = coin::split(&mut seized_coin, bot_cut, ctx);
         transfer::public_transfer(to_bot, liquidator);
         TreasuryMod::deposit_collateral(treasury, seized_coin, b"liquidation".to_string(), liquidator, ctx);
