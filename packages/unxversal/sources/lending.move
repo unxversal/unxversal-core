@@ -739,6 +739,12 @@ module unxversal::lending {
         assert!(table::contains(&debtor.borrow_balances, clone_string(&debt_sym)), E_UNKNOWN_ASSET);
         let cur_debt = *table::borrow(&debtor.borrow_balances, clone_string(&debt_sym));
         assert!(repay_amount <= cur_debt, E_OVER_REPAY);
+        // Enforce liquidation priority: target debt must be top-ranked by value
+        let ranked = rank_coin_debt_order(debtor, &symbols, &prices);
+        if (vector::length(&ranked) > 0) {
+            let top = vector::borrow(&ranked, 0);
+            assert!(eq_string(top, &debt_sym), E_VIOLATION);
+        };
         // apply payment into pool
         let exact_pay = coin::split(&mut payment, repay_amount, ctx);
         let pay_bal = coin::into_balance(exact_pay);
@@ -976,37 +982,6 @@ module unxversal::lending {
         transfer::public_transfer(out, ctx.sender());
     }
 
-    /// Deprecated: use borrow_synth_multi to enforce aggregate CR across all open debts
-    public entry fun borrow_synth<C>(
-        synth_reg: &mut SynthRegistry,
-        cfg: &CollateralConfig<C>,
-        clock: &Clock,
-        oracle_cfg: &OracleConfig,
-        price_info: &Aggregator,
-        vault: &mut CollateralVault<C>,
-        reg: &mut LendingRegistry,
-        acct: &mut UserAccount,
-        symbol: String,
-        units: u64,
-        unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &Aggregator,
-        treasury: &mut Treasury<C>,
-        ctx: &mut TxContext
-    ) {
-        assert!(!reg.paused, 1000);
-        assert!(units > 0, E_ZERO_AMOUNT);
-        assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
-        assert!(table::contains(&reg.synth_markets, clone_string(&symbol)), E_UNKNOWN_ASSET);
-        // Enforce deprecation at runtime to steer callers to multi variant
-        assert!(false, E_DEPRECATED);
-        let cur = if (table::contains(&acct.synth_borrow_units, clone_string(&symbol))) { *table::borrow(&acct.synth_borrow_units, clone_string(&symbol)) } else { 0 };
-        let newb = cur + units;
-        table::add(&mut acct.synth_borrow_units, clone_string(&symbol), newb);
-        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
-        m.total_borrow_units = m.total_borrow_units + units;
-        acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
-        event::emit(SynthBorrowed { user: ctx.sender(), symbol, units, new_borrow_units: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-    }
 
     /// Aggregate-checked borrow: calls mint_synthetic_multi to enforce shared-collateral CR across all open debts
     public entry fun borrow_synth_multi<C>(
