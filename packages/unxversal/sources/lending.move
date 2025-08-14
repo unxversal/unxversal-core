@@ -160,8 +160,6 @@ module unxversal::lending {
 
     const U64_MAX_LITERAL: u64 = 18_446_744_073_709_551_615;
     const E_VAULT_NOT_HEALTHY: u64 = 12;
-    const E_DEPRECATED: u64 = 13;
-    
 
     fun clone_string(s: &String): String {
         let src = string::as_bytes(s);
