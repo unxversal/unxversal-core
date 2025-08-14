@@ -1,14 +1,13 @@
+/// Unxversal Options – Phase 1 (Registry & Market Listing)
+/// - Admin‑whitelisted underlyings (native coins or synthetics)
+/// - Permissionless option market creation on whitelisted underlyings
+/// - Oracle feeds normalized to micro‑USD via core Oracle module
+/// - Integrates directly with on-chain orderbook in `dex.move` for execution paths
+/// - Displays and read‑only helpers for indexers/bots
+#[allow(lint(coin_field))]
 module unxversal::options {
-    /*******************************
-    * Unxversal Options – Phase 1 (Registry & Market Listing)
-    * - Admin‑whitelisted underlyings (native coins or synthetics)
-    * - Permissionless option market creation on whitelisted underlyings
-    * - Oracle feeds normalized to micro‑USD via core Oracle module
-    * - Internal DEX/AutoSwap expected for execution in later phases
-    * - Displays and read‑only helpers for indexers/bots
-    *******************************/
 
-    use sui::tx_context::TxContext;
+    // TxContext alias provided by default
     use sui::display;
     use sui::package;
     use sui::package::Publisher;
@@ -231,14 +230,14 @@ module unxversal::options {
     }
 
     /// Short underlying escrow for coin-physical CALLs (typed by Base)
-    public struct ShortUnderlyingEscrow<Base> has key, store {
+    public struct ShortUnderlyingEscrow<phantom Base> has key, store {
         id: UID,
         position_id: ID,
         escrow_base: Coin<Base>,
     }
 
     /// Long underlying escrow for coin-physical PUTs (typed by Base)
-    public struct LongUnderlyingEscrow<Base> has key, store {
+    public struct LongUnderlyingEscrow<phantom Base> has key, store {
         id: UID,
         owner: address,
         position_id: ID,
@@ -246,7 +245,7 @@ module unxversal::options {
     }
 
     /// Coin-collateralized short offer (typed by Base)
-    public struct CoinShortOffer<Base> has key, store {
+    public struct CoinShortOffer<phantom Base> has key, store {
         id: UID,
         owner: address,
         market_id: ID,
@@ -309,7 +308,6 @@ module unxversal::options {
     /*******************************
     * Admin helper
     *******************************/
-    fun assert_is_admin(_reg: &OptionsRegistry, _addr: address) { /* deprecated local list – retained for compatibility */ }
     fun assert_is_admin_via_synth(synth_reg: &SynthRegistry, addr: address) { assert!(Synth::is_admin(synth_reg, addr), E_NOT_ADMIN); }
 
     fun clone_string(s: &String): String {
@@ -374,7 +372,7 @@ module unxversal::options {
     /*******************************
     * Admin – Underlyings & pause
     *******************************/
-    public entry fun add_underlying(
+    public fun add_underlying(
         _admin: &AdminCap,
         synth_reg: &SynthRegistry,
         reg: &mut OptionsRegistry,
@@ -401,7 +399,7 @@ module unxversal::options {
         event::emit(UnderlyingAdded { symbol, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
-    public entry fun remove_underlying(
+    public fun remove_underlying(
         _admin: &AdminCap,
         synth_reg: &SynthRegistry,
         reg: &mut OptionsRegistry,
@@ -416,16 +414,16 @@ module unxversal::options {
         event::emit(UnderlyingRemoved { symbol, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
-    public entry fun pause(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.paused = true; event::emit(PausedToggled { new_state: true, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
-    public entry fun resume(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.paused = false; event::emit(PausedToggled { new_state: false, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
+    public fun pause(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.paused = true; event::emit(PausedToggled { new_state: true, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
+    public fun resume(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.paused = false; event::emit(PausedToggled { new_state: false, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
 
-    public entry fun set_treasury<C>(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, treasury: &Treasury<C>, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.treasury_id = object::id(treasury); }
-    public entry fun set_fee_config(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, trade_fee_bps: u64, unxv_discount_bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.trade_fee_bps = trade_fee_bps; reg.unxv_discount_bps = unxv_discount_bps; }
-    public entry fun set_settlement_fee_bps(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.settlement_fee_bps = bps; }
-    public entry fun set_liq_penalty_bps(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.liq_penalty_bps = bps; }
-    public entry fun set_bot_reward_bps(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, liq_bot_bps: u64, close_bot_bps: u64, settle_bot_bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.liq_bot_reward_bps = liq_bot_bps; reg.close_bot_reward_bps = close_bot_bps; reg.settlement_bot_reward_bps = settle_bot_bps; }
-    public entry fun set_maker_rebate_bps_close(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.maker_rebate_bps_close = bps; }
-    public entry fun set_default_market_params(
+    public fun set_treasury<C>(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, treasury: &Treasury<C>, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.treasury_id = object::id(treasury); }
+    public fun set_fee_config(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, trade_fee_bps: u64, unxv_discount_bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.trade_fee_bps = trade_fee_bps; reg.unxv_discount_bps = unxv_discount_bps; }
+    public fun set_settlement_fee_bps(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.settlement_fee_bps = bps; }
+    public fun set_liq_penalty_bps(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.liq_penalty_bps = bps; }
+    public fun set_bot_reward_bps(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, liq_bot_bps: u64, close_bot_bps: u64, settle_bot_bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.liq_bot_reward_bps = liq_bot_bps; reg.close_bot_reward_bps = close_bot_bps; reg.settlement_bot_reward_bps = settle_bot_bps; }
+    public fun set_maker_rebate_bps_close(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.maker_rebate_bps_close = bps; }
+    public fun set_default_market_params(
         _admin: &AdminCap,
         synth_reg: &SynthRegistry,
         reg: &mut OptionsRegistry,
@@ -439,7 +437,7 @@ module unxversal::options {
         ctx: &TxContext
     ) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.default_exercise_style = exercise_style; reg.default_contract_size = contract_size; reg.default_tick_size = tick_size; reg.default_init_margin_bps_short = init_margin_bps_short; reg.default_maint_margin_bps_short = maint_margin_bps_short; reg.default_max_oi_per_user = max_oi_per_user; reg.default_max_open_contracts_market = max_open_contracts_market; }
 
-    public entry fun set_market_params(
+    public fun set_market_params(
         _admin: &AdminCap,
         synth_reg: &SynthRegistry,
         market: &mut OptionMarket,
@@ -458,7 +456,7 @@ module unxversal::options {
         market.maint_margin_bps_short = maint_margin_bps_short;
     }
 
-    public entry fun set_market_fee_overrides(
+    public fun set_market_fee_overrides(
         _admin: &AdminCap,
         synth_reg: &SynthRegistry,
         market: &mut OptionMarket,
@@ -471,13 +469,13 @@ module unxversal::options {
         market.settlement_fee_bps_override = settlement_fee_bps_override;
     }
 
-    public entry fun grant_admin_via_synth(daddy: &DaddyCap, synth_reg: &mut SynthRegistry, new_admin: address, ctx: &mut TxContext) { Synth::grant_admin(daddy, synth_reg, new_admin, ctx); }
-    public entry fun revoke_admin_via_synth(daddy: &DaddyCap, synth_reg: &mut SynthRegistry, bad_admin: address, ctx: &TxContext) { Synth::revoke_admin(daddy, synth_reg, bad_admin, ctx); }
+    public fun grant_admin_via_synth(daddy: &DaddyCap, synth_reg: &mut SynthRegistry, new_admin: address, ctx: &mut TxContext) { Synth::grant_admin(daddy, synth_reg, new_admin, ctx); }
+    public fun revoke_admin_via_synth(daddy: &DaddyCap, synth_reg: &mut SynthRegistry, bad_admin: address, ctx: &TxContext) { Synth::revoke_admin(daddy, synth_reg, bad_admin, ctx); }
 
     /*******************************
     * Permissionless Market Creation (on whitelisted underlyings)
     *******************************/
-    public entry fun create_option_market<C>(
+    public fun create_option_market<C>(
         reg: &mut OptionsRegistry,
         underlying: String,
         option_type: String,     // "CALL" | "PUT"
@@ -568,17 +566,17 @@ module unxversal::options {
         event::emit(OptionMarketCreated { market_id: mid, market_key_bytes: key_bytes, underlying, option_type, strike_price, expiry_ms, settlement_type, creator: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
-    public entry fun init_settlement_queue(dispute_window_ms: u64, ctx: &mut TxContext) {
+    public fun init_settlement_queue(dispute_window_ms: u64, ctx: &mut TxContext) {
         let q = SettlementQueue { id: object::new(ctx), dispute_window_ms, pending: vector::empty<ID>(), requested_at_ms: table::new<ID, u64>(ctx) };
         transfer::share_object(q);
     }
 
-    public entry fun request_market_settlement(queue: &mut SettlementQueue, market: &OptionMarket, ctx: &mut TxContext) {
+    public fun request_market_settlement(queue: &mut SettlementQueue, market: &OptionMarket, ctx: &mut TxContext) {
         vector::push_back(&mut queue.pending, object::id(market));
         table::add(&mut queue.requested_at_ms, object::id(market), sui::tx_context::epoch_timestamp_ms(ctx));
     }
 
-    public entry fun process_due_settlement(queue: &mut SettlementQueue, reg: &OptionsRegistry, market: &mut OptionMarket, oracle_cfg: &OracleConfig, clock: &Clock, price: &Aggregator, ctx: &mut TxContext) {
+    public fun process_due_settlement(queue: &mut SettlementQueue, reg: &OptionsRegistry, market: &mut OptionMarket, oracle_cfg: &OracleConfig, clock: &Clock, price: &Aggregator, ctx: &mut TxContext) {
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
         let mid = object::id(market);
         if (table::contains(&queue.requested_at_ms, mid)) {
@@ -602,7 +600,7 @@ module unxversal::options {
     /*******************************
     * Early/manual exercise (American)
     *******************************/
-    public entry fun exercise_american_now<C>(
+    public fun exercise_american_now<C>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
         long_pos: &mut OptionPosition<C>,
@@ -649,7 +647,7 @@ module unxversal::options {
     /*******************************
     * Pre‑expiry close/offset with fee; refunds short margin proportionally
     *******************************/
-    public entry fun close_positions_by_premium<C>(
+    public fun close_positions_by_premium<C>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
         long_pos: &mut OptionPosition<C>,
@@ -757,7 +755,7 @@ module unxversal::options {
     /*******************************
     * Liquidation: close pair at live price with penalty to liquidator
     *******************************/
-    public entry fun liquidate_under_collateralized_pair<C: store>(
+    public fun liquidate_under_collateralized_pair<C: store>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
         long_pos: &mut OptionPosition<C>,
@@ -881,7 +879,7 @@ module unxversal::options {
     /*******************************
     * Displays for Market (type-level)
     *******************************/
-    public entry fun init_market_display(publisher: &Publisher, ctx: &mut TxContext) {
+    public fun init_market_display(publisher: &Publisher, ctx: &mut TxContext) {
         let mut disp = display::new<OptionMarket>(publisher, ctx);
         disp.add(b"name".to_string(), b"Option Market {underlying} {option_type} {strike_price} @ {expiry_ms}".to_string());
         disp.add(b"description".to_string(), b"Unxversal Options market".to_string());
@@ -893,7 +891,7 @@ module unxversal::options {
         transfer::public_transfer(disp, ctx.sender());
     }
 
-    public entry fun init_offer_and_position_displays<C: store>(publisher: &Publisher, ctx: &mut TxContext) {
+    public fun init_offer_and_position_displays<C: store>(publisher: &Publisher, ctx: &mut TxContext) {
         let mut disp_offer = display::new<ShortOffer<C>>(publisher, ctx);
         disp_offer.add(b"name".to_string(), b"Short Offer {option_type} {strike_price} exp {expiry_ms}".to_string());
         disp_offer.add(b"remaining_qty".to_string(), b"{remaining_qty}".to_string());
@@ -945,7 +943,7 @@ module unxversal::options {
     /*******************************
     * Cash settlement at/after expiry (oracle normalized)
     *******************************/
-    public entry fun expire_and_settle_market_cash(
+    public fun expire_and_settle_market_cash(
         reg: &OptionsRegistry,
         market: &mut OptionMarket,
         oracle_cfg: &OracleConfig,
@@ -970,7 +968,7 @@ module unxversal::options {
     /*******************************
     * OTC matching: Writer short offer and buyer premium escrow
     *******************************/
-    public entry fun place_short_offer<C: store>(
+    public fun place_short_offer<C: store>(
         market: &OptionMarket,
         quantity: u64,
         min_premium_per_unit: u64,
@@ -991,7 +989,7 @@ module unxversal::options {
     }
 
     /// Coin short offer for physical CALLs that deliver Base at exercise
-    public entry fun place_coin_short_offer<Base: store>(
+    public fun place_coin_short_offer<Base: store>(
         market: &OptionMarket,
         quantity: u64,
         min_premium_per_unit: u64,
@@ -1012,7 +1010,7 @@ module unxversal::options {
         transfer::share_object(offer);
     }
 
-    public entry fun place_premium_escrow<C: store>(
+    public fun place_premium_escrow<C: store>(
         market: &OptionMarket,
         quantity: u64,
         premium_per_unit: u64,
@@ -1032,7 +1030,7 @@ module unxversal::options {
     }
 
     /// Long underlying escrow for physical PUTs: buyer deposits Base they will deliver on exercise
-    public entry fun place_long_underlying_escrow<Base: store>(
+    public fun place_long_underlying_escrow<Base: store>(
         market: &OptionMarket,
         quantity: u64,
         mut base_in: Coin<Base>,
@@ -1051,7 +1049,7 @@ module unxversal::options {
         transfer::share_object(esc);
     }
 
-    public entry fun cancel_long_underlying_escrow<Base: store>(market: &OptionMarket, esc: LongUnderlyingEscrow<Base>, ctx: &mut TxContext) {
+    public fun cancel_long_underlying_escrow<Base: store>(market: &OptionMarket, esc: LongUnderlyingEscrow<Base>, ctx: &mut TxContext) {
         assert!(esc.owner == ctx.sender(), E_NOT_ADMIN);
         // Allow cancel only if escrow is unbound (still tied to market placeholder id)
         assert!(esc.position_id == object::id(market), E_BAD_PARAMS);
@@ -1061,28 +1059,28 @@ module unxversal::options {
     }
 
     /// GC for long PUT escrow: delete when empty (anyone can call; no funds)
-    public entry fun gc_long_underlying_escrow<Base: store>(esc: LongUnderlyingEscrow<Base>, _ctx: &mut TxContext) {
+    public fun gc_long_underlying_escrow<Base: store>(esc: LongUnderlyingEscrow<Base>, _ctx: &mut TxContext) {
         assert!(coin::value(&esc.escrow_base) == 0, E_BAD_PARAMS);
         let LongUnderlyingEscrow<Base> { id, owner: _, position_id: _, escrow_base } = esc;
         coin::destroy_zero(escrow_base);
         object::delete(id);
     }
 
-    public entry fun cancel_short_offer<C: store>(offer: ShortOffer<C>, ctx: &mut TxContext) {
+    public fun cancel_short_offer<C: store>(offer: ShortOffer<C>, ctx: &mut TxContext) {
         assert!(offer.owner == ctx.sender(), E_NOT_ADMIN);
         let ShortOffer<C> { id, owner, market_id: _, option_type: _, strike_price: _, expiry_ms: _, remaining_qty: _, min_premium_per_unit: _, collateral_locked, created_at_ms: _ } = offer;
         transfer::public_transfer(collateral_locked, owner);
         object::delete(id);
     }
 
-    public entry fun cancel_coin_short_offer<Base: store>(offer: CoinShortOffer<Base>, ctx: &mut TxContext) {
+    public fun cancel_coin_short_offer<Base: store>(offer: CoinShortOffer<Base>, ctx: &mut TxContext) {
         assert!(offer.owner == ctx.sender(), E_NOT_ADMIN);
         let CoinShortOffer<Base> { id, owner, market_id: _, option_type: _, strike_price: _, expiry_ms: _, remaining_qty: _, min_premium_per_unit: _, escrow_base, created_at_ms: _ } = offer;
         transfer::public_transfer(escrow_base, owner);
         object::delete(id);
     }
 
-    public entry fun cancel_premium_escrow<C: store>(esc: PremiumEscrow<C>, ctx: &mut TxContext) {
+    public fun cancel_premium_escrow<C: store>(esc: PremiumEscrow<C>, ctx: &mut TxContext) {
         assert!(esc.owner == ctx.sender(), E_NOT_ADMIN);
         assert!(sui::tx_context::epoch_timestamp_ms(ctx) >= esc.expiry_cancel_ms, E_BAD_PARAMS);
         let PremiumEscrow<C> { id, owner, market_id: _, option_type: _, strike_price: _, expiry_ms: _, remaining_qty: _, premium_per_unit: _, escrow_collateral, created_at_ms: _, expiry_cancel_ms: _ } = esc;
@@ -1090,7 +1088,7 @@ module unxversal::options {
         object::delete(id);
     }
 
-    public entry fun match_offer_and_escrow<C: store>(
+    public fun match_offer_and_escrow<C: store>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
         mut offer: ShortOffer<C>,
@@ -1189,7 +1187,7 @@ module unxversal::options {
     }
 
     /// Match coin-escrowed CALL offer with premium escrow (physical delivery on exercise)
-    public entry fun match_coin_offer_and_escrow<Base: store, C: store>(
+    public fun match_coin_offer_and_escrow<Base: store, C: store>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
         mut offer_or_long: CoinShortOffer<Base>,
@@ -1276,7 +1274,7 @@ module unxversal::options {
     /*******************************
     * Settle a matched long/short pair after market settlement (cash)
     *******************************/
-    public entry fun settle_positions_cash<C>(
+    public fun settle_positions_cash<C>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
         long_pos: &mut OptionPosition<C>,
@@ -1341,7 +1339,7 @@ module unxversal::options {
     /*******************************
     * Physical exercise for coin-escrowed CALLs
     *******************************/
-    public entry fun exercise_physical_call<Base: store, C: store>(
+    public fun exercise_physical_call<Base: store, C: store>(
         market: &mut OptionMarket,
         long_pos: &mut OptionPosition<C>,
         short_pos: &mut OptionPosition<C>,
@@ -1373,7 +1371,7 @@ module unxversal::options {
     /*******************************
     * Physical exercise for PUTs (long delivers Base, short pays Quote)
     *******************************/
-    public entry fun exercise_physical_put<Base: store, C: store>(
+    public fun exercise_physical_put<Base: store, C: store>(
         market: &mut OptionMarket,
         long_pos: &mut OptionPosition<C>,
         short_pos: &mut OptionPosition<C>,
@@ -1409,7 +1407,7 @@ module unxversal::options {
     }
 
     /// Exercise PUT from bound long escrow (symmetric to CALL escrow path)
-    public entry fun exercise_physical_put_from_escrow<Base: store, C: store>(
+    public fun exercise_physical_put_from_escrow<Base: store, C: store>(
         market: &mut OptionMarket,
         long_pos: &mut OptionPosition<C>,
         short_pos: &mut OptionPosition<C>,
@@ -1439,7 +1437,7 @@ module unxversal::options {
     }
 
     /// Match physical PUT: consume long's Base escrow and short's cash offer; premium paid from PremiumEscrow<C>
-    public entry fun match_put_long_escrow_and_offer<Base: store, C: store>(
+    public fun match_put_long_escrow_and_offer<Base: store, C: store>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
         mut long_escrow: LongUnderlyingEscrow<Base>,
@@ -1536,14 +1534,14 @@ module unxversal::options {
     }
 
     /// GC function to delete an empty ShortUnderlyingEscrow<Base> object once fully delivered
-    public entry fun gc_underlying_escrow<Base: store>(escrow: ShortUnderlyingEscrow<Base>, _ctx: &mut TxContext) {
+    public fun gc_underlying_escrow<Base: store>(escrow: ShortUnderlyingEscrow<Base>, _ctx: &mut TxContext) {
         assert!(coin::value(&escrow.escrow_base) == 0, E_BAD_PARAMS);
         let ShortUnderlyingEscrow<Base> { id, position_id: _, escrow_base } = escrow;
         coin::destroy_zero(escrow_base);
         object::delete(id);
     }
 
-    public entry fun emit_physical_delivery_completed(
+    public fun emit_physical_delivery_completed(
         market: &OptionMarket,
         side: u8,
         quantity: u64,
@@ -1554,7 +1552,7 @@ module unxversal::options {
     /*******************************
     * Physical settlement intent events (bot-driven orchestration)
     *******************************/
-    public entry fun request_physical_delivery_long<C>(
+    public fun request_physical_delivery_long<C>(
         market: &OptionMarket,
         long_pos: &OptionPosition<C>,
         quantity: u64,
@@ -1562,7 +1560,7 @@ module unxversal::options {
         ctx: &TxContext
     ) { assert!(quantity > 0 && quantity <= long_pos.quantity, E_AMOUNT); event::emit(PhysicalDeliveryRequested { market_id: object::id(market), requester: long_pos.owner, side: 0, quantity, min_settlement_price, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
 
-    public entry fun request_physical_delivery_short<C>(
+    public fun request_physical_delivery_short<C>(
         market: &OptionMarket,
         short_pos: &OptionPosition<C>,
         quantity: u64,
