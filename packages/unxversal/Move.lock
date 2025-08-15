@@ -50,3 +50,8 @@ source = { local = "../sui/on_demand" }
 dependencies = [
   { id = "Sui", name = "Sui" },
 ]
+
+[move.toolchain-version]
+compiler-version = "1.53.2"
+edition = "2024"
+flavor = "sui"
