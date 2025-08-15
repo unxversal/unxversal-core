@@ -1,4 +1,3 @@
-#[allow(lint(public_entry))]
 module unxversal::lending {
     /*******************************
     * Unxversal Lending – Phase 1
@@ -125,7 +124,6 @@ module unxversal::lending {
 
     /// Pair type for returning symbol/feed lists without tuple type arguments
     
-
     /*******************************
     * User account
     *******************************/
@@ -174,10 +172,14 @@ module unxversal::lending {
         let bb = string::as_bytes(b);
         let la = vector::length(ab);
         let lb = vector::length(bb);
-        if (la != lb) { return false; };
+        if (la != lb) { return false };
         let mut i = 0;
-        while (i < la) { if (*vector::borrow(ab, i) != *vector::borrow(bb, i)) { return false; }; i = i + 1; };
-        true
+        let mut equal = true;
+        while (i < la) {
+            if (*vector::borrow(ab, i) != *vector::borrow(bb, i)) { equal = false; break };
+            i = i + 1;
+        };
+        return equal
     }
 
     fun clone_string_vec(src: &vector<String>): vector<String> {
@@ -193,7 +195,7 @@ module unxversal::lending {
         symbols: &vector<String>,
         prices: &vector<u64>
     ): vector<String> {
-        let mut work_syms = clone_string_vec(symbols);
+        let work_syms = clone_string_vec(symbols);
         let mut values = vector::empty<u64>();
         let mut i = 0; let n = vector::length(&work_syms);
         while (i < n) {
@@ -205,15 +207,28 @@ module unxversal::lending {
             i = i + 1;
         };
         let mut ordered = vector::empty<String>();
-        let mut k = 0; while (k < n) {
-            let mut best_v: u64 = 0; let mut best_i: u64 = 0; let mut found = false;
-            let mut j = 0; while (j < n) { let vj = *vector::borrow(&values, j); if (vj > best_v) { best_v = vj; best_i = j; found = true; }; j = j + 1; };
-            if (!found || best_v == 0) { break; };
+        let mut k = 0;
+        while (k < n) {
+            let mut best_v: u64 = 0;
+            let mut best_i: u64 = 0;
+            let mut found = false;
+            let mut j = 0;
+            while (j < n) {
+                let vj = *vector::borrow(&values, j);
+                if (vj > best_v) { best_v = vj; best_i = j; found = true; };
+                j = j + 1;
+            };
+            if (!found || best_v == 0) { break };
             let top_sym = vector::borrow(&work_syms, best_i);
             vector::push_back(&mut ordered, clone_string(top_sym));
             // mark consumed by zeroing that slot
             let mut new_vals = vector::empty<u64>();
-            let mut t = 0; while (t < n) { let cur = *vector::borrow(&values, t); if (t == best_i) { vector::push_back(&mut new_vals, 0); } else { vector::push_back(&mut new_vals, cur); }; t = t + 1; };
+            let mut t = 0;
+            while (t < n) {
+                let cur = *vector::borrow(&values, t);
+                if (t == best_i) { vector::push_back(&mut new_vals, 0); } else { vector::push_back(&mut new_vals, cur); };
+                t = t + 1;
+            };
             values = new_vals;
             k = k + 1;
         };
@@ -223,7 +238,7 @@ module unxversal::lending {
     
 
     fun units_from_scaled(scaled: u64, index: u64): u64 {
-        if (index == 0) { return 0; };
+        if (index == 0) { return 0 };
         let num = (scaled as u128) * (index as u128);
         let den = INDEX_SCALE as u128;
         let v = num / den;
@@ -231,15 +246,14 @@ module unxversal::lending {
     }
 
     fun scaled_from_units(units: u64, index: u64): u64 {
-        if (index == 0) { return 0; };
+        if (index == 0) { return 0 };
         let num = (units as u128) * (INDEX_SCALE as u128);
         let den = index as u128;
         let v = num / den;
         if (v > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { v as u64 }
     }
 
-    /// Flash loan proof object
-    public struct FlashLoan<phantom T> has store, drop { amount: u64, fee: u64, asset: String }
+    // Flash loan proof object removed; use explicit parameters in entry functions
 
     // Hot potato for synthetic flash loans (no abilities) – must be consumed in same tx
     public struct SynthFlashLoan has drop { symbol: String, amount_units: u64, fee_units: u64 }
@@ -349,7 +363,7 @@ module unxversal::lending {
     ) {
         assert_is_admin(reg, ctx.sender());
         assert!(!reg.paused, 1000);
-        let mut a = table::borrow_mut(&mut reg.supported_assets, clone_string(&symbol));
+        let a = table::borrow_mut(&mut reg.supported_assets, clone_string(&symbol));
         a.is_collateral = is_collateral;
         a.is_borrowable = is_borrowable;
         a.reserve_factor_bps = reserve_factor_bps;
@@ -571,7 +585,7 @@ module unxversal::lending {
     fun get_reserve_factor_bps(reg: &LendingRegistry, sym: &String): u64 {
         if (table::contains(&reg.supported_assets, clone_string(sym))) {
             let a = table::borrow(&reg.supported_assets, clone_string(sym));
-            if (a.reserve_factor_bps > 0) { return a.reserve_factor_bps; };
+            if (a.reserve_factor_bps > 0) { return a.reserve_factor_bps };
         };
         reg.global_params.reserve_factor_bps
     }
@@ -579,7 +593,7 @@ module unxversal::lending {
     fun utilization_bps<T>(pool: &LendingPool<T>): u64 {
         let cash = BalanceMod::value(&pool.cash);
         let denom = cash + pool.total_borrows;
-        if (denom == 0) { return 0; };
+        if (denom == 0) { return 0 };
         (pool.total_borrows * 10_000) / denom
     }
 
@@ -598,7 +612,7 @@ module unxversal::lending {
 
     public entry fun accrue_pool_interest<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, ctx: &TxContext) {
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
-        if (now <= pool.last_update_ms) { return; };
+        if (now <= pool.last_update_ms) { return };
         let dt = now - pool.last_update_ms;
         let year_ms = 31_536_000_000; // 365 days
         // interest factor in 1e6 scale: factor = (rate_bps/10k) * dt/year
@@ -816,6 +830,8 @@ module unxversal::lending {
     }
 
     public entry fun repay_flash_loan<T>(_reg: &LendingRegistry, pool: &mut LendingPool<T>, mut principal: Coin<T>, proof_amount: u64, proof_fee: u64, proof_asset: String, ctx: &mut TxContext) {
+        // validate proof matches this pool/asset
+        assert!(eq_string(&proof_asset, &pool.asset), E_VIOLATION);
         let due = proof_amount + proof_fee;
         let have = coin::value(&principal);
         assert!(have >= due, E_INSUFFICIENT_LIQUIDITY);
@@ -946,7 +962,7 @@ module unxversal::lending {
         let cur = if (table::contains(&acct.synth_liquidity, clone_string(&market_symbol))) { *table::borrow(&acct.synth_liquidity, clone_string(&market_symbol)) } else { 0 };
         let newb = cur + amount;
         table::add(&mut acct.synth_liquidity, clone_string(&market_symbol), newb);
-        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&market_symbol));
+        let m = table::borrow_mut(&mut reg.synth_markets, clone_string(&market_symbol));
         m.total_liquidity = m.total_liquidity + amount;
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(SynthLiquiditySupplied { user: ctx.sender(), symbol: market_symbol, amount: amount, new_balance: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
@@ -973,7 +989,7 @@ module unxversal::lending {
         let newb = cur - amount;
         table::add(&mut acct.synth_liquidity, clone_string(&market_symbol), newb);
         pool_collateral.total_supply = pool_collateral.total_supply - amount;
-        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&market_symbol));
+        let m = table::borrow_mut(&mut reg.synth_markets, clone_string(&market_symbol));
         m.total_liquidity = m.total_liquidity - amount;
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(SynthLiquidityWithdrawn { user: ctx.sender(), symbol: market_symbol, amount: amount, remaining_balance: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
@@ -1024,7 +1040,7 @@ module unxversal::lending {
         let cur = if (table::contains(&acct.synth_borrow_units, clone_string(&target_symbol))) { *table::borrow(&acct.synth_borrow_units, clone_string(&target_symbol)) } else { 0 };
         let newb = cur + units;
         table::add(&mut acct.synth_borrow_units, clone_string(&target_symbol), newb);
-        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&target_symbol));
+        let m = table::borrow_mut(&mut reg.synth_markets, clone_string(&target_symbol));
         m.total_borrow_units = m.total_borrow_units + units;
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(SynthBorrowed { user: ctx.sender(), symbol: target_symbol, units, new_borrow_units: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
@@ -1068,7 +1084,7 @@ module unxversal::lending {
         );
         let newb = cur - units;
         table::add(&mut acct.synth_borrow_units, clone_string(&symbol), newb);
-        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
+        let m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
         m.total_borrow_units = m.total_borrow_units - units;
         acct.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(SynthRepaid { user: ctx.sender(), symbol, units, remaining_borrow_units: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
@@ -1085,11 +1101,11 @@ module unxversal::lending {
         ctx: &TxContext
     ) {
         assert!(!reg.paused, 1000);
-        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
-        if (m.total_borrow_units == 0 || dt_ms == 0 || apr_bps == 0) { return; };
+        let m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
+        if (m.total_borrow_units == 0 || dt_ms == 0 || apr_bps == 0) { return };
         let year_ms = 31_536_000_000u128;
         let delta = ((m.total_borrow_units as u128) * (apr_bps as u128) * (dt_ms as u128)) / (10_000u128 * year_ms);
-        if (delta == 0) { return; };
+        if (delta == 0) { return };
         let rf = m.reserve_factor_bps as u128;
         let to_reserve = (delta * rf) / 10_000u128;
         let to_debt = delta - to_reserve;
@@ -1140,7 +1156,7 @@ module unxversal::lending {
         );
         let newb = cur - repay_units;
         table::add(&mut debtor.synth_borrow_units, clone_string(&symbol), newb);
-        let mut m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
+        let m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
         m.total_borrow_units = m.total_borrow_units - repay_units;
         // Determine collateral to seize (value + bonus) from synth market liquidity
         let px = get_price_scaled_1e6(oracle_cfg, clock, price_synth) as u128; // micro-USD per unit
