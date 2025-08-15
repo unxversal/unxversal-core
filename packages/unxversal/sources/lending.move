@@ -1,3 +1,4 @@
+#[allow(lint(public_entry))]
 module unxversal::lending {
     /*******************************
     * Unxversal Lending – Phase 1

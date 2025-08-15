@@ -4,7 +4,7 @@
 /// - Oracle feeds normalized to micro‑USD via core Oracle module
 /// - Integrates directly with on-chain orderbook in `dex.move` for execution paths
 /// - Displays and read‑only helpers for indexers/bots
-#[allow(lint(coin_field))]
+
 module unxversal::options {
 
     // TxContext alias provided by default
@@ -23,7 +23,6 @@ module unxversal::options {
     use unxversal::unxv::UNXV;
     use sui::coin::{Self as coin, Coin};
     use unxversal::synthetics::{Self as Synth, SynthRegistry, AdminCap, DaddyCap};
-    // AutoSwap removed; options integrates directly with on-chain orderbook in dex.move for execution paths.
 
     /*******************************
     * Errors

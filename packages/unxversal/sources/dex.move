@@ -4,15 +4,13 @@ module unxversal::dex {
     * - Coin<Base> orderbook (escrowed buy/sell orders)
     * - Taker-only fees with optional UNXV discount
     *******************************/
-    use sui::tx_context::TxContext;
-    use sui::transfer;
+
     use sui::display;
     use sui::package::Publisher;
     use sui::coin::{Self as coin, Coin};
     use sui::clock::Clock;
     use sui::event;
     use std::string::String;
-    use std::vector;
 
     // Collateral coin type is generic per market; no hard USDC dependency
     use switchboard::aggregator::Aggregator;
@@ -71,7 +69,8 @@ module unxversal::dex {
     }
 
     /// Escrowed sell order: user sells Base for collateral at price (collateral per 1 Base)
-    public struct CoinOrderSell<Base> has key, store {
+    #[allow(lint(coin_field))]
+    public struct CoinOrderSell<phantom Base> has key, store {
         id: UID,
         owner: address,
         price: u64,
@@ -83,7 +82,8 @@ module unxversal::dex {
 
     /// Escrowed buy order: user buys Base with collateral at price (collateral per 1 Base)
     /// size_base is implied by escrow_collateral / price (we also store remaining_base)
-    public struct CoinOrderBuy<Base, phantom C> has key, store {
+    #[allow(lint(coin_field))]
+    public struct CoinOrderBuy<phantom Base, phantom C> has key, store {
         id: UID,
         owner: address,
         price: u64,
@@ -103,7 +103,7 @@ module unxversal::dex {
     }
     
 
-    public entry fun init_dex<C>(_admin: &AdminCap, registry: &SynthRegistry, treasury: &Treasury<C>, ctx: &mut TxContext) {
+    entry fun init_dex<C>(_admin: &AdminCap, registry: &SynthRegistry, treasury: &Treasury<C>, ctx: &mut TxContext) {
         assert_is_admin(registry, ctx.sender());
         let cfg = DexConfig {
             id: object::new(ctx),
@@ -117,7 +117,7 @@ module unxversal::dex {
     }
 
     // Display registration for better wallet/indexer UX
-    public entry fun init_dex_displays<Base: store, C: store>(publisher: &Publisher, ctx: &mut TxContext) {
+    entry fun init_dex_displays<Base: store, C: store>(publisher: &Publisher, ctx: &mut TxContext) {
         let mut d_cfg = display::new<DexConfig>(publisher, ctx);
         d_cfg.add(b"name".to_string(), b"Unxversal DEX Config".to_string());
         d_cfg.add(b"description".to_string(), b"Global parameters for the Unxversal on-chain DEX".to_string());
@@ -153,11 +153,11 @@ module unxversal::dex {
         transfer::public_transfer(d_vb, ctx.sender());
     }
 
-    public entry fun set_trade_fee_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.trade_fee_bps = bps; }
-    public entry fun set_unxv_discount_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.unxv_discount_bps = bps; }
-    public entry fun set_maker_rebate_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.maker_rebate_bps = bps; }
-    public entry fun pause(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.paused = true; }
-    public entry fun resume(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.paused = false; }
+    entry fun set_trade_fee_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.trade_fee_bps = bps; }
+    entry fun set_unxv_discount_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.unxv_discount_bps = bps; }
+    entry fun set_maker_rebate_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.maker_rebate_bps = bps; }
+    entry fun pause(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.paused = true; }
+    entry fun resume(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.paused = false; }
 
     /*******************************
     * Vault-safe order variants (escrow remains under vault control)
@@ -170,7 +170,8 @@ module unxversal::dex {
     *******************************/
 
     /// Vault-mode sell order: vault sells Base for collateral
-    public struct VaultOrderSell<Base> has key, store {
+    #[allow(lint(coin_field))]
+    public struct VaultOrderSell<phantom Base> has key, store {
         id: UID,
         owner: address,        // manager/operator address (for UX and auth)
         price: u64,
@@ -181,7 +182,8 @@ module unxversal::dex {
     }
 
     /// Vault-mode buy order: vault buys Base with collateral
-    public struct VaultOrderBuy<Base, phantom C> has key, store {
+    #[allow(lint(coin_field))]
+    public struct VaultOrderBuy<phantom Base, phantom C> has key, store {
         id: UID,
         owner: address,
         price: u64,
@@ -192,7 +194,7 @@ module unxversal::dex {
     }
 
     /// Place a vault-mode sell order by moving Base from a caller-managed coin store
-    public entry fun place_vault_sell_order<Base: store>(
+    entry fun place_vault_sell_order<Base: store>(
         cfg: &DexConfig,
         price: u64,
         size_base: u64,
@@ -211,7 +213,7 @@ module unxversal::dex {
     }
 
     /// Place a vault-mode buy order by moving collateral from a caller-managed coin store
-    public entry fun place_vault_buy_order<Base: store, C: store>(
+    entry fun place_vault_buy_order<Base: store, C: store>(
         cfg: &DexConfig,
         price: u64,
         size_base: u64,
@@ -231,7 +233,7 @@ module unxversal::dex {
     }
 
     /// Cancel vault-mode sell: merge base escrow back into caller-provided store
-    public entry fun cancel_vault_sell_order<Base: store>(order: VaultOrderSell<Base>, to_store: &mut Coin<Base>, ctx: &mut TxContext) {
+    entry fun cancel_vault_sell_order<Base: store>(order: VaultOrderSell<Base>, to_store: &mut Coin<Base>, ctx: &TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
         let order_id = object::id(&order);
         let VaultOrderSell<Base> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_base } = order;
@@ -241,7 +243,7 @@ module unxversal::dex {
     }
 
     /// Cancel vault-mode buy: merge collateral escrow back into caller-provided store
-    public entry fun cancel_vault_buy_order<Base: store, C: store>(order: VaultOrderBuy<Base, C>, to_store: &mut Coin<C>, ctx: &mut TxContext) {
+    entry fun cancel_vault_buy_order<Base: store, C: store>(order: VaultOrderBuy<Base, C>, to_store: &mut Coin<C>, ctx: &TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
         let order_id = object::id(&order);
         let VaultOrderBuy<Base, C> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_collateral } = order;
@@ -251,8 +253,8 @@ module unxversal::dex {
     }
 
     /// Match vault buy and vault sell; deliver fills to provided coin stores
-    public entry fun match_vault_orders<Base: store, C: store>(
-        cfg: &mut DexConfig,
+    entry fun match_vault_orders<Base: store, C: store>(
+        cfg: &DexConfig,
         buy: &mut VaultOrderBuy<Base, C>,
         sell: &mut VaultOrderSell<Base>,
         max_fill_base: u64,
@@ -338,6 +340,19 @@ module unxversal::dex {
         buy.remaining_base = buy.remaining_base - fill;
         sell.remaining_base = sell.remaining_base - fill;
 
+        // Ensure UNXV payment vector is fully consumed and destroyed
+        if (vector::length(&unxv_payment) > 0) {
+            let mut leftover_unxv = coin::zero<UNXV>(ctx);
+            let mut j = 0;
+            while (j < vector::length(&unxv_payment)) {
+                let c2 = vector::pop_back(&mut unxv_payment);
+                coin::join(&mut leftover_unxv, c2);
+                j = j + 1;
+            };
+            transfer::public_transfer(leftover_unxv, buy.owner);
+        };
+        vector::destroy_empty(unxv_payment);
+
         // Fee details are tracked in Treasury; external FeeCollected emission removed
         let ts = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(CoinOrderMatched { buy_order_id: object::id(buy), sell_order_id: object::id(sell), price: trade_price, size_base: fill, taker_is_buyer, fee_paid: collateral_fee_to_collect, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, timestamp: ts });
@@ -349,6 +364,7 @@ module unxversal::dex {
     /*******************************
     * Order placement / cancellation (escrow based)
     *******************************/
+    #[allow(lint(self_transfer))]
     public fun place_coin_sell_order<Base: store>(cfg: &DexConfig, price: u64, size_base: u64, mut base: Coin<Base>, expiry_ms: u64, ctx: &mut TxContext): CoinOrderSell<Base> {
         assert!(!cfg.paused, E_PAUSED);
         assert!(size_base > 0, E_ZERO_AMOUNT);
@@ -361,6 +377,7 @@ module unxversal::dex {
         order
     }
 
+    #[allow(lint(self_transfer))]
     public fun place_coin_buy_order<Base: store, C: store>(cfg: &DexConfig, price: u64, size_base: u64, mut collateral: Coin<C>, expiry_ms: u64, ctx: &mut TxContext): CoinOrderBuy<Base, C> {
         assert!(!cfg.paused, E_PAUSED);
         assert!(size_base > 0, E_ZERO_AMOUNT);
@@ -375,17 +392,19 @@ module unxversal::dex {
     }
 
     // Entry wrappers that place and share coin orders in one call (matchable by others)
-    public entry fun place_and_share_coin_sell_order<Base: store>(cfg: &DexConfig, price: u64, size_base: u64, base: Coin<Base>, expiry_ms: u64, ctx: &mut TxContext) {
+    #[allow(lint(share_owned))]
+    entry fun place_and_share_coin_sell_order<Base: store>(cfg: &DexConfig, price: u64, size_base: u64, base: Coin<Base>, expiry_ms: u64, ctx: &mut TxContext) {
         let order = place_coin_sell_order(cfg, price, size_base, base, expiry_ms, ctx);
         transfer::share_object(order);
     }
 
-    public entry fun place_and_share_coin_buy_order<Base: store, C: store>(cfg: &DexConfig, price: u64, size_base: u64, collateral: Coin<C>, expiry_ms: u64, ctx: &mut TxContext) {
+    #[allow(lint(share_owned))]
+    entry fun place_and_share_coin_buy_order<Base: store, C: store>(cfg: &DexConfig, price: u64, size_base: u64, collateral: Coin<C>, expiry_ms: u64, ctx: &mut TxContext) {
         let order = place_coin_buy_order<Base, C>(cfg, price, size_base, collateral, expiry_ms, ctx);
         transfer::share_object(order);
     }
 
-    public entry fun cancel_coin_sell_order<Base: store>(order: CoinOrderSell<Base>, ctx: &mut TxContext) {
+    entry fun cancel_coin_sell_order<Base: store>(order: CoinOrderSell<Base>, ctx: &TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
         let order_id = object::id(&order);
         let CoinOrderSell<Base> { id, owner, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_base } = order;
@@ -394,7 +413,7 @@ module unxversal::dex {
         object::delete(id);
     }
 
-    public entry fun cancel_coin_buy_order<Base: store, C: store>(order: CoinOrderBuy<Base, C>, ctx: &mut TxContext) {
+    entry fun cancel_coin_buy_order<Base: store, C: store>(order: CoinOrderBuy<Base, C>, ctx: &TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
         let order_id = object::id(&order);
         let CoinOrderBuy<Base, C> { id, owner, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_collateral } = order;
@@ -404,7 +423,7 @@ module unxversal::dex {
     }
 
     // Expiry lifecycle helpers – anyone can cancel expired orders to return funds
-    public entry fun cancel_coin_sell_if_expired<Base: store>(order: CoinOrderSell<Base>, ctx: &mut TxContext) {
+    entry fun cancel_coin_sell_if_expired<Base: store>(order: CoinOrderSell<Base>, ctx: &TxContext) {
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
         assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
         let order_id = object::id(&order);
@@ -414,7 +433,7 @@ module unxversal::dex {
         object::delete(id);
     }
 
-    public entry fun cancel_coin_buy_if_expired<Base: store, C: store>(order: CoinOrderBuy<Base, C>, ctx: &mut TxContext) {
+    entry fun cancel_coin_buy_if_expired<Base: store, C: store>(order: CoinOrderBuy<Base, C>, ctx: &TxContext) {
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
         assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
         let order_id = object::id(&order);
@@ -424,7 +443,7 @@ module unxversal::dex {
         object::delete(id);
     }
 
-    public entry fun cancel_vault_sell_if_expired<Base: store>(order: VaultOrderSell<Base>, to_store: &mut Coin<Base>, ctx: &mut TxContext) {
+    entry fun cancel_vault_sell_if_expired<Base: store>(order: VaultOrderSell<Base>, to_store: &mut Coin<Base>, ctx: &TxContext) {
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
         assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
         let order_id = object::id(&order);
@@ -434,7 +453,7 @@ module unxversal::dex {
         object::delete(id);
     }
 
-    public entry fun cancel_vault_buy_if_expired<Base: store, C: store>(order: VaultOrderBuy<Base, C>, to_store: &mut Coin<C>, ctx: &mut TxContext) {
+    entry fun cancel_vault_buy_if_expired<Base: store, C: store>(order: VaultOrderBuy<Base, C>, to_store: &mut Coin<C>, ctx: &TxContext) {
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
         assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
         let order_id = object::id(&order);
@@ -447,8 +466,8 @@ module unxversal::dex {
     /*******************************
     * Match coin orders (maker/taker); taker pays fee, optional UNXV discount
     *******************************/
-    public entry fun match_coin_orders<Base: store, C: store>(
-        cfg: &mut DexConfig,
+    entry fun match_coin_orders<Base: store, C: store>(
+        cfg: &DexConfig,
         buy: &mut CoinOrderBuy<Base, C>,
         sell: &mut CoinOrderSell<Base>,
         max_fill_base: u64,
@@ -520,7 +539,7 @@ module unxversal::dex {
             transfer::public_transfer(to_seller, sell.owner);
         };
         if (collateral_fee_to_collect > 0) {
-            let fee_coin_all = coin::split(&mut buy.escrow_collateral, collateral_fee_to_collect, ctx);
+            let mut fee_coin_all = coin::split(&mut buy.escrow_collateral, collateral_fee_to_collect, ctx);
             if (maker_rebate > 0 && maker_rebate < collateral_fee_to_collect) {
                 let to_maker = coin::split(&mut fee_coin_all, maker_rebate, ctx);
                 let maker_addr = if (taker_is_buyer) { sell.owner } else { buy.owner };
@@ -532,6 +551,19 @@ module unxversal::dex {
         // Update remaining (orders can be GC'd by anyone using gc helpers when empty)
         buy.remaining_base = buy.remaining_base - fill;
         sell.remaining_base = sell.remaining_base - fill;
+
+        // Ensure UNXV payment vector is fully consumed and destroyed
+        if (vector::length(&unxv_payment) > 0) {
+            let mut leftover_unxv2 = coin::zero<UNXV>(ctx);
+            let mut k = 0;
+            while (k < vector::length(&unxv_payment)) {
+                let c3 = vector::pop_back(&mut unxv_payment);
+                coin::join(&mut leftover_unxv2, c3);
+                k = k + 1;
+            };
+            transfer::public_transfer(leftover_unxv2, buy.owner);
+        };
+        vector::destroy_empty(unxv_payment);
 
         // Fee details are tracked in Treasury; external FeeCollected emission removed
         let ts2 = sui::tx_context::epoch_timestamp_ms(ctx);
