@@ -219,12 +219,16 @@ module unxversal::futures {
         mut fee_payment: Coin<C>,
         treasury: &mut Treasury<C>,
         oi_increase: bool,
+        min_price: u64,
+        max_price: u64,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused && market.is_active && !market.paused, E_PAUSED);
         assert!(size > 0, E_MIN_INTERVAL);
         // Enforce tick size
         assert!(price % market.tick_size == 0, E_MIN_INTERVAL);
+        // Slippage bounds (caller-provided)
+        assert!(price >= min_price && price <= max_price, E_MIN_INTERVAL);
         let notional = size * price;
         // Fees
         let trade_fee = (notional * reg.trade_fee_bps) / 10_000;
