@@ -1,0 +1,525 @@
+{
+  "errors": [
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/lending.move",
+      "line": 800,
+      "column": 9,
+      "details": [
+        "│\n800 │         unxversal::treasury::deposit_collateral(treasury, out, b\"lending_reserve\".to_string(), ctx.sender(), ctx);\n│         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_collateral'",
+        "│\n    ┌─ ./sources/treasury.move:73:15\n    │\n 73 │     entry fun deposit_collateral<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &TxContext) {\n    │               ------------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/futures.move",
+      "line": 281,
+      "column": 425,
+      "details": [
+        "│\n211 │         mut unxv_payment: vector<Coin<unxversal::unxv::UNXV>>,\n    │             ------------  -----------------------------------\n    │             │             │      │\n    │             │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n    │             │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n    │             The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n    ·\n281 │         event::emit(FillRecorded { symbol: clone_string(&market.symbol), price, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: collateral_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n    │                                                                                                                                                                                                                                                                                                                                                                                                                                         ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/dex.move",
+      "line": 310,
+      "column": 21,
+      "details": [
+        "│\n310 │                     TreasuryMod::deposit_unxv(treasury, vec_unxv, b\"otc_match\".to_string(), buy.owner, ctx);\n    │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_unxv'",
+        "│\n    ┌─ ./sources/treasury.move:81:15\n    │\n 81 │     entry fun deposit_unxv<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {\n    │               ------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/dex.move",
+      "line": 334,
+      "column": 13,
+      "details": [
+        "│\n334 │             TreasuryMod::deposit_collateral(treasury, fee_coin_all, b\"otc_match\".to_string(), if (taker_is_buyer) { buy.owner } else { sell.owner }, ctx);\n    │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_collateral'",
+        "│\n    ┌─ ./sources/treasury.move:73:15\n    │\n 73 │     entry fun deposit_collateral<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &TxContext) {\n    │               ------------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/dex.move",
+      "line": 346,
+      "column": 122,
+      "details": [
+        "│\n260 │         mut unxv_payment: vector<Coin<UNXV>>,\n    │             ------------  ------------------\n    │             │             │      │\n    │             │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n    │             │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n    │             The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n    ·\n346 │         event::emit(SwapExecuted { market, base, quote, price: trade_price, size: fill, payer, receiver, timestamp: ts });\n    │                                                                                                                          ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/dex.move",
+      "line": 507,
+      "column": 21,
+      "details": [
+        "│\n507 │                     TreasuryMod::deposit_unxv(treasury, vec_unxv, b\"otc_match\".to_string(), buy.owner, ctx);\n    │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_unxv'",
+        "│\n    ┌─ ./sources/treasury.move:81:15\n    │\n 81 │     entry fun deposit_unxv<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {\n    │               ------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04024",
+      "message": "invalid usage of immutable variable",
+      "file": "./sources/dex.move",
+      "line": 525,
+      "column": 44,
+      "details": [
+        "│\n523 │             let fee_coin_all = coin::split(&mut buy.escrow_collateral, collateral_fee_to_collect, ctx);\n    │                 ------------ To use the variable mutably, it must be declared 'mut', e.g. 'mut fee_coin_all'\n524 │             if (maker_rebate > 0 && maker_rebate < collateral_fee_to_collect) {\n525 │                 let to_maker = coin::split(&mut fee_coin_all, maker_rebate, ctx);\n    │                                            ^^^^^^^^^^^^^^^^^ Invalid mutable borrow of immutable variable 'fee_coin_all'"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/dex.move",
+      "line": 529,
+      "column": 13,
+      "details": [
+        "│\n529 │             TreasuryMod::deposit_collateral(treasury, fee_coin_all, b\"otc_match\".to_string(), if (taker_is_buyer) { buy.owner } else { sell.owner }, ctx);\n    │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_collateral'",
+        "│\n    ┌─ ./sources/treasury.move:73:15\n    │\n 73 │     entry fun deposit_collateral<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &TxContext) {\n    │               ------------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/dex.move",
+      "line": 541,
+      "column": 142,
+      "details": [
+        "│\n456 │         mut unxv_payment: vector<Coin<UNXV>>,\n    │             ------------  ------------------\n    │             │             │      │\n    │             │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n    │             │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n    │             The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n    ·\n541 │         event::emit(SwapExecuted { market, base, quote, price: trade_price, size: fill, payer: payer2, receiver: receiver2, timestamp: ts2 });\n    │                                                                                                                                              ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/perpetuals.move",
+      "line": 285,
+      "column": 446,
+      "details": [
+        "│\n238 │         mut unxv_payment: vector<Coin<unxversal::unxv::UNXV>>,\n    │             ------------  -----------------------------------\n    │             │             │      │\n    │             │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n    │             │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n    │             The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n    ·\n285 │         event::emit(PerpFillRecorded { symbol: clone_string(&market.symbol), price: price_micro_usd, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: collateral_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n    │                                                                                                                                                                                                                                                                                                                                                                                                                                                              ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06002",
+      "message": "use of unassigned variable",
+      "file": "./sources/synthetics.move",
+      "line": 521,
+      "column": 57,
+      "details": [
+        "│\n520 │         transfer::share_object(vault);\n    │                                ----- \n    │                                │\n    │                                The value of 'vault' was previously moved here. \n    │                                Suggestion: use 'copy vault' to avoid the move. \n521 │         event::emit(VaultCreated { vault_id: object::id(&vault), owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n    │                                                         ^^^^^^ Invalid usage of previously moved variable 'vault'."
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04024",
+      "message": "invalid usage of immutable variable",
+      "file": "./sources/synthetics.move",
+      "line": 781,
+      "column": 46,
+      "details": [
+        "│\n727 │         unxv_payment: vector<Coin<UNXV>>,\n    │         ------------ To use the variable mutably, it must be declared 'mut', e.g. 'mut unxv_payment'\n    ·\n781 │                     let c = vector::pop_back(&mut unxv_payment);\n    │                                              ^^^^^^^^^^^^^^^^^ Invalid mutable borrow of immutable variable 'unxv_payment'"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/synthetics.move",
+      "line": 790,
+      "column": 21,
+      "details": [
+        "│\n790 │                     TreasuryMod::deposit_unxv(treasury, vec, b\"mint\".to_string(), vault.owner, ctx);\n    │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_unxv'",
+        "│\n    ┌─ ./sources/treasury.move:81:15\n    │\n 81 │     entry fun deposit_unxv<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {\n    │               ------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/synthetics.move",
+      "line": 805,
+      "column": 13,
+      "details": [
+        "│\n805 │             TreasuryMod::deposit_collateral(treasury, fee_coin, b\"mint\".to_string(), ctx.sender(), ctx);\n    │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_collateral'",
+        "│\n    ┌─ ./sources/treasury.move:73:15\n    │\n 73 │     entry fun deposit_collateral<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &TxContext) {\n    │               ------------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/synthetics.move",
+      "line": 819,
+      "column": 72,
+      "details": [
+        "│\n727 │         unxv_payment: vector<Coin<UNXV>>,\n    │         ------------  ------------------\n    │         │             │      │\n    │         │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n    │         │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n    │         The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n    ·\n819 │         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);\n    │                                                                        ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04024",
+      "message": "invalid usage of immutable variable",
+      "file": "./sources/synthetics.move",
+      "line": 890,
+      "column": 86,
+      "details": [
+        "│\n832 │         unxv_payment: vector<Coin<UNXV>>,\n    │         ------------ To use the variable mutably, it must be declared 'mut', e.g. 'mut unxv_payment'\n    ·\n890 │                 while (j < vector::length(&unxv_payment)) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); j = j + 1; };\n    │                                                                                      ^^^^^^^^^^^^^^^^^ Invalid mutable borrow of immutable variable 'unxv_payment'"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/synthetics.move",
+      "line": 896,
+      "column": 21,
+      "details": [
+        "│\n896 │                     TreasuryMod::deposit_unxv(treasury, vecu, b\"mint\".to_string(), vault.owner, ctx);\n    │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_unxv'",
+        "│\n    ┌─ ./sources/treasury.move:81:15\n    │\n 81 │     entry fun deposit_unxv<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {\n    │               ------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/synthetics.move",
+      "line": 903,
+      "column": 153,
+      "details": [
+        "│\n903 │         if (fee_to_collect > 0) { let fee_bal = balance::split(&mut vault.collateral, fee_to_collect); let fee_coin = coin::from_balance(fee_bal, ctx); TreasuryMod::deposit_collateral(treasury, fee_coin, b\"mint\".to_string(), ctx.sender(), ctx); };\n    │                                                                                                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_collateral'",
+        "│\n    ┌─ ./sources/treasury.move:73:15\n    │\n 73 │     entry fun deposit_collateral<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &TxContext) {\n    │               ------------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/synthetics.move",
+      "line": 905,
+      "column": 72,
+      "details": [
+        "│\n832 │         unxv_payment: vector<Coin<UNXV>>,\n    │         ------------  ------------------\n    │         │             │      │\n    │         │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n    │         │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n    │         The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n    ·\n905 │         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);\n    │                                                                        ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04024",
+      "message": "invalid usage of immutable variable",
+      "file": "./sources/synthetics.move",
+      "line": 951,
+      "column": 46,
+      "details": [
+        "│\n917 │         unxv_payment: vector<Coin<UNXV>>,\n    │         ------------ To use the variable mutably, it must be declared 'mut', e.g. 'mut unxv_payment'\n    ·\n951 │                     let c = vector::pop_back(&mut unxv_payment);\n    │                                              ^^^^^^^^^^^^^^^^^ Invalid mutable borrow of immutable variable 'unxv_payment'"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/synthetics.move",
+      "line": 960,
+      "column": 21,
+      "details": [
+        "│\n960 │                     TreasuryMod::deposit_unxv(treasury, vec, b\"burn\".to_string(), vault.owner, ctx);\n    │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_unxv'",
+        "│\n    ┌─ ./sources/treasury.move:81:15\n    │\n 81 │     entry fun deposit_unxv<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {\n    │               ------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/synthetics.move",
+      "line": 972,
+      "column": 13,
+      "details": [
+        "│\n972 │             TreasuryMod::deposit_collateral(treasury, fee_coin, b\"burn\".to_string(), ctx.sender(), ctx);\n    │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_collateral'",
+        "│\n    ┌─ ./sources/treasury.move:73:15\n    │\n 73 │     entry fun deposit_collateral<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &TxContext) {\n    │               ------------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/synthetics.move",
+      "line": 986,
+      "column": 72,
+      "details": [
+        "│\n917 │         unxv_payment: vector<Coin<UNXV>>,\n    │         ------------  ------------------\n    │         │             │      │\n    │         │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n    │         │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n    │         The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n    ·\n986 │         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);\n    │                                                                        ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04024",
+      "message": "invalid usage of immutable variable",
+      "file": "./sources/synthetics.move",
+      "line": 1185,
+      "column": 46,
+      "details": [
+        "│\n1133 │         unxv_payment: vector<Coin<UNXV>>,\n     │         ------------ To use the variable mutably, it must be declared 'mut', e.g. 'mut unxv_payment'\n     ·\n1185 │                     let c = vector::pop_back(&mut unxv_payment);\n     │                                              ^^^^^^^^^^^^^^^^^ Invalid mutable borrow of immutable variable 'unxv_payment'"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/synthetics.move",
+      "line": 1194,
+      "column": 21,
+      "details": [
+        "│\n1194 │                     TreasuryMod::deposit_unxv(treasury, vec_unxv, b\"trade\".to_string(), buyer_vault.owner, ctx);\n     │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_unxv'",
+        "│\n     ┌─ ./sources/treasury.move:81:15\n     │\n  81 │     entry fun deposit_unxv<C>(treasury: &mut Treasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {\n     │               ------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/synthetics.move",
+      "line": 1215,
+      "column": 13,
+      "details": [
+        "│\n1215 │             TreasuryMod::deposit_collateral(treasury, fee_coin_all, b\"trade\".to_string(), if (taker_is_buyer) { buyer_vault.owner } else { seller_vault.owner }, ctx);\n     │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_collateral'",
+        "│\n     ┌─ ./sources/treasury.move:73:15\n     │\n  73 │     entry fun deposit_collateral<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &TxContext) {\n     │               ------------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/synthetics.move",
+      "line": 1233,
+      "column": 11,
+      "details": [
+        "│\n1133 │         unxv_payment: vector<Coin<UNXV>>,\n     │         ------------  ------------------\n     │         │             │      │\n     │         │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n     │         │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n     │         The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1233 │         });\n     │           ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/synthetics.move",
+      "line": 1260,
+      "column": 9,
+      "details": [
+        "│\n1238 │         vaults: vector<CollateralVault<C>>,\n     │         ------  --------------------------\n     │         │       │      │\n     │         │       │      The type 'vector<unxversal::synthetics::CollateralVault<C>>' can have the ability 'drop' but the type argument 'unxversal::synthetics::CollateralVault<C>' does not have the required ability 'drop'\n     │         │       The type 'vector<unxversal::synthetics::CollateralVault<C>>' does not have the ability 'drop'\n     │         The parameter 'vaults' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1260 │         (total_coll, total_debt, gcr)\n     │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/synthetics.move",
+      "line": 1260,
+      "column": 9,
+      "details": [
+        "│\n1240 │         _clocks: vector<Clock>,\n     │         -------  -------------\n     │         │        │      │\n     │         │        │      The type 'vector<sui::clock::Clock>' can have the ability 'drop' but the type argument 'sui::clock::Clock' does not have the required ability 'drop'\n     │         │        The type 'vector<sui::clock::Clock>' does not have the ability 'drop'\n     │         The parameter '_clocks' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1260 │         (total_coll, total_debt, gcr)\n     │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/synthetics.move",
+      "line": 1392,
+      "column": 9,
+      "details": [
+        "│\n1392 │         TreasuryMod::deposit_collateral(treasury, seized_coin, b\"liquidation\".to_string(), liquidator, ctx);\n     │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_collateral'",
+        "│\n     ┌─ ./sources/treasury.move:73:15\n     │\n  73 │     entry fun deposit_collateral<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &TxContext) {\n     │               ------------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E04001",
+      "message": "restricted visibility",
+      "file": "./sources/synthetics.move",
+      "line": 1469,
+      "column": 9,
+      "details": [
+        "│\n1469 │         TreasuryMod::deposit_collateral(treasury, seized_coin, b\"liquidation\".to_string(), liquidator, ctx);\n     │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Invalid call to internal function 'unxversal::treasury::deposit_collateral'",
+        "│\n     ┌─ ./sources/treasury.move:73:15\n     │\n  73 │     entry fun deposit_collateral<C>(treasury: &mut Treasury<C>, c: Coin<C>, source: String, payer: address, ctx: &TxContext) {\n     │               ------------------ This function is internal to its module. Only 'public' and 'public(package)' functions can be called outside of their module"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06002",
+      "message": "use of unassigned variable",
+      "file": "./sources/synthetics.move",
+      "line": 1549,
+      "column": 50,
+      "details": [
+        "│\n1545 │         transfer::public_transfer(publisher, ctx.sender());\n     │                                   ---------\n     │                                   │\n     │                                   The value of 'publisher' was previously moved here.\n     │                                   Suggestion: use 'copy publisher' to avoid the move.\n     ·\n1549 │         let mut order_disp = display::new<Order>(&publisher, ctx);\n     │                                                  ^^^^^^^^^^ Invalid usage of previously moved variable 'publisher'."
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06002",
+      "message": "use of unassigned variable",
+      "file": "./sources/synthetics.move",
+      "line": 1563,
+      "column": 63,
+      "details": [
+        "│\n1545 │         transfer::public_transfer(publisher, ctx.sender());\n     │                                   ---------\n     │                                   │\n     │                                   The value of 'publisher' was previously moved here.\n     │                                   Suggestion: use 'copy publisher' to avoid the move.\n     ·\n1563 │         let mut synth_disp = display::new<SyntheticAssetInfo>(&publisher, ctx);\n     │                                                               ^^^^^^^^^^ Invalid usage of previously moved variable 'publisher'."
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/gas_futures.move",
+      "line": 359,
+      "column": 446,
+      "details": [
+        "│\n301 │         mut unxv_payment: vector<Coin<unxversal::unxv::UNXV>>,\n    │             ------------  -----------------------------------\n    │             │             │      │\n    │             │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n    │             │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n    │             The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n    ·\n359 │         event::emit(GasFillRecorded { symbol: clone_string(&market.symbol), price_micro_usd_per_gas, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: collateral_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n    │                                                                                                                                                                                                                                                                                                                                                                                                                                                              ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 566,
+      "column": 232,
+      "details": [
+        "│\n486 │         mut unxv_payment: vector<Coin<UNXV>>,\n    │             ------------  ------------------\n    │             │             │      │\n    │             │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n    │             │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n    │             The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n    ·\n566 │         event::emit(OptionMarketCreated { market_id: mid, market_key_bytes: key_bytes, underlying, option_type, strike_price, expiry_ms, settlement_type, creator: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n    │                                                                                                                                                                                                                                        ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 566,
+      "column": 232,
+      "details": [
+        "│\n545 │                 let mut merged = coin::zero<UNXV>(ctx);\n    │                     ---------- The local variable 'merged' might still contain a value. The value does not have the 'drop' ability and must be consumed before the function returns\n    ·\n566 │         event::emit(OptionMarketCreated { market_id: mid, market_key_bytes: key_bytes, underlying, option_type, strike_price, expiry_ms, settlement_type, creator: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n    │                                                                                                                                                                                                                                        ^ Invalid return\n    │\n    ┌─ /Users/joshuaokolo/.move/https___github_com_MystenLabs_sui_git_b448b1d971bd6c1aac8ef4eee4305943806d5d5b/crates/sui-framework/packages/sui-framework/sources/coin.move:40:15\n    │\n 40 │ public struct Coin<phantom T> has key, store {\n    │               ---- To satisfy the constraint, the 'drop' ability would need to be added here\n    ·\n189 │ public fun zero<T>(ctx: &mut TxContext): Coin<T> {\n    │                                          ------- The type 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the ability 'drop'"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 752,
+      "column": 325,
+      "details": [
+        "│\n659 │         mut unxv_payment: vector<Coin<UNXV>>,\n    │             ------------  ------------------\n    │             │             │      │\n    │             │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n    │             │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n    │             The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n    ·\n752 │         event::emit(OptionClosed { market_id: object::id(market), closer: if (payer_is_long) { long_pos.owner } else { short_pos.owner }, counterparty: if (payer_is_long) { short_pos.owner } else { long_pos.owner }, quantity, premium_per_unit, fee_paid: fee_to_collect, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n    │                                                                                                                                                                                                                                                                                                                                     ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 1186,
+      "column": 222,
+      "details": [
+        "│\n 205 │     public struct ShortOffer<phantom C> has key, store {\n     │                   ---------- To satisfy the constraint, the 'drop' ability would need to be added here\n     ·\n1094 │         mut offer: ShortOffer<C>,\n     │             -----  ------------- The type 'unxversal::options::ShortOffer<C>' does not have the ability 'drop'\n     │             │       \n     │             The parameter 'offer' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1186 │         event::emit(OptionOpened { market_id: object::id(market), buyer: escrow.owner, writer: offer.owner, quantity: fill, premium_per_unit: escrow.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n     │                                                                                                                                                                                                                              ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 1186,
+      "column": 222,
+      "details": [
+        "│\n 218 │     public struct PremiumEscrow<phantom C> has key, store {\n     │                   ------------- To satisfy the constraint, the 'drop' ability would need to be added here\n     ·\n1095 │         mut escrow: PremiumEscrow<C>,\n     │             ------  ---------------- The type 'unxversal::options::PremiumEscrow<C>' does not have the ability 'drop'\n     │             │        \n     │             The parameter 'escrow' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1186 │         event::emit(OptionOpened { market_id: object::id(market), buyer: escrow.owner, writer: offer.owner, quantity: fill, premium_per_unit: escrow.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n     │                                                                                                                                                                                                                              ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 1186,
+      "column": 222,
+      "details": [
+        "│\n1097 │         mut unxv_payment: vector<Coin<UNXV>>,\n     │             ------------  ------------------\n     │             │             │      │\n     │             │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n     │             │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n     │             The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1186 │         event::emit(OptionOpened { market_id: object::id(market), buyer: escrow.owner, writer: offer.owner, quantity: fill, premium_per_unit: escrow.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n     │                                                                                                                                                                                                                              ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 1271,
+      "column": 230,
+      "details": [
+        "│\n 248 │     public struct CoinShortOffer<phantom Base> has key, store {\n     │                   -------------- To satisfy the constraint, the 'drop' ability would need to be added here\n     ·\n1193 │         mut offer_or_long: CoinShortOffer<Base>,\n     │             -------------  -------------------- The type 'unxversal::options::CoinShortOffer<Base>' does not have the ability 'drop'\n     │             │               \n     │             The parameter 'offer_or_long' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1271 │         event::emit(OptionOpened { market_id: object::id(market), buyer: escrow.owner, writer: offer_or_long.owner, quantity: fill, premium_per_unit: escrow.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n     │                                                                                                                                                                                                                                      ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 1271,
+      "column": 230,
+      "details": [
+        "│\n 218 │     public struct PremiumEscrow<phantom C> has key, store {\n     │                   ------------- To satisfy the constraint, the 'drop' ability would need to be added here\n     ·\n1194 │         mut escrow: PremiumEscrow<C>,\n     │             ------  ---------------- The type 'unxversal::options::PremiumEscrow<C>' does not have the ability 'drop'\n     │             │        \n     │             The parameter 'escrow' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1271 │         event::emit(OptionOpened { market_id: object::id(market), buyer: escrow.owner, writer: offer_or_long.owner, quantity: fill, premium_per_unit: escrow.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n     │                                                                                                                                                                                                                                      ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 1271,
+      "column": 230,
+      "details": [
+        "│\n1197 │         mut unxv_payment: vector<Coin<UNXV>>,\n     │             ------------  ------------------\n     │             │             │      │\n     │             │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n     │             │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n     │             The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1271 │         event::emit(OptionOpened { market_id: object::id(market), buyer: escrow.owner, writer: offer_or_long.owner, quantity: fill, premium_per_unit: escrow.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n     │                                                                                                                                                                                                                                      ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 1533,
+      "column": 218,
+      "details": [
+        "│\n 205 │     public struct ShortOffer<phantom C> has key, store {\n     │                   ---------- To satisfy the constraint, the 'drop' ability would need to be added here\n     ·\n1444 │         mut offer: ShortOffer<C>,\n     │             -----  ------------- The type 'unxversal::options::ShortOffer<C>' does not have the ability 'drop'\n     │             │       \n     │             The parameter 'offer' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1533 │         event::emit(OptionOpened { market_id: object::id(market), buyer: prem.owner, writer: offer.owner, quantity: fill, premium_per_unit: prem.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n     │                                                                                                                                                                                                                          ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 1533,
+      "column": 218,
+      "details": [
+        "│\n 218 │     public struct PremiumEscrow<phantom C> has key, store {\n     │                   ------------- To satisfy the constraint, the 'drop' ability would need to be added here\n     ·\n1445 │         mut prem: PremiumEscrow<C>,\n     │             ----  ---------------- The type 'unxversal::options::PremiumEscrow<C>' does not have the ability 'drop'\n     │             │      \n     │             The parameter 'prem' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1533 │         event::emit(OptionOpened { market_id: object::id(market), buyer: prem.owner, writer: offer.owner, quantity: fill, premium_per_unit: prem.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n     │                                                                                                                                                                                                                          ^ Invalid return"
+      ]
+    },
+    {
+      "type": "error",
+      "code": "E06001",
+      "message": "unused value without 'drop'",
+      "file": "./sources/options.move",
+      "line": 1533,
+      "column": 218,
+      "details": [
+        "│\n1447 │         mut unxv_payment: vector<Coin<UNXV>>,\n     │             ------------  ------------------\n     │             │             │      │\n     │             │             │      The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' can have the ability 'drop' but the type argument 'sui::coin::Coin<unxversal::unxv::UNXV>' does not have the required ability 'drop'\n     │             │             The type 'vector<sui::coin::Coin<unxversal::unxv::UNXV>>' does not have the ability 'drop'\n     │             The parameter 'unxv_payment' still contains a value. The value does not have the 'drop' ability and must be consumed before the function returns\n     ·\n1533 │         event::emit(OptionOpened { market_id: object::id(market), buyer: prem.owner, writer: offer.owner, quantity: fill, premium_per_unit: prem.premium_per_unit, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });\n     │                                                                                                                                                                                                                          ^ Invalid return"
+      ]
+    }
+  ]
+}
