@@ -25,6 +25,7 @@ module unxversal::synthetics {
     use unxversal::unxv::UNXV;
 
     fun clone_string(s: &String): String {
+        
         let src_bytes = string::as_bytes(s);
         let src_len = vector::length(src_bytes);
         let mut dst_bytes = vector::empty<u8>();
@@ -53,7 +54,10 @@ module unxversal::synthetics {
     fun clone_string_vec(src: &vector<String>): vector<String> {
         let mut out = vector::empty<String>();
         let mut i = 0; let n = vector::length(src);
-        while (i < n) { let s = vector::borrow(src, i); vector::push_back(&mut out, clone_string(s)); i = i + 1; };
+        while (i < n) { 
+            let s = vector::borrow(src, i); 
+            vector::push_back(&mut out, clone_string(s)); i = i + 1; 
+        };
         out
     }
 
@@ -63,10 +67,14 @@ module unxversal::synthetics {
         let bb = string::as_bytes(b);
         let la = vector::length(ab);
         let lb = vector::length(bb);
-        if (la != lb) { return false; };
+        if (la != lb) { 
+            return false 
+        };
         let mut i = 0;
         while (i < la) {
-            if (*vector::borrow(ab, i) != *vector::borrow(bb, i)) { return false; };
+            if (*vector::borrow(ab, i) != *vector::borrow(bb, i)) { 
+                return false 
+            };
             i = i + 1;
         };
         true
@@ -75,7 +83,13 @@ module unxversal::synthetics {
     // Track a symbol in a vector<String> if it is not present
     fun push_symbol_if_missing(list: &mut vector<String>, sym: &String) {
         let mut i = 0; let n = vector::length(list);
-        while (i < n) { let cur = vector::borrow(list, i); if (eq_string(cur, sym)) { return; }; i = i + 1; };
+        while (i < n) { 
+            let cur = vector::borrow(list, i); 
+            if (eq_string(cur, sym)) { 
+                return 
+            }; 
+            i = i + 1; 
+        };
         vector::push_back(list, clone_string(sym));
     }
 
@@ -271,7 +285,11 @@ module unxversal::synthetics {
         expiry_ms: u64,
     }
 
-    public struct OrderCancelled has copy, drop { order_id: ID, owner: address, timestamp: u64 }
+    public struct OrderCancelled has copy, drop { 
+        order_id: ID, 
+        owner: address, 
+        timestamp: u64 
+    }
 
     public struct OrderMatched has copy, drop {
         buy_order_id: ID,
@@ -519,7 +537,11 @@ module unxversal::synthetics {
         };
         let vid = object::id(&vault);
         transfer::share_object(vault);
-        event::emit(VaultCreated { vault_id: vid, owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(VaultCreated { 
+            vault_id: vid, 
+            owner: ctx.sender(), 
+            timestamp: sui::tx_context::epoch_timestamp_ms(ctx) 
+        });
     }
 
     /// Deposit collateral into caller‑owned vault
@@ -534,7 +556,12 @@ module unxversal::synthetics {
         let bal_in = coin::into_balance(coins_in);
         balance::join(&mut vault.collateral, bal_in);
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
-        event::emit(CollateralDeposited { vault_id: object::id(vault), amount: balance::value(&vault.collateral), depositor: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(CollateralDeposited { 
+            vault_id: object::id(vault), 
+            amount: balance::value(&vault.collateral), 
+            depositor: ctx.sender(), 
+            timestamp: sui::tx_context::epoch_timestamp_ms(ctx) 
+        });
     }
 
     /// Withdraw collateral if post‑withdraw health ≥ min_coll_ratio
@@ -561,7 +588,12 @@ module unxversal::synthetics {
         let bal_out = balance::split(&mut vault.collateral, amount);
         let coin_out = coin::from_balance(bal_out, ctx);
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
-        event::emit(CollateralWithdrawn { vault_id: object::id(vault), amount, withdrawer: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(CollateralWithdrawn { 
+            vault_id: object::id(vault), 
+            amount, 
+            withdrawer: ctx.sender(), 
+            timestamp: sui::tx_context::epoch_timestamp_ms(ctx) 
+        });
         coin_out
     }
 
@@ -591,19 +623,32 @@ module unxversal::synthetics {
                     assert!(px > 0, E_BAD_PRICE);
                     total_debt_value = total_debt_value + (du * px);
                     let a = table::borrow(&registry.synthetics, clone_string(&sym));
-                    let m = if (a.min_collateral_ratio > 0) { a.min_collateral_ratio } else { registry.global_params.min_collateral_ratio };
-                    if (m > max_min_ccr) { max_min_ccr = m; };
+                    let m = if (a.min_collateral_ratio > 0) { 
+                        a.min_collateral_ratio 
+                    } else { 
+                        registry.global_params.min_collateral_ratio 
+                    };
+                    if (m > max_min_ccr) { 
+                        max_min_ccr = m; 
+                    };
                 };
             };
             i = i + 1;
         };
-        let collateral_after = if (balance::value(&vault.collateral) > amount) { balance::value(&vault.collateral) - amount } else { 0 };
+        let collateral_after = if (balance::value(&vault.collateral) > amount) { 
+            balance::value(&vault.collateral) - amount 
+        } else { 0 };
         let ratio_after = if (total_debt_value == 0) { U64_MAX_LITERAL } else { (collateral_after * 10_000) / total_debt_value };
         assert!(ratio_after >= max_min_ccr, E_VAULT_NOT_HEALTHY);
         let bal_out = balance::split(&mut vault.collateral, amount);
         let coin_out = coin::from_balance(bal_out, ctx);
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
-        event::emit(CollateralWithdrawn { vault_id: object::id(vault), amount, withdrawer: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(CollateralWithdrawn { 
+            vault_id: object::id(vault), 
+            amount, 
+            withdrawer: ctx.sender(), 
+            timestamp: sui::tx_context::epoch_timestamp_ms(ctx) 
+        });
         coin_out
     }
 
@@ -680,14 +725,14 @@ module unxversal::synthetics {
     ) {
         // If no debt, nothing to accrue
         let k_acc = clone_string(&synthetic_symbol);
-        if (!table::contains(&vault.synthetic_debt, k_acc)) { return; }
+        if (!table::contains(&vault.synthetic_debt, k_acc)) { return };
         let mut debt_units = *table::borrow(&vault.synthetic_debt, clone_string(&synthetic_symbol));
-        if (debt_units == 0) { return; }
+        if (debt_units == 0) { return };
 
         // Compute elapsed time since last update
         let now_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         let last_ms = vault.last_update_ms;
-        if (now_ms <= last_ms) { return; }
+        if (now_ms <= last_ms) { return };
         let elapsed_ms = now_ms - last_ms;
 
         // Annualized stability fee in bps applied to USD value of debt (per-asset override)
@@ -1023,7 +1068,7 @@ module unxversal::synthetics {
         price: &Aggregator,
         symbol: &String
     ): (u64, bool) {
-        if (!table::contains(&vault.synthetic_debt, clone_string(symbol))) { return (U64_MAX_LITERAL, false); }
+        if (!table::contains(&vault.synthetic_debt, clone_string(symbol))) { return (U64_MAX_LITERAL, false) };
         let debt = *table::borrow(&vault.synthetic_debt, clone_string(symbol));
         let price_u64 = get_price_scaled_1e6(clock, oracle_cfg, price);
         assert!(price_u64 > 0, E_BAD_PRICE);
@@ -1170,8 +1215,8 @@ module unxversal::synthetics {
         assert!(buy_order.symbol == sell_order.symbol, E_SYMBOL_MISMATCH);
         let sym = clone_string(&buy_order.symbol);
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
-        if (buy_order.expiry_ms != 0) { assert!(now <= buy_order.expiry_ms, E_ORDER_EXPIRED); }
-        if (sell_order.expiry_ms != 0) { assert!(now <= sell_order.expiry_ms, E_ORDER_EXPIRED); }
+        if (buy_order.expiry_ms != 0) { assert!(now <= buy_order.expiry_ms, E_ORDER_EXPIRED) };
+        if (sell_order.expiry_ms != 0) { assert!(now <= sell_order.expiry_ms, E_ORDER_EXPIRED) };
         assert!(buyer_vault.owner == buy_order.owner, E_NOT_OWNER);
         assert!(seller_vault.owner == sell_order.owner, E_NOT_OWNER);
         assert!(buy_order.price >= sell_order.price, E_INVALID_ORDER);
@@ -1342,7 +1387,7 @@ module unxversal::synthetics {
                 };
                 j = j + 1;
             };
-            if (!found || best_v == 0) { break; }
+            if (!found || best_v == 0) { break };
             let top_sym = vector::borrow(&work_syms, best_i);
             vector::push_back(&mut ordered, clone_string(top_sym));
             // mark consumed
@@ -1366,7 +1411,7 @@ module unxversal::synthetics {
         symbol: &String
     ): (u64, u64, u64) {
         let collateral_value = balance::value(&vault.collateral);
-        if (!table::contains(&vault.synthetic_debt, clone_string(symbol))) { return (collateral_value, 0, U64_MAX_LITERAL); }
+        if (!table::contains(&vault.synthetic_debt, clone_string(symbol))) { return (collateral_value, 0, U64_MAX_LITERAL) };
         let debt_units = *table::borrow(&vault.synthetic_debt, clone_string(symbol));
         let px = get_price_scaled_1e6(clock, oracle_cfg, price);
         let debt_value = debt_units * px;
@@ -1647,7 +1692,7 @@ module unxversal::synthetics {
         registry: &mut SynthRegistry,
         publisher: &Publisher,
         ctx: &mut TxContext
-    ) {
+    ): display::Display<CollateralVault<C>> {
         // Allow‑list enforcement
         assert_is_admin(registry, ctx.sender());
         // One‑time only
@@ -1660,7 +1705,7 @@ module unxversal::synthetics {
         transfer::share_object(cfg);
         // Register display for the concrete collateral type now that C is bound
         let disp = init_vault_display<C>(publisher, ctx);
-        transfer::public_transfer(disp, ctx.sender());
+        disp
     }
 
     /// Update the registry's treasury reference to the concrete `Treasury<C>` selected by governance.

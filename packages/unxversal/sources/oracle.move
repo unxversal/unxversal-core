@@ -40,7 +40,6 @@ module unxversal::oracle {
         let config = OracleConfig { id: object::new(ctx), max_age_sec: 60 };
         transfer::share_object(config);
     }
-
     
     // Switchboard integration does not maintain an on-chain allow-list here.
 
