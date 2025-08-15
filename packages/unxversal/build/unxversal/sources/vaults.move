@@ -22,7 +22,7 @@ module unxversal::vaults {
 
     // Collateral coin is generic; avoid direct USDC dependency
     use unxversal::unxv::UNXV;
-    use unxversal::synthetics::{Self as SynthMod, SynthRegistry, AdminCap};
+    use unxversal::synthetics::{Self as SynthMod, SynthRegistry, AdminCap, Order, CollateralVault};
     use unxversal::treasury::{Self as TreasuryMod, Treasury};
     use unxversal::oracle::{OracleConfig, get_price_scaled_1e6};
     use switchboard::aggregator::Aggregator;
@@ -342,6 +342,73 @@ module unxversal::vaults {
             b"VAULT".to_string(),
             clone_string(&v_buy.base_symbol),
             b"COLLATERAL".to_string(),
+            ctx
+        );
+    }
+
+    /*******************************
+    * LiquidityVault – Synthetics integration (vault-owned CollateralVault)
+    *******************************/
+    /// Manager places a synth limit order using the manager-owned CollateralVault<C>
+    public fun place_synth_limit_order<Base: store, C: store>(
+        registry: &SynthRegistry,
+        v: &LiquidityVault<Base, C>,
+        synth_vault: &CollateralVault<C>,
+        symbol: String,
+        side: u8,            // 0 = buy (mint exposure), 1 = sell (burn exposure)
+        price: u64,          // micro-USD per 1 unit of synth
+        size: u64,           // synth units
+        expiry_ms: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(!v.shutdown, E_SHUTDOWN);
+        assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
+        SynthMod::place_limit_order<C>(registry, synth_vault, symbol, side, price, size, expiry_ms, ctx);
+    }
+
+    /// Manager cancels a synth order they own
+    public fun cancel_synth_order<Base: store, C: store>(
+        v: &LiquidityVault<Base, C>,
+        order: &mut Order,
+        ctx: &TxContext
+    ) {
+        assert!(v.manager == ctx.sender(), E_NOT_MANAGER);
+        SynthMod::cancel_order(order, ctx);
+    }
+
+    /// Match two synth orders, settling against the respective CollateralVault<C>
+    public fun match_synth_orders<C: store>(
+        registry: &mut SynthRegistry,
+        clock: &Clock,
+        oracle_cfg: &OracleConfig,
+        price_info: &Aggregator,
+        buy_order: &mut Order,
+        sell_order: &mut Order,
+        buyer_vault: &mut CollateralVault<C>,
+        seller_vault: &mut CollateralVault<C>,
+        unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &Aggregator,
+        taker_is_buyer: bool,
+        min_price: u64,
+        max_price: u64,
+        treasury: &mut Treasury<C>,
+        ctx: &mut TxContext
+    ) {
+        SynthMod::match_orders<C>(
+            registry,
+            clock,
+            oracle_cfg,
+            price_info,
+            buy_order,
+            sell_order,
+            buyer_vault,
+            seller_vault,
+            unxv_payment,
+            unxv_price,
+            taker_is_buyer,
+            min_price,
+            max_price,
+            treasury,
             ctx
         );
     }
