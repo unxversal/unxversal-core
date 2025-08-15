@@ -387,7 +387,7 @@ module unxversal::gas_futures {
         let equity: u128 = if (unrl_gain) { (margin_val as u128) + unrl_abs } else { if ((margin_val as u128) >= unrl_abs) { (margin_val as u128) - unrl_abs } else { 0 } };
         let notional = pos.size * market.contract_size_gas_units * mark_price_micro_usd_per_gas;
         let maint_req = (notional * maint_margin_bps) / 10_000;
-        if (!(equity < (maint_req as u128))) { return; };
+        if (!(equity < (maint_req as u128))) { return; }
         event::emit(GasMarginCall { symbol: clone_string(&market.symbol), account: pos.owner, equity_abs: equity, is_positive: true, maint_required: maint_req, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         let seized_total = balance::value(&pos.margin);
         if (seized_total > 0) {
@@ -437,7 +437,6 @@ module unxversal::gas_futures {
                 let mut fee_coin = coin::from_balance(fee_bal, ctx);
                 if (reg.settlement_bot_reward_bps > 0) { let bot_cut = (fee * reg.settlement_bot_reward_bps) / 10_000; if (bot_cut > 0) { let to_bot = coin::split(&mut fee_coin, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); } };
                 TreasuryMod::deposit_collateral_ext(treasury, fee_coin, b"gas_settlement".to_string(), pos.owner, ctx);
-                margin_val = balance::value(&pos.margin);
             }
         } else {
             let loss_abs = if (pnl_abs > (18_446_744_073_709_551_615u64 as u128)) { 18_446_744_073_709_551_615 } else { pnl_abs as u64 };

@@ -283,6 +283,16 @@ module unxversal::perpetuals {
         market.volume_premium = market.volume_premium + notional;
         market.last_trade_price_micro_usd = price_micro_usd;
         event::emit(PerpFillRecorded { symbol: clone_string(&market.symbol), price: price_micro_usd, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: collateral_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        // Ensure any remaining UNXV payment coins are refunded to the sender and the vector is consumed
+        if (!vector::is_empty(&unxv_payment)) {
+            let mut refund_unxv = coin::zero<unxversal::unxv::UNXV>(ctx);
+            while (!vector::is_empty(&unxv_payment)) {
+                let c = vector::pop_back(&mut unxv_payment);
+                coin::join(&mut refund_unxv, c);
+            };
+            transfer::public_transfer(refund_unxv, ctx.sender());
+        };
+        vector::destroy_empty(unxv_payment);
     }
 
     /*******************************
@@ -305,7 +315,7 @@ module unxversal::perpetuals {
         transfer::share_object(pos);
     }
 
-    public entry fun close_position<C>(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition<C>, close_price_micro_usd: u64, quantity: u64, treasury: &mut Treasury<C>, ctx: &mut TxContext) {
+    public entry fun close_position<C>(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition<C>, close_price_micro_usd: u64, quantity: u64, _treasury: &mut Treasury<C>, ctx: &mut TxContext) {
         assert!(!reg.paused && !market.paused, E_PAUSED);
         assert!(quantity > 0 && quantity <= pos.size, E_MIN_INTERVAL);
         assert!(close_price_micro_usd % market.tick_size_micro_usd == 0, E_MIN_INTERVAL);
@@ -373,7 +383,7 @@ module unxversal::perpetuals {
         event::emit(PerpMarginCall { symbol: clone_string(&market.symbol), account: pos.owner, equity_positive: equity_signed.is_positive, equity_abs: equity_abs_u128, maint_required: maint_req, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         let seized_total = balance::value(&pos.margin);
         if (seized_total > 0) {
-            let mut seized_bal = balance::split(&mut pos.margin, seized_total);
+            let seized_bal = balance::split(&mut pos.margin, seized_total);
             let mut seized = coin::from_balance(seized_bal, ctx);
             // Bot reward optional via trade_bot_reward_bps reuse (no separate field here)
             let bot_cut = (seized_total * reg.trade_bot_reward_bps) / 10_000;
