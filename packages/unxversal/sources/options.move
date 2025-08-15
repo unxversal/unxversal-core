@@ -408,7 +408,7 @@ module unxversal::options {
         assert_is_admin_via_synth(synth_reg, ctx.sender());
         assert!(!reg.paused, E_PAUSED);
         assert!(table::contains(&reg.supported_underlyings, clone_string(&symbol)), E_UNDERLYING_UNKNOWN);
-        let mut ua = table::borrow_mut(&mut reg.supported_underlyings, clone_string(&symbol));
+        let ua = table::borrow_mut(&mut reg.supported_underlyings, clone_string(&symbol));
         ua.is_active = false;
         event::emit(UnderlyingRemoved { symbol, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
@@ -486,7 +486,7 @@ module unxversal::options {
         creation_fee: u64,
         mut creation_fee_coin: Coin<C>,
         ctx: &mut TxContext
-    ) {
+    ): Coin<C> {
         assert!(!reg.paused, E_PAUSED);
         // Validate underlying
         assert!(table::contains(&reg.supported_underlyings, clone_string(&underlying)), E_UNDERLYING_UNKNOWN);
@@ -548,21 +548,25 @@ module unxversal::options {
                     vector::push_back(&mut vecu, merged);
                     TreasuryMod::deposit_unxv_ext(treasury, vecu, b"options_market_create".to_string(), ctx.sender(), ctx);
                     discount_applied = true;
-                };
+                } else { coin::destroy_zero(merged); };
             };
             let fee_due = if (discount_applied && creation_fee > discount_collateral) { creation_fee - discount_collateral } else { creation_fee };
             if (fee_due > 0) {
                 let pay = coin::split(&mut creation_fee_coin, fee_due, ctx);
                 TreasuryMod::deposit_collateral_ext(treasury, pay, b"options_market_create".to_string(), ctx.sender(), ctx);
             };
-            // refund any remainder
-            transfer::public_transfer(creation_fee_coin, ctx.sender());
+            // drain any leftover UNXV back to sender and consume vector
+            let mut j = 0; while (j < vector::length(&unxv_payment)) { let c = vector::pop_back(&mut unxv_payment); transfer::public_transfer(c, ctx.sender()); j = j + 1; };
+            vector::destroy_empty(unxv_payment);
         } else {
-            // refund any provided coin
-            transfer::public_transfer(creation_fee_coin, ctx.sender());
+            // drain and consume UNXV vector if provided
+            let mut j = 0; while (j < vector::length(&unxv_payment)) { let c = vector::pop_back(&mut unxv_payment); transfer::public_transfer(c, ctx.sender()); j = j + 1; };
+            vector::destroy_empty(unxv_payment);
         };
 
         event::emit(OptionMarketCreated { market_id: mid, market_key_bytes: key_bytes, underlying, option_type, strike_price, expiry_ms, settlement_type, creator: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        // Return leftover creation fee coin to caller for composability
+        creation_fee_coin
     }
 
     public fun init_settlement_queue(dispute_window_ms: u64, ctx: &mut TxContext) {
@@ -661,7 +665,7 @@ module unxversal::options {
         unxv_price: &Aggregator,
         treasury: &mut Treasury<C>,
         ctx: &mut TxContext
-    ) {
+    ): Coin<C> {
         assert!(!reg.paused && market.is_active && !market.paused, E_PAUSED);
         assert!(quantity > 0 && quantity <= long_pos.quantity && quantity <= short_pos.quantity, E_AMOUNT);
         assert!(premium_per_unit % market.tick_size == 0 && quantity % market.contract_size == 0, E_BAD_PARAMS);
@@ -689,8 +693,9 @@ module unxversal::options {
                     transfer::public_transfer(merged, payer_addr);
                     discount_applied = true;
                 } else { transfer::public_transfer(merged, payer_addr); }
-            }
+            } else { let mut k = 0; while (k < vector::length(&unxv_payment)) { let c = vector::pop_back(&mut unxv_payment); transfer::public_transfer(c, payer_addr); k = k + 1; }; }
         };
+        vector::destroy_empty(unxv_payment);
         let fee_to_collect = if (discount_applied) { if (taker_fee > discount_collateral) { taker_fee - discount_collateral } else { 0 } } else { taker_fee };
         let net_amount = if (premium_total > fee_to_collect) { premium_total - fee_to_collect } else { 0 };
         if (payer_is_long) {
@@ -746,9 +751,9 @@ module unxversal::options {
             let _ = table::remove(&mut market.user_open_interest, long_pos.owner);
             table::add(&mut market.user_open_interest, long_pos.owner, newv);
         };
-        // Refund any remainder of usdc source
-        transfer::public_transfer(usdc, ctx.sender());
+        // Emit and return any remainder of usdc source
         event::emit(OptionClosed { market_id: object::id(market), closer: if (payer_is_long) { long_pos.owner } else { short_pos.owner }, counterparty: if (payer_is_long) { short_pos.owner } else { long_pos.owner }, quantity, premium_per_unit, fee_paid: fee_to_collect, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        usdc
     }
 
     /*******************************
@@ -825,7 +830,7 @@ module unxversal::options {
     /// Rank a set of short position IDs by provided risk scores (descending).
     /// Off-chain callers should compute scores via short_risk_score and pass parallel vectors.
     public fun rank_short_ids_by_score(ids: vector<ID>, scores: vector<u64>): vector<ID> {
-        let mut work_ids = ids;
+        let work_ids = ids;
         let mut work_scores = scores;
         let n = vector::length(&work_ids);
         let mut ordered = vector::empty<ID>();
@@ -833,7 +838,7 @@ module unxversal::options {
         while (k < n) {
             let mut best_v: u64 = 0; let mut best_i: u64 = 0; let mut found = false;
             let mut j = 0; while (j < n) { let vj = *vector::borrow(&work_scores, j); if (vj > best_v) { best_v = vj; best_i = j; found = true; }; j = j + 1; };
-            if (!found || best_v == 0) { break; };
+            if (!found || best_v == 0) { break; }
             let top_id = *vector::borrow(&work_ids, best_i);
             vector::push_back(&mut ordered, top_id);
             // zero out consumed slot
@@ -878,7 +883,7 @@ module unxversal::options {
     /*******************************
     * Displays for Market (type-level)
     *******************************/
-    public fun init_market_display(publisher: &Publisher, ctx: &mut TxContext) {
+    public fun init_market_display(publisher: &Publisher, ctx: &mut TxContext): display::Display<OptionMarket> {
         let mut disp = display::new<OptionMarket>(publisher, ctx);
         disp.add(b"name".to_string(), b"Option Market {underlying} {option_type} {strike_price} @ {expiry_ms}".to_string());
         disp.add(b"description".to_string(), b"Unxversal Options market".to_string());
@@ -887,23 +892,26 @@ module unxversal::options {
         disp.add(b"strike_price".to_string(), b"{strike_price}".to_string());
         disp.add(b"expiry_ms".to_string(), b"{expiry_ms}".to_string());
         disp.update_version();
-        transfer::public_transfer(disp, ctx.sender());
+        disp
     }
 
-    public fun init_offer_and_position_displays<C: store>(publisher: &Publisher, ctx: &mut TxContext) {
+    public fun init_offer_and_position_displays<C: store>(publisher: &Publisher, ctx: &mut TxContext): (
+        display::Display<ShortOffer<C>>,
+        display::Display<PremiumEscrow<C>>,
+        display::Display<OptionPosition<C>>,
+        display::Display<LongUnderlyingEscrow<C>>
+    ) {
         let mut disp_offer = display::new<ShortOffer<C>>(publisher, ctx);
         disp_offer.add(b"name".to_string(), b"Short Offer {option_type} {strike_price} exp {expiry_ms}".to_string());
         disp_offer.add(b"remaining_qty".to_string(), b"{remaining_qty}".to_string());
         disp_offer.add(b"min_premium_per_unit".to_string(), b"{min_premium_per_unit}".to_string());
         disp_offer.update_version();
-        transfer::public_transfer(disp_offer, ctx.sender());
 
         let mut disp_esc = display::new<PremiumEscrow<C>>(publisher, ctx);
         disp_esc.add(b"name".to_string(), b"Premium Escrow {option_type} {strike_price} exp {expiry_ms}".to_string());
         disp_esc.add(b"remaining_qty".to_string(), b"{remaining_qty}".to_string());
         disp_esc.add(b"premium_per_unit".to_string(), b"{premium_per_unit}".to_string());
         disp_esc.update_version();
-        transfer::public_transfer(disp_esc, ctx.sender());
 
         let mut disp_pos = display::new<OptionPosition<C>>(publisher, ctx);
         disp_pos.add(b"name".to_string(), b"Position {option_type} {strike_price} exp {expiry_ms}".to_string());
@@ -911,12 +919,11 @@ module unxversal::options {
         disp_pos.add(b"quantity".to_string(), b"{quantity}".to_string());
         disp_pos.add(b"premium_per_unit".to_string(), b"{premium_per_unit}".to_string());
         disp_pos.update_version();
-        transfer::public_transfer(disp_pos, ctx.sender());
 
         let mut disp_long_esc = display::new<LongUnderlyingEscrow<C>>(publisher, ctx);
         disp_long_esc.add(b"name".to_string(), b"Long Underlying Escrow {position_id}".to_string());
         disp_long_esc.update_version();
-        transfer::public_transfer(disp_long_esc, ctx.sender());
+        (disp_offer, disp_esc, disp_pos, disp_long_esc)
     }
 
     /*******************************

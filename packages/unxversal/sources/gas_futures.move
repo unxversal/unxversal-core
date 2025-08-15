@@ -387,7 +387,7 @@ module unxversal::gas_futures {
         let equity: u128 = if (unrl_gain) { (margin_val as u128) + unrl_abs } else { if ((margin_val as u128) >= unrl_abs) { (margin_val as u128) - unrl_abs } else { 0 } };
         let notional = pos.size * market.contract_size_gas_units * mark_price_micro_usd_per_gas;
         let maint_req = (notional * maint_margin_bps) / 10_000;
-        if (!(equity < (maint_req as u128))) { return; }
+        if (!(equity < (maint_req as u128))) { return };
         event::emit(GasMarginCall { symbol: clone_string(&market.symbol), account: pos.owner, equity_abs: equity, is_positive: true, maint_required: maint_req, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         let seized_total = balance::value(&pos.margin);
         if (seized_total > 0) {
@@ -429,7 +429,7 @@ module unxversal::gas_futures {
         let diff_s = if (px >= pos.avg_price_micro_usd_per_gas) { (px - pos.avg_price_micro_usd_per_gas) as u128 } else { (pos.avg_price_micro_usd_per_gas - px) as u128 };
         let pnl_abs = diff_s * (pos.size as u128) * (market.contract_size_gas_units as u128);
         let pnl_gain = if (pos.side == 0) { px >= pos.avg_price_micro_usd_per_gas } else { pos.avg_price_micro_usd_per_gas >= px };
-        let mut margin_val = balance::value(&pos.margin);
+        let margin_val = balance::value(&pos.margin);
         if (pnl_gain) {
             let fee = ((if (pnl_abs > (18_446_744_073_709_551_615u64 as u128)) { 18_446_744_073_709_551_615 } else { pnl_abs as u64 }) * reg.settlement_fee_bps) / 10_000;
             if (fee > 0 && margin_val >= fee) {
