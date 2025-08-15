@@ -145,16 +145,20 @@ module unxversal::futures {
         assert!(!reg.paused, E_PAUSED);
         assert!(quantity > 0 && quantity <= pos.size, E_MIN_INTERVAL);
         // Variation margin: PnL = (close - avg) * qty * sign
-        let mut is_gain = false;
-        let mut pnl_abs: u128 = 0;
-        if (pos.side == 0) {
+        let (is_gain, pnl_abs) = if (pos.side == 0) {
             // long
-            if (close_price >= pos.avg_price) { is_gain = true; pnl_abs = (close_price - pos.avg_price) as u128 * (quantity as u128); }
-            else { is_gain = false; pnl_abs = (pos.avg_price - close_price) as u128 * (quantity as u128); };
+            if (close_price >= pos.avg_price) {
+                (true, ((close_price - pos.avg_price) as u128) * (quantity as u128))
+            } else {
+                (false, ((pos.avg_price - close_price) as u128) * (quantity as u128))
+            }
         } else {
             // short
-            if (pos.avg_price >= close_price) { is_gain = true; pnl_abs = (pos.avg_price - close_price) as u128 * (quantity as u128); }
-            else { is_gain = false; pnl_abs = (close_price - pos.avg_price) as u128 * (quantity as u128); };
+            if (pos.avg_price >= close_price) {
+                (true, ((pos.avg_price - close_price) as u128) * (quantity as u128))
+            } else {
+                (false, ((close_price - pos.avg_price) as u128) * (quantity as u128))
+            }
         };
         // Apply PnL to accumulated sign/magnitude
         if (pnl_abs > 0) {
@@ -202,7 +206,7 @@ module unxversal::futures {
      * Record fill – metrics + fees (maker rebate, UNXV discount, bot split)
      *******************************/
     entry fun record_fill<C>(
-        reg: &mut FuturesRegistry,
+        reg: &FuturesRegistry,
         market: &mut FuturesContract,
         price: u64,
         size: u64,
@@ -226,30 +230,31 @@ module unxversal::futures {
         let trade_fee = (notional * reg.trade_fee_bps) / 10_000;
         let discount_collateral = (trade_fee * reg.unxv_discount_bps) / 10_000;
         let mut discount_applied = false;
-        if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
+        // Always drain the UNXV payment vector into a single coin and destroy the vector
+        let mut merged_unxv = coin::zero<unxversal::unxv::UNXV>(ctx);
+        let mut i = 0;
+        while (i < vector::length(&unxv_payment)) {
+            let c = vector::pop_back(&mut unxv_payment);
+            coin::join(&mut merged_unxv, c);
+            i = i + 1;
+        };
+        vector::destroy_empty(unxv_payment);
+        if (discount_collateral > 0) {
             let price_unxv = get_price_scaled_1e6(oracle_cfg, clock, unxv_price);
             if (price_unxv > 0) {
                 let unxv_needed = (discount_collateral + price_unxv - 1) / price_unxv;
-                let mut merged = coin::zero<unxversal::unxv::UNXV>(ctx);
-                let mut i = 0;
-                while (i < vector::length(&unxv_payment)) {
-                    let c = vector::pop_back(&mut unxv_payment);
-                    coin::join(&mut merged, c);
-                    i = i + 1;
-                };
-                let have = coin::value(&merged);
+                let have = coin::value(&merged_unxv);
                 if (have >= unxv_needed) {
-                    let exact = coin::split(&mut merged, unxv_needed, ctx);
+                    let exact = coin::split(&mut merged_unxv, unxv_needed, ctx);
                     let mut vec_unxv = vector::empty<Coin<unxversal::unxv::UNXV>>();
                     vector::push_back(&mut vec_unxv, exact);
                     TreasuryMod::deposit_unxv_ext(treasury, vec_unxv, b"futures_trade".to_string(), ctx.sender(), ctx);
-                    transfer::public_transfer(merged, ctx.sender());
                     discount_applied = true;
-                } else {
-                    transfer::public_transfer(merged, ctx.sender());
-                };
+                }
             }
         };
+        // Refund any remaining UNXV (including zero) to sender
+        transfer::public_transfer(merged_unxv, ctx.sender());
         let collateral_fee_after_discount = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
         let maker_rebate = (trade_fee * reg.maker_rebate_bps) / 10_000;
         if (collateral_fee_after_discount > 0) {
@@ -307,7 +312,7 @@ module unxversal::futures {
         let equity_val: u128 = if (unrl_gain) { (margin_val as u128) + unrl_abs } else { if ((margin_val as u128) >= unrl_abs) { (margin_val as u128) - unrl_abs } else { 0 } };
         let notional = pos.size * mark_price;
         let maint_req = (notional * market.maint_margin_bps) / 10_000;
-        if (!(equity_val < (maint_req as u128))) { return; }; // not liquidatable
+        if (!(equity_val < (maint_req as u128))) { return }; // not liquidatable
         event::emit(MarginCall { symbol: clone_string(&market.symbol), account: pos.owner, equity_abs: equity_val, is_positive: true, maint_required: maint_req, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         // Seize all margin to treasury, split bot reward
         let seized_total = balance::value(&pos.margin);
@@ -487,7 +492,7 @@ module unxversal::futures {
     /*******************************
     * Settlement (trustless via oracle)
     *******************************/
-    entry fun settle_futures<C>(reg: &mut FuturesRegistry, oracle_cfg: &OracleConfig, market: &mut FuturesContract, clock: &Clock, aggregator: &Aggregator, _treasury: &mut Treasury<C>, ctx: &mut TxContext) {
+    entry fun settle_futures<C>(reg: &FuturesRegistry, oracle_cfg: &OracleConfig, market: &mut FuturesContract, clock: &Clock, aggregator: &Aggregator, _treasury: &mut Treasury<C>, ctx: &TxContext) {
         assert!(!reg.paused, E_PAUSED);
         assert!(!market.is_expired, E_ALREADY_SETTLED);
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
@@ -524,7 +529,7 @@ module unxversal::futures {
             if (pos.avg_price >= px) { (((pos.avg_price - px) as u128) * (pos.size as u128), true) } else { (((px - pos.avg_price) as u128) * (pos.size as u128), false) }
         };
         // Apply settlement fee and bot split, collected from remaining margin if positive PnL; otherwise margin absorbs losses
-        let mut margin_val = balance::value(&pos.margin);
+        let margin_val = balance::value(&pos.margin);
         if (pnl_gain) {
             let fee = ((if (pnl_abs > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { pnl_abs as u64 }) * reg.settlement_fee_bps) / 10_000;
             if (fee > 0 && margin_val >= fee) {
@@ -540,7 +545,6 @@ module unxversal::futures {
                     };
                 };
                 TreasuryMod::deposit_collateral_ext(treasury, fee_coin, b"futures_settlement".to_string(), pos.owner, ctx);
-                margin_val = balance::value(&pos.margin);
             }
         } else {
             // Losses: clamp to available margin, route to treasury as sink
@@ -592,7 +596,7 @@ module unxversal::futures {
         reg: &FuturesRegistry,
         queue: &mut SettlementQueue,
         market_ids: vector<ID>,
-        ctx: &mut TxContext
+        ctx: &TxContext
     ) {
         assert!(!reg.paused, E_PAUSED);
         let now = sui::tx_context::epoch_timestamp_ms(ctx);

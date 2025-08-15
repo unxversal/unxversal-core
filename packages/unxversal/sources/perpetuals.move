@@ -1,3 +1,4 @@
+#[allow(lint(public_entry))]
 module unxversal::perpetuals {
     /*******************************
     * Unxversal Perpetuals – orderbook-integrated, funding-based perps
@@ -5,7 +6,6 @@ module unxversal::perpetuals {
     * - Fees to central treasury with UNXV discount, maker rebate, bot splits
     *******************************/
 
-    
     use sui::event;
     use sui::display;
     use sui::clock::Clock;
@@ -328,8 +328,8 @@ module unxversal::perpetuals {
         assert!(!reg.paused && !market.paused, E_PAUSED);
         let now = sui::clock::timestamp_ms(clock);
         let elapsed = if (now > market.last_funding_ms) { now - market.last_funding_ms } else { 0 };
-        if (elapsed < reg.funding_interval_ms) { return; };
-        if (index_price_micro_usd == 0 || market.last_trade_price_micro_usd == 0) { return; };
+        if (elapsed < reg.funding_interval_ms) { return };
+        if (index_price_micro_usd == 0 || market.last_trade_price_micro_usd == 0) { return };
         // premium_bps = (mark - index)/index * 10k
         let mark = market.last_trade_price_micro_usd as u128;
         let idx = index_price_micro_usd as u128;
@@ -340,7 +340,7 @@ module unxversal::perpetuals {
         market.funding_rate_bps = rate_abs_u64;
         market.funding_rate_longs_pay = premium_pos;
         // funding payment ~ size * index_price * rate
-        if (pos.size == 0) { market.last_funding_ms = now; return; };
+        if (pos.size == 0) { market.last_funding_ms = now; return };
         let notional = (pos.size as u128) * (index_price_micro_usd as u128);
         let delta_abs_u128 = (notional * (rate_abs_u64 as u128)) / 10_000u128;
         let delta_abs = if (delta_abs_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { delta_abs_u128 as u64 };
@@ -369,7 +369,7 @@ module unxversal::perpetuals {
         let equity_abs_u128 = equity_signed.magnitude as u128;
         let notional = (pos.size as u128) * (mark_price_micro_usd as u128);
         let maint_req = ((notional * (market.maint_margin_bps as u128)) / 10_000) as u64;
-        if (equity_signed.is_positive && (equity_abs_u128 >= (maint_req as u128))) { return; };
+        if (equity_signed.is_positive && (equity_abs_u128 >= (maint_req as u128))) { return };
         event::emit(PerpMarginCall { symbol: clone_string(&market.symbol), account: pos.owner, equity_positive: equity_signed.is_positive, equity_abs: equity_abs_u128, maint_required: maint_req, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         let seized_total = balance::value(&pos.margin);
         if (seized_total > 0) {

@@ -292,7 +292,7 @@ module unxversal::gas_futures {
     * Record fill (off‑chain matching)
     *******************************/
     entry fun record_gas_fill<C>(
-        reg: &mut GasFuturesRegistry,
+        reg: &GasFuturesRegistry,
         market: &mut GasFuturesContract,
         price_micro_usd_per_gas: u64,
         size: u64,
@@ -357,6 +357,12 @@ module unxversal::gas_futures {
         market.volume_premium = market.volume_premium + notional;
         market.last_trade_premium_micro_usd_per_gas = price_micro_usd_per_gas;
         event::emit(GasFillRecorded { symbol: clone_string(&market.symbol), price_micro_usd_per_gas, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: collateral_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        // Ensure any remaining UNXV coins are returned and the vector is destroyed
+        while (vector::length(&unxv_payment) > 0) {
+            let c = vector::pop_back(&mut unxv_payment);
+            transfer::public_transfer(c, ctx.sender());
+        };
+        vector::destroy_empty(unxv_payment);
     }
 
     /*******************************
@@ -399,7 +405,7 @@ module unxversal::gas_futures {
     /*******************************
     * Settlement – compute RGP×SUI and record; per‑position settlement
     *******************************/
-    entry fun settle_gas_futures(reg: &mut GasFuturesRegistry, market: &mut GasFuturesContract, oracle_cfg: &OracleConfig, clock: &Clock, sui_usd: &Aggregator, ctx: &mut TxContext) {
+    entry fun settle_gas_futures(reg: &GasFuturesRegistry, market: &mut GasFuturesContract, oracle_cfg: &OracleConfig, clock: &Clock, sui_usd: &Aggregator, ctx: &TxContext) {
         assert!(!reg.paused, E_PAUSED);
         assert!(!market.is_expired, E_ALREADY_SETTLED);
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
