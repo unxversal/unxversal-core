@@ -8,7 +8,7 @@ This document enumerates critical security issues and risk areas found across al
 
 ### Global cross-cutting issues
 - Caller-supplied prices and symbols: Multiple core checks accept caller-provided `symbols`/`prices` instead of binding to on-chain feeds. This allows spoofed prices to bypass LTV/CCR/liquidation checks.
-- Oracle feed binding: `oracle.move` does not maintain or enforce a per-asset allow-list; most modules accept arbitrary `Aggregator` references.
+- Oracle feed binding: `oracle.move` does not maintain or enforce a per-asset allow-list; most modules accept arbitrary `Aggregator` references. We must implement a symbol→aggregator ID mapping and enforce it on every price read.
 - Unit-scaling and accounting: Mixing scaled vs unit balances causes incorrect limits/liquidations.
 - Arithmetic overflow/DoS: Widespread u64 multiplications on notional and fees without u128 promotion can abort transactions, blocking liquidations or trading.
 - Incentive inconsistencies: Liquidation proceeds routed differently by product (sometimes to treasury, sometimes to liquidator) may under-incentivize critical actions.
@@ -19,10 +19,10 @@ This document enumerates critical security issues and risk areas found across al
 ## File: `synthetics.move`
 
 - Issues
-  - Price spoofing in multi-asset paths: aggregate mint/health/liquidation previously used caller-supplied `symbols`/`prices` (no binding to registry feeds). Fixed by deprecating multi-asset entry points and enforcing bound oracle reads per symbol.
-  - Overflow in CCR computations: uses u64 for `debt_usd = new_debt * price_u64` and other notional math in several places. Risk remains; will be addressed in the P1 overflow hardening pass.
-  - Liquidation incentive to treasury: `liquidate_vault` routes bulk collateral to treasury with bot cut. Policy review pending; unchanged in this step.
-  - Cross-module divergence: No reconciliation hooks with lending yet; unchanged in this step.
+  - Single-asset paths use strict bound price helpers; remaining multi-asset paths rely on `PriceSet`. We must ensure `PriceSet` is constructed via oracle-bound helpers (feed identity + staleness) and verified within entries. If not enforceable cleanly, deprecate the remaining multi-asset entrypoints.
+  - Overflow risk in CCR computations: `debt_usd = units * price_u64` uses u64; promote to u128.
+  - Liquidation incentive to treasury unchanged—policy needs alignment across products.
+  - No reconciliation hooks with lending yet.
 
 - Evidence
 ```1888:1966:packages/unxversal/sources/synthetics.move
@@ -35,38 +35,25 @@ public fun liquidate_vault<C>(...) { price_u64 = assert_and_get_price_for_symbol
 fun assert_and_get_price_for_symbol(...) // binds aggregator.feed_hash to registry.oracle_feeds[symbol]
 ```
 ```1182:1235:packages/unxversal/sources/synthetics.move
-public fun withdraw_collateral_multi<C>(...) { abort E_DEPRECATED }
-```
-```1462:1531:packages/unxversal/sources/synthetics.move
-public fun mint_synthetic_multi<C>(...) { refund UNXV; abort E_DEPRECATED }
-```
-```1669:1676:packages/unxversal/sources/synthetics.move
-public fun check_vault_health_multi<C>(...) { abort E_DEPRECATED }
-```
-```1942:1953:packages/unxversal/sources/synthetics.move
-public fun rank_vault_liquidation_order<C>(...) { abort E_DEPRECATED }
-```
-```1896:1901:packages/unxversal/sources/synthetics.move
-public fun get_vault_values<C>(...) uses assert_and_get_price_for_symbol
+public fun withdraw_collateral_multi<C>(...)
 ```
 
 - Guardrails present
-  - Oracle binding enforced for single-asset paths via `assert_and_get_price_for_symbol` ensuring aggregator identity matches `registry.oracle_feeds[symbol]`. Multi-asset, caller-priced functions are deprecated and abort with `E_DEPRECATED`.
-  - Global/per-asset min collateral ratio and liquidation threshold; Switchboard staleness checks via `get_price_scaled_1e6` in single-asset paths; `CollateralConfig` binding enforced.
+  - Oracle binding enforced for single-asset paths via `assert_and_get_price_for_symbol`. Multi-asset uses `PriceSet` but must be verified.
+  - Collateral ratio thresholds and staleness checks.
 
 - Remediations
-  - Completed: Removed reliance on caller-supplied prices by deprecating `*_multi` functions and binding all price reads to on-chain feeds per symbol.
-  - Next: Promote notional math to u128; add cross-protocol reconciliation hooks; revisit liquidation incentive policy.
+  - Enforce oracle-bound `PriceSet` verification or remove multi-asset flows; promote notional to u128; add reconciliation hooks; align liquidation incentives.
 
 ---
 
 ## File: `lending.move`
 
 - Issues
-  - Price spoofing: LTV and health checks use caller-supplied `symbols`/`prices` vectors; borrowers can over-borrow or avoid liquidations.
-  - Critical unit-scaling bug in liquidation: compares and subtracts UNITS against SCALED balances, corrupting accounting and enabling or blocking liquidations incorrectly.
-  - Unprivileged accrual for synth market: `accrue_synth_market` allows any caller to increase `total_borrow_units` with arbitrary `dt_ms`/`apr_bps` (debt inflation griefing).
-  - Overflow risk: many notional/fee calculations use u64 products without u128 promotion.
+  - Price spoofing: LTV and health checks rely on caller vectors. Replace with oracle-bound reads (or verified `PriceSet`).
+  - Liquidation scaling: convert scaled<->units correctly before comparisons and writes.
+  - Accrual access: `accrue_synth_market` must be admin/bot only; derive `dt` on-chain from last timestamp.
+  - Overflow risk in notional/fee calculations—promote to u128.
 
 - Evidence
 ```656:682:packages/unxversal/sources/lending.move
@@ -83,21 +70,18 @@ public entry fun accrue_synth_market(... dt_ms, apr_bps ...)
 ```
 
 - Guardrails present
-  - Per-asset LTV and liquidation thresholds; pool pause; simple rate model; index helpers exist to convert scaled<->units but not consistently used in liquidation.
+  - Per-asset LTV/liquidation thresholds; pool pause; index helpers exist.
 
 - Remediations
-  - Bind all LTV/health/liquidation calculations to on-chain oracle reads per asset; remove caller price vectors.
-  - Fix liquidation math: convert scaled to units before comparisons/mutations; write back scaled using `scaled_from_units`.
-  - Restrict `accrue_synth_market` to admin/bot with bounded `dt_ms` computed from on-chain time; prefer deriving `dt` from last accrual timestamp.
-  - Audit all u64 multiplications; use u128 intermediates.
+  - Bind risk checks to oracle; fix liquidation math; restrict accrual; u128 promotion.
 
 ---
 
 ## File: `dex.move`
 
 - Issues
-  - Arithmetic overflow/DoS: notional and fees computed as `u64 price * u64 size` without u128 promotion; large orders can abort matches and block books.
-  - Oracle discount path accepts arbitrary `Aggregator` objects for UNXV price; no binding to an allow-list.
+  - Arithmetic overflow/DoS: notional and fees computed as `u64 price * u64 size` without u128 promotion.
+  - Oracle discount path accepts arbitrary `Aggregator` for UNXV price; no binding to allow-list.
 
 - Evidence
 ```339:386:packages/unxversal/sources/dex.move
@@ -105,31 +89,27 @@ public entry fun accrue_synth_market(... dt_ms, apr_bps ...)
 ```
 
 - Guardrails present
-  - Per-market pause; maker bonds with GC slashing; explicit min/max price bounds on matching; UNXV discount requires price > 0 and sufficient UNXV.
+  - Per-market pause; maker bonds; min/max price bounds; UNXV discount requires price > 0 and sufficient UNXV.
 
 - Remediations
-  - Promote all notional/fee math to u128; clamp at safe bounds before converting to u64.
-  - Bind UNXV price feed to a configured on-chain aggregator ID; reject unknown feeds.
+  - Promote notional/fee math to u128; clamp before cast; bind UNXV price feed via oracle registry.
 
 ---
 
 ## File: `book.move`
 
 - Issues
-  - Primarily data-structure logic. No critical security issues found beyond typical u64 arithmetic bounds; relies on callers for price/time fairness.
-
-- Guardrails present
-  - Max fills/iteration guards; expiry checks; tick/lot/min-size validations handled by caller modules.
+  - Data-structure logic only; no protocol-facing issues beyond arithmetic bounds.
 
 - Remediations
-  - None critical. Keep interfaces pure; ensure caller modules validate tick/lot/expiry.
+  - None.
 
 ---
 
 ## File: `big_vector.move`
 
 - Issues
-  - Storage and traversal logic only. No protocol-facing security issues identified.
+  - Storage/traversal only; no protocol-facing issues identified.
 
 - Remediations
   - None.
@@ -141,7 +121,7 @@ public entry fun accrue_synth_market(... dt_ms, apr_bps ...)
 - Issues
   - Oracle binding: takes arbitrary `Aggregator` for SUI/USD; no allow-list per market.
   - Arithmetic overflow: notional and fee math in u64.
-  - Discount path: UNXV/SUI price fallback logic can misprice discounts if UNXV feed is invalid; no allow-list.
+  - Discount path: UNXV/SUI price fallback can misprice discounts; no allow-list.
 
 - Evidence
 ```200:210:packages/unxversal/sources/gas_futures.move
@@ -152,110 +132,74 @@ fun compute_micro_usd_per_gas(...)
 ```
 
 - Guardrails present
-  - Registry pause; dispute windows for settlement queue; min tick/intervals.
+  - Registry pause; dispute windows; tick/intervals.
 
 - Remediations
-  - Bind SUI/USD and UNXV/USD aggregators per registry with ID checks; promote notional math to u128.
+  - Bind SUI/USD and UNXV/USD aggregators per registry; u128 math.
 
 ---
 
 ## File: `futures.move`
 
 - Issues
-  - Good: `settle_futures` binds aggregator by object ID to whitelisted underlying.
-  - Arithmetic overflow: widespread u64 products for notional/fees; potential aborts.
-  - Off-chain price reliance in `record_fill` bounds (caller sets min/max) acceptable but beware spam.
-
-- Evidence
-```507:523:packages/unxversal/sources/futures.move
-// Enforce feed matches whitelisted underlying by aggregator object ID
-```
-
-- Guardrails present
-  - Underlying allow-list and aggregator binding; registry pause; listing throttles.
+  - Good: `settle_futures` binds aggregator by object ID.
+  - Arithmetic overflow: u64 products for notional/fees.
+  - Off-chain min/max price reliance is acceptable; watch spam.
 
 - Remediations
-  - Promote notional/fee math to u128; cap inputs to avoid overflow.
+  - u128 math and input caps in trade paths.
 
 ---
 
 ## File: `perpetuals.move`
 
 - Issues
-  - Funding and index price: `refresh_market_funding` accepts caller-supplied `index_price_micro_usd` (no on-chain oracle read). Attackers can skew funding direction/magnitude.
-  - Arithmetic overflow: u64 products for notional, funding deltas, fees.
-  - Oracle discount path accepts arbitrary UNXV aggregator.
-
-- Evidence
-```366:380:packages/unxversal/sources/perpetuals.move
-public entry fun refresh_market_funding(... index_price_micro_usd: u64 ...)
-```
-
-- Guardrails present
-  - Registry/market pause; funding rate caps; min listing intervals.
+  - Funding/index price: `refresh_market_funding` accepts caller-provided price; must bind to oracle.
+  - Arithmetic overflow: u64 products.
+  - Discount path accepts arbitrary UNXV aggregator.
 
 - Remediations
-  - Bind index price to on-chain oracle; move funding computation to use oracle price directly. Promote all arithmetic to u128.
+  - Bind index price to oracle; promote arithmetic; standardize discount path.
 
 ---
 
 ## File: `options.move`
 
 - Issues
-  - Creation fee UNXV discount bug: accepts any non-zero UNXV and applies full discount without pricing the UNXV amount. Lets callers underpay creation fees.
-  - Oracle binding: exercise/settlement take arbitrary aggregators; per-underlying feed bytes stored but not enforced in `expire_and_settle_market_cash`.
+  - Creation fee UNXV discount underpriced; must require sufficient UNXV by oracle valuation.
+  - Oracle binding: enforce stored feed for settlement/exercise.
   - Arithmetic overflow: u64 products for notional, fees, payouts.
 
-- Evidence
-```538:555:packages/unxversal/sources/options.move
-// Creation fee discount: sets discount_applied if any UNXV provided; no valuation
-```
-```950:969:packages/unxversal/sources/options.move
-// Settlement uses price_info aggregator without binding it to underlying
-```
-
-- Guardrails present
-  - Registry pause; per-market caps; tick/contract size validations.
-
 - Remediations
-  - Require UNXV discount valuation (oracle-bound) and enforce `unxv_needed` before applying discount (mirror DEX flow). Bind exercise/settlement aggregators to stored oracle feed per underlying. Promote math to u128.
+  - Fix discount valuation; bind feeds; promote arithmetic to u128.
 
 ---
 
 ## File: `oracle.move`
 
 - Issues
-  - Documentation mismatch: claims an allow-list, but module only stores `max_age_sec`; no allow-list or feed binding API exposed/used by other modules.
-  - Modules pass arbitrary `Aggregator` references; this module does not verify identity.
-
-- Evidence
-```1:21:packages/unxversal/sources/oracle.move
-// Docstring vs implementation (no allow-list)
-```
-
-- Guardrails present
-  - Staleness and positivity checks; overflow guard when scaling.
+  - Doc/implementation mismatch: claims allow-list but only has `max_age_sec`; no feed registry.
+  - Downstream modules pass arbitrary `Aggregator` references.
 
 - Remediations
-  - Implement per-asset feed registry (symbol → aggregator ID) and provide helper that rejects non-registered aggregators. Update all modules to call the bound helper.
+  - Implement per-asset feed registry and bound price helper; update all modules to call it.
 
 ---
 
 ## File: `treasury.move`
 
 - Issues
-  - None critical; deposit/withdraw pathways package-gated/admin-gated appropriately.
-  - Consider rate-limiting or policy controls for bot reward splits across products to avoid inconsistent incentives.
+  - None critical.
 
 - Remediations
-  - None mandatory; align fee routing policies across modules.
+  - Align fee routing policies; consider optional rate limits.
 
 ---
 
 ## File: `unxv.move`
 
 - Issues
-  - None critical; capped mint/burn tracked. Ensure SupplyCap holder security off-chain.
+  - None critical; capped supply tracked.
 
 - Remediations
   - None.
@@ -265,23 +209,18 @@ public entry fun refresh_market_funding(... index_price_micro_usd: u64 ...)
 ## File: `vaults.move`
 
 - Issues
-  - Manager stake registry is sound; ensure `assert_manager_active` called on all manager paths (it is).
-  - Arithmetic overflow risk in range ladder helpers when computing `need = per * p`.
-
-- Evidence
-```223:263:packages/unxversal/sources/vaults.move
-// vault_place_dex_range_bid: need = per * p in u64
-```
+  - Manager stake checks present; ensure all manager paths are gated.
+  - Overflow risk in range ladder helpers (`need = per * p`).
 
 - Remediations
-  - Promote `need`/notional math to u128; pre-check bounds.
+  - Promote notional math to u128; bound before cast.
 
 ---
 
 ## File: `dex.move` CLOB substructures (`DexMarket`, `DexEscrow`)
 
 - Issues
-  - Economic DoS possible via very large orders causing overflows upstream; see DEX section.
+  - Economic DoS via large orders causing upstream overflows.
 
 - Remediations
   - Same as DEX: u128 math and input caps.
@@ -301,17 +240,17 @@ public entry fun refresh_market_funding(... index_price_micro_usd: u64 ...)
 ## File: `gas_futures.move`, `futures.move`, `perpetuals.move`, `options.move` (fees/discount common)
 
 - Common issues
-  - UNXV discount flows should consistently: (1) fetch UNXV price from a bound oracle; (2) compute `unxv_needed`; (3) require it before applying discount; (4) refund leftovers.
-  - Arithmetic to u128; clamp before u64 conversion.
+  - UNXV discount flows must: use bound oracle price; compute `unxv_needed`; require it before applying discount; refund leftovers.
+  - Arithmetic to u128; clamp before u64 conversion; input caps to avoid overflow DoS.
 
 ---
 
 ## Prioritized remediation plan
-- P0: Remove caller-supplied price vectors and bind all risk checks to on-chain oracles; implement oracle allow-list and enforce by symbol/market.
-- P0: Fix lending liquidation scaling math; add privileged accrual (derive `dt` on-chain) and block arbitrary accrual.
-- P0: Fix options market creation UNXV discount logic to require sufficient UNXV by oracle valuation.
-- P1: Promote all notional/fee/CCR arithmetic to u128 across modules; add input caps to prevent overflow aborts.
-- P1: Unify liquidation incentive policy to ensure robust participation for synthetics.
-- P2: Add cross-module reconciliation hooks/events for synthetics debt used by lending.
+- P0: Oracle allow-list + enforce bindings everywhere; remove/validate caller price vectors.
+- P0: Lending liquidation scaling fix; gate accrual with on-chain time; admin centralization via SynthRegistry.
+- P0: Options creation-fee UNXV discount valuation fix; settlement/exercise feed binding.
+- P1: Promote all notional/fee/CCR arithmetic to u128; add input caps; unify bot reward policy.
+- P1: Align liquidation incentives across products.
+- P2: Cross-module reconciliation hooks/events for synthetics↔lending.
 
 This review is exhaustive per file; implementing the above will materially reduce protocol risk across synthetics, lending, and integrated products.
