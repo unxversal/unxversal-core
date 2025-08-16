@@ -239,6 +239,7 @@ module unxversal::perpetuals {
         unxv_usd_price: &Aggregator,
         oracle_cfg: &OracleConfig,
         clock: &Clock,
+        mut fee_payment: Coin<C>,
         treasury: &mut Treasury<C>,
         oi_increase: bool,
         min_price: u64,
@@ -274,10 +275,19 @@ module unxversal::perpetuals {
         let collateral_fee_after_discount = if (discount_applied) { if (discount_usdc <= trade_fee) { trade_fee - discount_usdc } else { 0 } } else { trade_fee };
         let maker_rebate = (trade_fee * reg.maker_rebate_bps) / 10_000;
         if (collateral_fee_after_discount > 0) {
-            let mut fee_collector = coin::zero<C>(ctx);
-            if (maker_rebate > 0 && maker_rebate < collateral_fee_after_discount) { let to_maker = coin::split(&mut fee_collector, maker_rebate, ctx); transfer::public_transfer(to_maker, maker); };
-            if (reg.trade_bot_reward_bps > 0) { let bot_cut = (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000; if (bot_cut > 0) { let to_bot = coin::split(&mut fee_collector, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); } };
-            TreasuryMod::deposit_collateral_ext(treasury, fee_collector, b"perp_trade".to_string(), ctx.sender(), ctx);
+            let have = coin::value(&fee_payment);
+            assert!(have >= collateral_fee_after_discount, E_MIN_INTERVAL);
+            if (maker_rebate > 0 && maker_rebate < collateral_fee_after_discount) {
+                let to_maker = coin::split(&mut fee_payment, maker_rebate, ctx);
+                transfer::public_transfer(to_maker, maker);
+            };
+            if (reg.trade_bot_reward_bps > 0) {
+                let bot_cut = (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000;
+                if (bot_cut > 0) { let to_bot = coin::split(&mut fee_payment, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); }
+            };
+            TreasuryMod::deposit_collateral_ext(treasury, fee_payment, b"perp_trade".to_string(), ctx.sender(), ctx);
+        } else {
+            transfer::public_transfer(fee_payment, ctx.sender());
         };
         if (oi_increase) { market.open_interest = market.open_interest + size; } else { if (market.open_interest >= size) { market.open_interest = market.open_interest - size; } };
         market.volume_premium = market.volume_premium + notional;
@@ -334,13 +344,30 @@ module unxversal::perpetuals {
     /*******************************
     * Funding accrual (trustless, no paired transfers)
     *******************************/
-    public entry fun apply_funding_for_position<C>(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition<C>, index_price_micro_usd: u64, clock: &Clock) {
+    public entry fun apply_funding_for_position<C>(reg: &PerpsRegistry, market: &PerpMarket, pos: &mut PerpPosition<C>, index_price_micro_usd: u64, clock: &Clock) {
         assert!(!reg.paused && !market.paused, E_PAUSED);
         let now = sui::clock::timestamp_ms(clock);
-        let elapsed = if (now > market.last_funding_ms) { now - market.last_funding_ms } else { 0 };
+        let elapsed = if (now > pos.last_funding_ms) { now - pos.last_funding_ms } else { 0 };
         if (elapsed < reg.funding_interval_ms) { return };
         if (index_price_micro_usd == 0 || market.last_trade_price_micro_usd == 0) { return };
-        // premium_bps = (mark - index)/index * 10k
+        if (pos.size == 0) { pos.last_funding_ms = now; return };
+        // Use current market funding parameters (should be refreshed by a bot via refresh_market_funding)
+        let rate_abs_u64 = market.funding_rate_bps;
+        let notional = (pos.size as u128) * (index_price_micro_usd as u128);
+        let delta_abs_u128 = (notional * (rate_abs_u64 as u128)) / 10_000u128;
+        let delta_abs = if (delta_abs_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { delta_abs_u128 as u64 };
+        let delta_for_long_is_negative = market.funding_rate_longs_pay;
+        let funding_delta = if (pos.side == 0) { Signed { is_positive: !delta_for_long_is_negative, magnitude: delta_abs } } else { Signed { is_positive: delta_for_long_is_negative, magnitude: delta_abs } };
+        add_signed_in_place(&mut pos.accumulated_pnl, &funding_delta);
+        pos.last_funding_ms = now;
+        event::emit(PerpFundingApplied { symbol: clone_string(&market.symbol), account: pos.owner, funding_delta_positive: funding_delta.is_positive, funding_delta_abs: funding_delta.magnitude, new_pnl_positive: pos.accumulated_pnl.is_positive, new_pnl_abs: pos.accumulated_pnl.magnitude, timestamp: now });
+    }
+
+    /// Refresh market funding rate and direction based on current premium vs index; called by bots periodically
+    public entry fun refresh_market_funding(reg: &PerpsRegistry, market: &mut PerpMarket, index_price_micro_usd: u64, clock: &Clock) {
+        assert!(!reg.paused && !market.paused, E_PAUSED);
+        let now = sui::clock::timestamp_ms(clock);
+        if (index_price_micro_usd == 0 || market.last_trade_price_micro_usd == 0) { return };
         let mark = market.last_trade_price_micro_usd as u128;
         let idx = index_price_micro_usd as u128;
         let premium_pos = mark >= idx;
@@ -349,18 +376,7 @@ module unxversal::perpetuals {
         let rate_abs_u64 = if (raw_rate_abs > (reg.max_funding_rate_bps as u128)) { reg.max_funding_rate_bps } else { raw_rate_abs as u64 };
         market.funding_rate_bps = rate_abs_u64;
         market.funding_rate_longs_pay = premium_pos;
-        // funding payment ~ size * index_price * rate
-        if (pos.size == 0) { market.last_funding_ms = now; return };
-        let notional = (pos.size as u128) * (index_price_micro_usd as u128);
-        let delta_abs_u128 = (notional * (rate_abs_u64 as u128)) / 10_000u128;
-        let delta_abs = if (delta_abs_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { delta_abs_u128 as u64 };
-        // Sign convention: if longs pay, then long positions lose (negative), shorts gain (positive)
-        let delta_for_long_is_negative = market.funding_rate_longs_pay;
-        let funding_delta = if (pos.side == 0) { Signed { is_positive: !delta_for_long_is_negative, magnitude: delta_abs } } else { Signed { is_positive: delta_for_long_is_negative, magnitude: delta_abs } };
-        add_signed_in_place(&mut pos.accumulated_pnl, &funding_delta);
         market.last_funding_ms = now;
-        pos.last_funding_ms = now;
-        event::emit(PerpFundingApplied { symbol: clone_string(&market.symbol), account: pos.owner, funding_delta_positive: funding_delta.is_positive, funding_delta_abs: funding_delta.magnitude, new_pnl_positive: pos.accumulated_pnl.is_positive, new_pnl_abs: pos.accumulated_pnl.magnitude, timestamp: now });
     }
 
     /*******************************

@@ -142,8 +142,10 @@ module unxversal::futures {
         treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
-        assert!(!reg.paused, E_PAUSED);
+        assert!(!reg.paused && market.is_active && !market.paused, E_PAUSED);
         assert!(quantity > 0 && quantity <= pos.size, E_MIN_INTERVAL);
+        // Enforce tick size on close price
+        assert!(close_price % market.tick_size == 0, E_MIN_INTERVAL);
         // Variation margin: PnL = (close - avg) * qty * sign
         let (is_gain, pnl_abs) = if (pos.side == 0) {
             // long
@@ -184,7 +186,7 @@ module unxversal::futures {
         };
         pos.size = pos.size - quantity;
         if (market.open_interest >= quantity) { market.open_interest = market.open_interest - quantity; };
-        // route a nominal fee to treasury (notional * settlement_fee_bps), placeholder
+        // Fee on close: collect from remaining margin, with optional bot reward split
         let notional = quantity * close_price;
         let fee = (notional * reg.settlement_fee_bps) / 10_000;
         if (fee > 0) {
@@ -192,7 +194,13 @@ module unxversal::futures {
             let avail = balance::value(&pos.margin);
             if (avail >= fee) {
                 let fee_bal = balance::split(&mut pos.margin, fee);
-                let fee_coin = coin::from_balance(fee_bal, ctx);
+                let mut fee_coin = coin::from_balance(fee_bal, ctx);
+                // Optional bot reward from close fee using settlement_bot_reward_bps
+                let bot_cut = (fee * reg.settlement_bot_reward_bps) / 10_000;
+                if (bot_cut > 0 && bot_cut < fee) {
+                    let to_bot = coin::split(&mut fee_coin, bot_cut, ctx);
+                    transfer::public_transfer(to_bot, ctx.sender());
+                };
                 TreasuryMod::deposit_collateral_ext(treasury, fee_coin, b"futures_close".to_string(), pos.owner, ctx);
             }
         };
@@ -219,12 +227,16 @@ module unxversal::futures {
         mut fee_payment: Coin<C>,
         treasury: &mut Treasury<C>,
         oi_increase: bool,
+        min_price: u64,
+        max_price: u64,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused && market.is_active && !market.paused, E_PAUSED);
         assert!(size > 0, E_MIN_INTERVAL);
         // Enforce tick size
         assert!(price % market.tick_size == 0, E_MIN_INTERVAL);
+        // Slippage bounds (caller-provided)
+        assert!(price >= min_price && price <= max_price, E_MIN_INTERVAL);
         let notional = size * price;
         // Fees
         let trade_fee = (notional * reg.trade_fee_bps) / 10_000;

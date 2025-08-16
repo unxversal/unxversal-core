@@ -282,7 +282,20 @@ module unxversal::gas_futures {
         // Settlement fee on close (optional): use registry.settlement_fee_bps as generic close fee
         let notional = quantity * market.contract_size_gas_units * close_price_micro_usd_per_gas;
         let fee = (notional * reg.settlement_fee_bps) / 10_000;
-        if (fee > 0) { let avail = balance::value(&pos.margin); if (avail >= fee) { let fc_bal = balance::split(&mut pos.margin, fee); let fc = coin::from_balance(fc_bal, ctx); TreasuryMod::deposit_collateral_ext(treasury, fc, b"gas_close".to_string(), pos.owner, ctx); } };
+        if (fee > 0) {
+            let avail = balance::value(&pos.margin);
+            if (avail >= fee) {
+                let fc_bal = balance::split(&mut pos.margin, fee);
+                let mut fc = coin::from_balance(fc_bal, ctx);
+                // Optional bot reward split on close fee
+                let bot_cut = (fee * reg.settlement_bot_reward_bps) / 10_000;
+                if (bot_cut > 0 && bot_cut < fee) {
+                    let to_bot = coin::split(&mut fc, bot_cut, ctx);
+                    transfer::public_transfer(to_bot, ctx.sender());
+                };
+                TreasuryMod::deposit_collateral_ext(treasury, fc, b"gas_close".to_string(), pos.owner, ctx);
+            }
+        };
         let _new_margin_val = balance::value(&pos.margin);
         event::emit(GasVariationMargin { symbol: clone_string(&market.symbol), account: pos.owner, side: pos.side, qty: quantity, from_price: pos.avg_price_micro_usd_per_gas, to_price: close_price_micro_usd_per_gas, pnl_abs: pnl_abs, is_gain, new_margin: _new_margin_val, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         event::emit(GasPositionClosed { symbol: clone_string(&market.symbol), account: pos.owner, qty: quantity, price_micro_usd_per_gas: close_price_micro_usd_per_gas, margin_refund: margin_refund, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
@@ -373,7 +386,6 @@ module unxversal::gas_futures {
         market: &mut GasFuturesContract,
         pos: &mut GasPosition<C>,
         mark_price_micro_usd_per_gas: u64,
-        maint_margin_bps: u64,
         treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
@@ -386,7 +398,7 @@ module unxversal::gas_futures {
         let unrl_gain = if (pos.side == 0) { mark_price_micro_usd_per_gas >= pos.avg_price_micro_usd_per_gas } else { pos.avg_price_micro_usd_per_gas >= mark_price_micro_usd_per_gas };
         let equity: u128 = if (unrl_gain) { (margin_val as u128) + unrl_abs } else { if ((margin_val as u128) >= unrl_abs) { (margin_val as u128) - unrl_abs } else { 0 } };
         let notional = pos.size * market.contract_size_gas_units * mark_price_micro_usd_per_gas;
-        let maint_req = (notional * maint_margin_bps) / 10_000;
+        let maint_req = (notional * market.maint_margin_bps) / 10_000;
         if (!(equity < (maint_req as u128))) { return };
         event::emit(GasMarginCall { symbol: clone_string(&market.symbol), account: pos.owner, equity_abs: equity, is_positive: true, maint_required: maint_req, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         let seized_total = balance::value(&pos.margin);

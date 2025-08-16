@@ -15,7 +15,7 @@ Unxversal is a modular on-chain trading protocol on Sui built around shared obje
 - `options.move`: Options registry and markets, OTC matching objects, margin, and cash/physical settlement flows.
 - `futures.move`: Dated futures registry and contracts, open/close/settlement events, fee accounting hooks.
 - `gas_futures.move`: Gas-price based futures with RGP×SUI micro-USD pricing and position management.
-- `perpetuals.move`: Perpetuals placeholder (to be expanded alongside dated futures conventions, funding, and risk).
+- `perpetuals.move`: Perpetuals with funding index and per-position accrual; off-chain bot refreshes funding rates.
 - `vaults.move`: Vaults for liquidity provisioning and asset management:
   - `LiquidityVault<Base, C>` integrates with `dex` for base/quote markets.
   - Synth LP wrappers integrate with `synthetics` order/matching.
@@ -172,6 +172,7 @@ export interface SdkBundle {
   options: OptionsClient;
   futures: FuturesClient;
   gas: GasFuturesClient;
+  lending: LendingClient;
   vaults: VaultsClient;
 }
 
@@ -250,16 +251,25 @@ export interface OptionsClient {
 
 export interface FuturesClient {
   listContract(params: { registryId: ObjectId; underlying: string; symbol: string; contractSize: bigint; tickSize: bigint; expiryMs: bigint; initMarginBps: number; maintMarginBps: number; }): Promise<TxBuildResult>;
-  recordFill(params: { registryId: ObjectId; contractId: ObjectId; price: bigint; size: bigint; takerIsBuyer: boolean; maker: Address; unxvCoins?: ObjectId[]; unxvAggId: ObjectId; oracleCfgId: ObjectId; clockId: ObjectId; feeCoin: ObjectId; treasuryId: ObjectId; oiIncrease: boolean; }): Promise<TxBuildResult>;
+  recordFill(params: { registryId: ObjectId; contractId: ObjectId; price: bigint; size: bigint; takerIsBuyer: boolean; maker: Address; unxvCoins?: ObjectId[]; unxvAggId: ObjectId; oracleCfgId: ObjectId; clockId: ObjectId; feeCoin: ObjectId; treasuryId: ObjectId; oiIncrease: boolean; minPrice: bigint; maxPrice: bigint; }): Promise<TxBuildResult>;
   openPosition(params: { contractId: ObjectId; side: 0 | 1; size: bigint; entryPrice: bigint; marginCoin: ObjectId; }): Promise<TxBuildResult>;
-  closePosition(params: { registryId: ObjectId; contractId: ObjectId; posId: ObjectId; price: bigint; qty: bigint; treasuryId: ObjectId; }): Promise<TxBuildResult>;
+  closePosition(params: { registryId: ObjectId; contractId: ObjectId; posId: ObjectId; price: bigint; qty: bigint; treasuryId: ObjectId; }): Promise<TxBuildResult>; // tick-size enforced; close fee includes optional bot split
 }
 
 export interface GasFuturesClient {
   listContract(params: { registryId: ObjectId; symbol: string; contractSizeGas: bigint; tickSizeMicroUsdPerGas: bigint; expiryMs: bigint; initMarginBps?: number; maintMarginBps?: number; }): Promise<TxBuildResult>;
   recordFill(params: { registryId: ObjectId; contractId: ObjectId; priceMicroUsdPerGas: bigint; size: bigint; takerIsBuyer: boolean; maker: Address; unxvCoins?: ObjectId[]; suiUsdAggId: ObjectId; unxvUsdAggId: ObjectId; oracleCfgId: ObjectId; clockId: ObjectId; feeCoin: ObjectId; treasuryId: ObjectId; oiIncrease: boolean; bounds: { min: bigint; max: bigint }; }): Promise<TxBuildResult>;
   openPosition(params: { contractId: ObjectId; side: 0 | 1; size: bigint; entryPriceMicroUsdPerGas: bigint; marginCoin: ObjectId; }): Promise<TxBuildResult>;
-  closePosition(params: { registryId: ObjectId; contractId: ObjectId; posId: ObjectId; priceMicroUsdPerGas: bigint; qty: bigint; treasuryId: ObjectId; }): Promise<TxBuildResult>;
+  closePosition(params: { registryId: ObjectId; contractId: ObjectId; posId: ObjectId; priceMicroUsdPerGas: bigint; qty: bigint; treasuryId: ObjectId; }): Promise<TxBuildResult>; // fee includes optional bot split
+}
+export interface LendingClient {
+  openAccount(): Promise<TxBuildResult>;
+  createPool(params: { assetSymbol: string; publisherId: ObjectId }): Promise<TxBuildResult>;
+  supply(params: { poolId: ObjectId; accountId: ObjectId; coinId: ObjectId; amount: bigint }): Promise<TxBuildResult>;
+  withdraw(params: { poolId: ObjectId; accountId: ObjectId; amount: bigint; oracleCfgId: ObjectId; clockId: ObjectId; priceSelfAggId: ObjectId; symbols: string[]; prices: bigint[]; supplyIndexes: bigint[]; borrowIndexes: bigint[] }): Promise<TxBuildResult>;
+  borrow(params: { poolId: ObjectId; accountId: ObjectId; amount: bigint; oracleCfgId: ObjectId; clockId: ObjectId; priceDebtAggId: ObjectId; symbols: string[]; prices: bigint[]; supplyIndexes: bigint[]; borrowIndexes: bigint[] }): Promise<TxBuildResult>;
+  repay(params: { poolId: ObjectId; accountId: ObjectId; paymentCoin: ObjectId }): Promise<TxBuildResult>;
+  liquidate(params: { debtPoolId: ObjectId; collPoolId: ObjectId; debtorId: ObjectId; oracleCfgId: ObjectId; clockId: ObjectId; debtAggId: ObjectId; collAggId: ObjectId; paymentCoin: ObjectId; repayAmount: bigint; symbols: string[]; prices: bigint[]; supplyIndexes: bigint[]; borrowIndexes: bigint[] }): Promise<TxBuildResult>;
 }
 
 export interface VaultsClient {

@@ -24,7 +24,7 @@ export interface GasFuturesApi {
   listContract(req: { registryId: string; symbol: string; contractSizeGas: bigint; tickSizeMicroUsdPerGas: bigint; expiryMs: bigint; initMarginBps?: number; maintMarginBps?: number; }): Promise<TxBuildResult>;
   recordFill(req: { registryId: string; contractId: string; priceMicroUsdPerGas: bigint; size: bigint; takerIsBuyer: boolean; maker: string; unxvCoins?: string[]; suiUsdAggId: string; unxvUsdAggId: string; oracleCfgId: string; clockId: string; feeCoin: string; treasuryId: string; oiIncrease: boolean; min: bigint; max: bigint; }): Promise<TxBuildResult>;
   openPosition(req: { contractId: string; side: 0|1; size: bigint; entryPriceMicroUsdPerGas: bigint; marginCoin: string; }): Promise<TxBuildResult>;
-  closePosition(req: { registryId: string; contractId: string; posId: string; priceMicroUsdPerGas: bigint; qty: bigint; treasuryId: string; }): Promise<TxBuildResult>;
+  closePosition(req: { registryId: string; contractId: string; posId: string; priceMicroUsdPerGas: bigint; qty: bigint; treasuryId: string; }): Promise<TxBuildResult>; // fee includes optional bot split
   settleContract(req: { registryId: string; contractId: string; oracleCfgId: string; clockId: string; suiUsdAggId: string; }): Promise<TxBuildResult>;
 }
 

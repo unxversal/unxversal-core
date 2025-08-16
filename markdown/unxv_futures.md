@@ -25,9 +25,9 @@ Cash-settled dated futures with registry-governed listings and settlement via or
 ```ts
 export interface FuturesApi {
   listContract(req: { registryId: string; underlying: string; symbol: string; contractSize: bigint; tickSize: bigint; expiryMs: bigint; initMarginBps: number; maintMarginBps: number; }): Promise<TxBuildResult>;
-  recordFill(req: { registryId: string; contractId: string; price: bigint; size: bigint; takerIsBuyer: boolean; maker: string; unxvCoins?: string[]; unxvAggId: string; oracleCfgId: string; clockId: string; feeCoin: string; treasuryId: string; oiIncrease: boolean; }): Promise<TxBuildResult>;
+  recordFill(req: { registryId: string; contractId: string; price: bigint; size: bigint; takerIsBuyer: boolean; maker: string; unxvCoins?: string[]; unxvAggId: string; oracleCfgId: string; clockId: string; feeCoin: string; treasuryId: string; oiIncrease: boolean; minPrice: bigint; maxPrice: bigint; }): Promise<TxBuildResult>;
   openPosition(req: { contractId: string; side: 0|1; size: bigint; entryPrice: bigint; marginCoin: string; }): Promise<TxBuildResult>;
-  closePosition(req: { registryId: string; contractId: string; posId: string; price: bigint; qty: bigint; treasuryId: string; }): Promise<TxBuildResult>;
+  closePosition(req: { registryId: string; contractId: string; posId: string; price: bigint; qty: bigint; treasuryId: string; }): Promise<TxBuildResult>; // tick-size enforced; close fee includes optional bot split
   settleContract(req: { registryId: string; contractId: string; oracleCfgId: string; clockId: string; priceAggId: string; treasuryId: string; }): Promise<TxBuildResult>;
   liquidate(req: { registryId: string; contractId: string; posId: string; markPrice: bigint; treasuryId: string; }): Promise<TxBuildResult>;
 }

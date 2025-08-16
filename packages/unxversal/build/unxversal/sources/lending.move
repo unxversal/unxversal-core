@@ -191,17 +191,21 @@ module unxversal::lending {
     }
 
     /// Rank coin debts by descending debt_value = units * price (micro-USD)
+    /// borrow_indexes must align with symbols
     public fun rank_coin_debt_order(
         acct: &UserAccount,
         symbols: &vector<String>,
-        prices: &vector<u64>
+        prices: &vector<u64>,
+        borrow_indexes: &vector<u64>
     ): vector<String> {
         let work_syms = clone_string_vec(symbols);
         let mut values = vector::empty<u64>();
         let mut i = 0; let n = vector::length(&work_syms);
         while (i < n) {
             let s = *vector::borrow(&work_syms, i);
-            let units = if (table::contains(&acct.borrow_balances, clone_string(&s))) { *table::borrow(&acct.borrow_balances, clone_string(&s)) } else { 0 };
+            let scaled_debt = if (table::contains(&acct.borrow_balances, clone_string(&s))) { *table::borrow(&acct.borrow_balances, clone_string(&s)) } else { 0 };
+            let idx_borrow = *vector::borrow(borrow_indexes, i);
+            let units = units_from_scaled(scaled_debt, idx_borrow);
             let px = *vector::borrow(prices, i);
             let dv = if (units > 0 && px > 0) { units * px } else { 0 };
             vector::push_back(&mut values, dv);
@@ -477,6 +481,8 @@ module unxversal::lending {
         price_self: &Aggregator,
         symbols: vector<String>,
         prices: vector<u64>,
+        supply_indexes: vector<u64>,
+        borrow_indexes: vector<u64>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, 1000);
@@ -502,7 +508,7 @@ module unxversal::lending {
             let a = table::borrow(&reg.supported_assets, clone_string(&sym));
             if (a.is_collateral) {
                 // compute current totals
-                let (tot_coll, tot_debt, _) = check_account_health_coins(acct, reg, oracle_cfg, clock, symbols, prices);
+                let (tot_coll, tot_debt, _) = check_account_health_coins(acct, reg, oracle_cfg, clock, symbols, prices, supply_indexes, borrow_indexes);
                 let px_self = get_price_scaled_1e6(oracle_cfg, clock, price_self) as u128;
                 let reduce_cap = ((amount as u128) * px_self * (a.ltv_bps as u128)) / 10_000u128;
                 let new_capacity = if (tot_coll > reduce_cap) { tot_coll - reduce_cap } else { 0 };
@@ -527,6 +533,8 @@ module unxversal::lending {
         price_debt: &Aggregator,
         symbols: vector<String>,
         prices: vector<u64>,
+        supply_indexes: vector<u64>,
+        borrow_indexes: vector<u64>,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, 1000);
@@ -537,8 +545,8 @@ module unxversal::lending {
         let cash = BalanceMod::value(&pool.cash);
         assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
         // LTV guard: ensure new debt <= capacity
-        let cap = compute_ltv_capacity_usd(acct, reg, oracle_cfg, clock, symbols, prices);
-        let (_, tot_debt, _) = check_account_health_coins(acct, reg, oracle_cfg, clock, symbols, prices);
+        let cap = compute_ltv_capacity_usd(acct, reg, oracle_cfg, clock, symbols, prices, supply_indexes);
+        let (_, tot_debt, _) = check_account_health_coins(acct, reg, oracle_cfg, clock, symbols, prices, supply_indexes, borrow_indexes);
         let px = get_price_scaled_1e6(oracle_cfg, clock, price_debt) as u128;
         let new_debt = tot_debt + (amount as u128) * px;
         assert!(new_debt <= cap, E_VAULT_NOT_HEALTHY);
@@ -651,7 +659,8 @@ module unxversal::lending {
         _oracle_cfg: &OracleConfig,
         _clock: &Clock,
         symbols: vector<String>,
-        prices: vector<u64>
+        prices: vector<u64>,
+        supply_indexes: vector<u64>
     ): u128 {
         let mut cap: u128 = 0;
         let mut i = 0;
@@ -660,7 +669,9 @@ module unxversal::lending {
             if (table::contains(&acct.supply_balances, clone_string(&sym)) && table::contains(&reg.supported_assets, clone_string(&sym))) {
                 let a = table::borrow(&reg.supported_assets, clone_string(&sym));
                 if (a.is_collateral) {
-                    let units = *table::borrow(&acct.supply_balances, clone_string(&sym)) as u128;
+                    let scaled_supply = *table::borrow(&acct.supply_balances, clone_string(&sym));
+                    let idx_supply = *vector::borrow(&supply_indexes, i);
+                    let units = units_from_scaled(scaled_supply, idx_supply) as u128;
                     let px = (*vector::borrow(&prices, i)) as u128;
                     cap = cap + (units * px * (a.ltv_bps as u128)) / 10_000u128;
                 }
@@ -679,7 +690,9 @@ module unxversal::lending {
         _oracle_cfg: &OracleConfig,
         _clock: &Clock,
         symbols: vector<String>,
-        prices: vector<u64>
+        prices: vector<u64>,
+        supply_indexes: vector<u64>,
+        borrow_indexes: vector<u64>
     ): (u128, u128, bool) {
         let mut total_coll: u128 = 0;
         let mut total_debt: u128 = 0;
@@ -688,7 +701,9 @@ module unxversal::lending {
             let sym = *vector::borrow(&symbols, i);
             let px = (*vector::borrow(&prices, i)) as u128; // micro-USD
             if (table::contains(&acct.supply_balances, clone_string(&sym))) {
-                let units = *table::borrow(&acct.supply_balances, clone_string(&sym)) as u128;
+                let scaled_supply = *table::borrow(&acct.supply_balances, clone_string(&sym));
+                let idx_supply = *vector::borrow(&supply_indexes, i);
+                let units = units_from_scaled(scaled_supply, idx_supply) as u128;
                 // only count as collateral if allowed
                 if (table::contains(&reg.supported_assets, clone_string(&sym))) {
                     let a = table::borrow(&reg.supported_assets, clone_string(&sym));
@@ -696,7 +711,9 @@ module unxversal::lending {
                 }
             };
             if (table::contains(&acct.borrow_balances, clone_string(&sym))) {
-                let units = *table::borrow(&acct.borrow_balances, clone_string(&sym)) as u128;
+                let scaled_debt = *table::borrow(&acct.borrow_balances, clone_string(&sym));
+                let idx_borrow = *vector::borrow(&borrow_indexes, i);
+                let units = units_from_scaled(scaled_debt, idx_borrow) as u128;
                 total_debt = total_debt + units * px;
             };
             i = i + 1;
@@ -725,6 +742,8 @@ module unxversal::lending {
         repay_amount: u64,
         symbols: vector<String>,
         prices: vector<u64>,
+        supply_indexes: vector<u64>,
+        borrow_indexes: vector<u64>,
         // Optional internal routing flags could be added here
         ctx: &mut TxContext
     ) {
@@ -739,7 +758,9 @@ module unxversal::lending {
             oracle_cfg,
             clock,
             symbols,
-            prices
+            prices,
+            supply_indexes,
+            borrow_indexes
         );
         if (tot_debt > 0) {
             let ratio_bps = ((tot_coll * 10_000u128) / tot_debt) as u64;
@@ -753,7 +774,7 @@ module unxversal::lending {
         let cur_debt = *table::borrow(&debtor.borrow_balances, clone_string(&debt_sym));
         assert!(repay_amount <= cur_debt, E_OVER_REPAY);
         // Enforce liquidation priority: target debt must be top-ranked by value
-        let ranked = rank_coin_debt_order(debtor, &symbols, &prices);
+        let ranked = rank_coin_debt_order(debtor, &symbols, &prices, &borrow_indexes);
         if (vector::length(&ranked) > 0) {
             let top = vector::borrow(&ranked, 0);
             assert!(eq_string(top, &debt_sym), E_VIOLATION);
