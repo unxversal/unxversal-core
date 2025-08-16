@@ -10,6 +10,10 @@ module unxversal::dex {
     use sui::coin::{Self as coin, Coin};
     use sui::clock::Clock;
     use sui::event;
+    use sui::table::{Self as table, Table};
+    use sui::balance::{Self as balance, Balance};
+    use unxversal::book::{Self as Book, Book as ClobBook, Fill};
+    use unxversal::utils;
     use std::string::String;
 
     // Collateral coin type is generic per market; no hard USDC dependency
@@ -100,6 +104,10 @@ module unxversal::dex {
         unxv_discount_bps: u64,
         maker_rebate_bps: u64,  // not used in OTC paths
         paused: bool,
+        // CLOB extras
+        keeper_reward_bps: u64,
+        gc_reward_bps: u64,
+        maker_bond_bps: u64,
     }
     
 
@@ -112,6 +120,9 @@ module unxversal::dex {
             unxv_discount_bps: 2000,   // 20% discount
             maker_rebate_bps: 0,
             paused: false,
+            keeper_reward_bps: 100,    // 1%
+            gc_reward_bps: 100,        // 1%
+            maker_bond_bps: 10,        // 0.10%
         };
         transfer::share_object(cfg);
     }
@@ -156,6 +167,9 @@ module unxversal::dex {
     entry fun set_trade_fee_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.trade_fee_bps = bps; }
     entry fun set_unxv_discount_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.unxv_discount_bps = bps; }
     entry fun set_maker_rebate_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.maker_rebate_bps = bps; }
+    entry fun set_keeper_reward_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.keeper_reward_bps = bps; }
+    entry fun set_gc_reward_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.gc_reward_bps = bps; }
+    entry fun set_maker_bond_bps(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.maker_bond_bps = bps; }
     entry fun pause(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.paused = true; }
     entry fun resume(_admin: &AdminCap, registry: &SynthRegistry, cfg: &mut DexConfig, ctx: &TxContext) { assert_is_admin(registry, ctx.sender()); cfg.paused = false; }
 
@@ -656,6 +670,310 @@ module unxversal::dex {
     public fun get_config_treasury_id(cfg: &DexConfig): ID { cfg.treasury_id }
 
     public fun get_config_fees(cfg: &DexConfig): (u64, u64, u64, bool) { (cfg.trade_fee_bps, cfg.unxv_discount_bps, cfg.maker_rebate_bps, cfg.paused) }
+    public fun get_config_extras(cfg: &DexConfig): (u64, u64, u64) { (cfg.keeper_reward_bps, cfg.gc_reward_bps, cfg.maker_bond_bps) }
+
+    /*******************************
+    * Minimal on-chain CLOB hooks (scaffold)
+    * - Future work: define `DexMarket<Base, C>` with `ClobBook`, maker maps, bonds/escrow like synthetics
+    * - Expose place/cancel/modify, match_step_auto, gc_step (escrow-only model)
+    *******************************/
+    public struct DexMarket<phantom Base, phantom C> has key, store {
+        id: UID,
+        symbol_base: String,
+        symbol_quote: String,
+        book: ClobBook,
+        makers: Table<u128, address>,
+        maker_sides: Table<u128, u8>,
+        claimed: Table<u128, u64>,
+        bonds: Table<u128, Balance<C>>,
+    }
+
+    #[allow(lint(coin_field))]
+    public struct DexEscrow<phantom Base, phantom C> has key, store {
+        id: UID,
+        market_id: ID,
+        pending_base: Table<u128, Balance<Base>>,         // maker_id -> base owed to takers
+        pending_collateral: Table<u128, Balance<C>>,      // maker_id -> collateral owed to takers
+        accrual_base: Table<u128, Balance<Base>>,         // maker_id -> base owed to maker
+        accrual_collateral: Table<u128, Balance<C>>,      // maker_id -> collateral owed to maker
+        bonds: Table<u128, Balance<C>>,                   // maker_id -> GC bond (in quote)
+    }
+
+    entry fun init_dex_market<Base: store, C: store>(
+        _admin: &AdminCap,
+        registry: &SynthRegistry,
+        base_symbol: String,
+        quote_symbol: String,
+        tick_size: u64,
+        lot_size: u64,
+        min_size: u64,
+        ctx: &mut TxContext
+    ) {
+        assert_is_admin(registry, ctx.sender());
+        let book = Book::empty(tick_size, lot_size, min_size, ctx);
+        let makers = table::new<u128, address>(ctx);
+        let maker_sides = table::new<u128, u8>(ctx);
+        let claimed = table::new<u128, u64>(ctx);
+        let bonds = table::new<u128, Balance<C>>(ctx);
+        let mkt = DexMarket<Base, C> { id: object::new(ctx), symbol_base: base_symbol, symbol_quote: quote_symbol, book, makers, maker_sides, claimed, bonds };
+        transfer::share_object(mkt);
+    }
+
+    entry fun init_dex_escrow_for_market<Base: store, C: store>(market: &DexMarket<Base, C>, ctx: &mut TxContext) {
+        let esc = DexEscrow<Base, C> {
+            id: object::new(ctx),
+            market_id: object::id(market),
+            pending_base: table::new<u128, Balance<Base>>(ctx),
+            pending_collateral: table::new<u128, Balance<C>>(ctx),
+            accrual_base: table::new<u128, Balance<Base>>(ctx),
+            accrual_collateral: table::new<u128, Balance<C>>(ctx),
+            bonds: table::new<u128, Balance<C>>(ctx),
+        };
+        transfer::share_object(esc);
+    }
+
+    /// Taker buys Base with Collateral; settles immediately from maker base escrow, accrues maker collateral
+    entry fun place_dex_limit_with_escrow_bid<Base: store, C: store>(
+        cfg: &DexConfig,
+        market: &mut DexMarket<Base, C>,
+        escrow: &mut DexEscrow<Base, C>,
+        price: u64,
+        size_base: u64,
+        expiry_ms: u64,
+        taker_collateral: &mut Coin<C>,
+        ctx: &mut TxContext
+    ) {
+        assert!(!cfg.paused, E_PAUSED);
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        let plan = Book::compute_fill_plan(&market.book, /*is_bid*/ true, price, size_base, 0, expiry_ms, now);
+        let mut i = 0u64; let fills = Book::fillplan_num_fills(&plan);
+        while (i < fills) {
+            let f: Fill = Book::fillplan_get_fill(&plan, i);
+            let maker_id = Book::fill_maker_id(&f);
+            let qty = Book::fill_base_qty(&f);
+            // pay collateral to maker accrual
+            let notional = qty * price;
+            if (notional > 0) {
+                let coin_pay = coin::split(taker_collateral, notional, ctx);
+                let bal_pay = coin::into_balance(coin_pay);
+                if (table::contains(&escrow.accrual_collateral, maker_id)) {
+                    let b = table::borrow_mut(&mut escrow.accrual_collateral, maker_id);
+                    balance::join(b, bal_pay);
+                } else {
+                    table::add(&mut escrow.accrual_collateral, maker_id, bal_pay);
+                };
+            };
+            // deliver base to taker from maker escrow
+            if (table::contains(&escrow.pending_base, maker_id)) {
+                let bbase = table::borrow_mut(&mut escrow.pending_base, maker_id);
+                let available = balance::value(bbase);
+                let take = if (available >= qty) { qty } else { available };
+                if (take > 0) {
+                    let bout = balance::split(bbase, take);
+                    let coin_out = coin::from_balance(bout, ctx);
+                    transfer::public_transfer(coin_out, ctx.sender());
+                };
+            };
+            i = i + 1;
+        };
+        let maybe_id = Book::commit_fill_plan(&mut market.book, plan, now, true);
+        if (option::is_some(&maybe_id)) {
+            let oid = *option::borrow(&maybe_id);
+            table::add(&mut market.makers, oid, ctx.sender());
+            table::add(&mut market.maker_sides, oid, 0);
+            // escrow collateral for remainder
+            let (filled, total) = Book::order_progress(&market.book, oid);
+            let rem = total - filled;
+            let need = rem * price;
+            if (need > 0) {
+                let c = coin::split(taker_collateral, need, ctx);
+                let bal = coin::into_balance(c);
+                table::add(&mut escrow.pending_collateral, oid, bal);
+            };
+            // post bond
+            let bond_amt = (need * cfg.maker_bond_bps) / 10_000;
+            if (bond_amt > 0) {
+                let cb = coin::split(taker_collateral, bond_amt, ctx);
+                let bb = coin::into_balance(cb);
+                table::add(&mut escrow.bonds, oid, bb);
+            };
+        };
+    }
+
+    /// Taker sells Base; settles immediately from maker collateral escrow, accrues maker base
+    entry fun place_dex_limit_with_escrow_ask<Base: store, C: store>(
+        cfg: &DexConfig,
+        market: &mut DexMarket<Base, C>,
+        escrow: &mut DexEscrow<Base, C>,
+        price: u64,
+        size_base: u64,
+        expiry_ms: u64,
+        taker_base: &mut Coin<Base>,
+        ctx: &mut TxContext
+    ) {
+        assert!(!cfg.paused, E_PAUSED);
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        let plan = Book::compute_fill_plan(&market.book, /*is_bid*/ false, price, size_base, 0, expiry_ms, now);
+        let mut i = 0u64; let fills = Book::fillplan_num_fills(&plan);
+        while (i < fills) {
+            let f: Fill = Book::fillplan_get_fill(&plan, i);
+            let maker_id = Book::fill_maker_id(&f);
+            let qty = Book::fill_base_qty(&f);
+            // pay base to maker accrual
+            if (qty > 0) {
+                let coin_pay = coin::split(taker_base, qty, ctx);
+                let bal_pay = coin::into_balance(coin_pay);
+                if (table::contains(&escrow.accrual_base, maker_id)) {
+                    let b = table::borrow_mut(&mut escrow.accrual_base, maker_id);
+                    balance::join(b, bal_pay);
+                } else {
+                    table::add(&mut escrow.accrual_base, maker_id, bal_pay);
+                };
+            };
+            // deliver collateral to taker from maker escrow
+            if (table::contains(&escrow.pending_collateral, maker_id)) {
+                let bcol = table::borrow_mut(&mut escrow.pending_collateral, maker_id);
+                let available = balance::value(bcol);
+                let need = qty * price;
+                let take = if (available >= need) { need } else { available };
+                if (take > 0) {
+                    let bout = balance::split(bcol, take);
+                    let coin_out = coin::from_balance(bout, ctx);
+                    transfer::public_transfer(coin_out, ctx.sender());
+                };
+            };
+            i = i + 1;
+        };
+        let maybe_id = Book::commit_fill_plan(&mut market.book, plan, now, true);
+        if (option::is_some(&maybe_id)) {
+            let oid = *option::borrow(&maybe_id);
+            table::add(&mut market.makers, oid, ctx.sender());
+            table::add(&mut market.maker_sides, oid, 1);
+            // escrow base for remainder
+            let (filled, total) = Book::order_progress(&market.book, oid);
+            let rem = total - filled;
+            if (rem > 0) {
+                let b = coin::split(taker_base, rem, ctx);
+                let bb = coin::into_balance(b);
+                table::add(&mut escrow.pending_base, oid, bb);
+            };
+            // bond (use quote)
+            let need_quote = rem * price;
+            let bond_amt = (need_quote * cfg.maker_bond_bps) / 10_000;
+            if (bond_amt > 0) {
+                // Without taker collateral coin, skip bond here; recommend admin to top-up via separate flow
+            };
+        };
+    }
+
+    /// Maker claims proceeds from accrual maps
+    entry fun claim_dex_maker_fills<Base: store, C: store>(
+        market: &DexMarket<Base, C>,
+        escrow: &mut DexEscrow<Base, C>,
+        order_id: u128,
+        ctx: &mut TxContext
+    ) {
+        assert!(table::contains(&market.makers, order_id), E_NOT_ADMIN);
+        let maker = *table::borrow(&market.makers, order_id);
+        let side = if (table::contains(&market.maker_sides, order_id)) { *table::borrow(&market.maker_sides, order_id) } else { 0 };
+        if (side == 1) {
+            // seller of base → claim collateral
+            if (table::contains(&escrow.accrual_collateral, order_id)) {
+                let b = table::remove(&mut escrow.accrual_collateral, order_id);
+                let c = coin::from_balance(b, ctx);
+                transfer::public_transfer(c, maker);
+            };
+        } else {
+            // buyer of base → claim base
+            if (table::contains(&escrow.accrual_base, order_id)) {
+                let b = table::remove(&mut escrow.accrual_base, order_id);
+                let c = coin::from_balance(b, ctx);
+                transfer::public_transfer(c, maker);
+            };
+        };
+    }
+
+    /// Cancel and refund maker bond and pending escrow back to maker
+    entry fun cancel_dex_clob_with_escrow<Base: store, C: store>(
+        market: &mut DexMarket<Base, C>,
+        escrow: &mut DexEscrow<Base, C>,
+        order_id: u128,
+        ctx: &mut TxContext
+    ) {
+        assert!(table::contains(&market.makers, order_id), E_NOT_ADMIN);
+        let maker = *table::borrow(&market.makers, order_id);
+        assert!(maker == ctx.sender(), E_NOT_ADMIN);
+        // refund escrow
+        if (table::contains(&escrow.pending_base, order_id)) { let b = table::remove(&mut escrow.pending_base, order_id); let c = coin::from_balance(b, ctx); transfer::public_transfer(c, maker); };
+        if (table::contains(&escrow.pending_collateral, order_id)) { let b = table::remove(&mut escrow.pending_collateral, order_id); let c = coin::from_balance(b, ctx); transfer::public_transfer(c, maker); };
+        if (table::contains(&escrow.bonds, order_id)) { let b = table::remove(&mut escrow.bonds, order_id); let c = coin::from_balance(b, ctx); transfer::public_transfer(c, maker); };
+        let _ = table::remove(&mut market.makers, order_id);
+        if (table::contains(&market.maker_sides, order_id)) { let _ = table::remove(&mut market.maker_sides, order_id); };
+        if (table::contains(&market.claimed, order_id)) { let _ = table::remove(&mut market.claimed, order_id); };
+        Book::cancel_order_by_id(&mut market.book, order_id);
+    }
+
+    /// Auto-match steps without settlement (advance book only)
+    entry fun match_step_auto<Base: store, C: store>(
+        cfg: &DexConfig,
+        market: &mut DexMarket<Base, C>,
+        max_steps: u64,
+        min_price: u64,
+        max_price: u64,
+        ctx: &TxContext
+    ) {
+        assert!(!cfg.paused, E_PAUSED);
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        let mut steps = 0u64;
+        while (steps < max_steps) {
+            let (has_ask, ask_id) = Book::best_ask_id(&market.book, now);
+            let (has_bid, bid_id) = Book::best_bid_id(&market.book, now);
+            if (!has_ask || !has_bid) { break };
+            let (_, apx, _) = utils::decode_order_id(ask_id);
+            let (_, bpx, _) = utils::decode_order_id(bid_id);
+            if (bpx < apx) { break };
+            assert!(apx >= min_price && apx <= max_price, E_BAD_BOUNDS);
+            let (af, at) = Book::order_progress(&market.book, ask_id);
+            let (bf, bt) = Book::order_progress(&market.book, bid_id);
+            let ar = at - af; let br = bt - bf; let q = if (ar < br) { ar } else { br };
+            if (q == 0) { break };
+            Book::commit_maker_fill(&mut market.book, ask_id, true, apx, q, now);
+            Book::commit_maker_fill(&mut market.book, bid_id, false, apx, q, now);
+            steps = steps + 1;
+        }
+    }
+
+    /// GC expired orders and slash bonds
+    entry fun gc_step<Base: store, C: store>(
+        cfg: &DexConfig,
+        market: &mut DexMarket<Base, C>,
+        escrow: &mut DexEscrow<Base, C>,
+        treasury: &mut Treasury<C>,
+        now_ts: u64,
+        max_removals: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(!cfg.paused, E_PAUSED);
+        let ids = Book::remove_expired_collect(&mut market.book, now_ts, max_removals);
+        let mut i = 0u64; let n = vector::length(&ids);
+        while (i < n) {
+            let oid = ids[i];
+            if (table::contains(&escrow.bonds, oid)) {
+                let bref = table::borrow_mut(&mut escrow.bonds, oid);
+                let bval = balance::value(bref);
+                if (bval > 0) {
+                    let mut coin_all = coin::from_balance(balance::split(bref, bval), ctx);
+                    let reward = (bval * cfg.keeper_reward_bps) / 10_000;
+                    if (reward > 0) { let to_keeper = coin::split(&mut coin_all, reward, ctx); transfer::public_transfer(to_keeper, ctx.sender()); };
+                    TreasuryMod::deposit_collateral(treasury, coin_all, b"dex_gc_slash".to_string(), ctx.sender(), ctx);
+                };
+            };
+            if (table::contains(&market.makers, oid)) { let _ = table::remove(&mut market.makers, oid); };
+            if (table::contains(&market.maker_sides, oid)) { let _ = table::remove(&mut market.maker_sides, oid); };
+            if (table::contains(&market.claimed, oid)) { let _ = table::remove(&mut market.claimed, oid); };
+            i = i + 1;
+        };
+    }
 
     public fun order_buy_info<Base: store, C: store>(o: &CoinOrderBuy<Base, C>): (address, u64, u64, u64, u64, u64) { (o.owner, o.price, o.remaining_base, o.created_at_ms, o.expiry_ms, coin::value(&o.escrow_collateral)) }
 
