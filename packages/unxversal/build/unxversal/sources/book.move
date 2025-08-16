@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /// Unxversal on-chain order book compatible with DeepBook v3 semantics.
-///
 /// Provides:
 /// - `Book` with bids/asks BigVectors of `Order`
 /// - Order creation with immediate matching and optional injection
@@ -263,6 +262,108 @@ public fun fillplan_expire_ts(self: &FillPlan): u64 { self.expire_ts }
 public fun fill_maker_id(self: &Fill): u128 { self.maker_id }
 public fun fill_price(self: &Fill): u64 { self.price }
 public fun fill_base_qty(self: &Fill): u64 { self.base_qty }
+
+/// Check if an order_id currently exists in the book (any side)
+public fun has_order(self: &Book, order_id: u128): bool {
+    let (is_bid, _, _) = utils::decode_order_id(order_id);
+    if (is_bid) { self.bids.contains_key(order_id) } else { self.asks.contains_key(order_id) }
+}
+
+/// Commit a single maker fill without planning. Updates maker's filled quantity and removes
+/// the order if fully filled or expired. No taker remainder injection.
+public fun commit_maker_fill(
+    self: &mut Book,
+    maker_id: u128,
+    taker_is_bid: bool,
+    taker_price: u64,
+    qty: u64,
+    now_ts: u64,
+) {
+    assert!(qty > 0, EOrderBelowMinimumSize);
+    let side = book_side_mut(self, maker_id);
+    assert!(side.contains_key(maker_id), EEmptyOrderbook);
+    let maker = side.borrow_mut(maker_id);
+    // Expiry
+    if (maker.expire_timestamp < now_ts) { side.remove(maker_id); return };
+    // Price cross check
+    let (_, maker_price, _) = utils::decode_order_id(maker.order_id);
+    assert!((taker_is_bid && taker_price >= maker_price) || (!taker_is_bid && taker_price <= maker_price), EInvalidPriceRange);
+    let remaining = maker.quantity - maker.filled_quantity;
+    let apply_qty = if (qty < remaining) { qty } else { remaining };
+    maker.filled_quantity = maker.filled_quantity + apply_qty;
+    if (maker.filled_quantity >= maker.quantity) { side.remove(maker_id); };
+}
+
+/// Cancel a resting order by its id if present
+public fun cancel_order_by_id(self: &mut Book, order_id: u128) {
+    let side = book_side_mut(self, order_id);
+    if (side.contains_key(order_id)) { side.remove(order_id); };
+}
+
+/// Read-only accessor for an order's filled and total quantities
+public fun order_progress(self: &Book, order_id: u128): (u64, u64) {
+    let side = book_side(self, order_id);
+    let o = side.borrow(order_id);
+    (o.filled_quantity, o.quantity)
+}
+
+/// Read-only accessor for an order's expiry timestamp
+public fun order_expiry(self: &Book, order_id: u128): u64 {
+    let side = book_side(self, order_id);
+    let o = side.borrow(order_id);
+    o.expire_timestamp
+}
+
+/// Remove up to `max_removals` expired orders from both sides and return their order_ids
+public fun remove_expired_collect(self: &mut Book, now_ts: u64, max_removals: u64): vector<u128> {
+    let mut removed = vector[];
+    let mut count = 0u64;
+    // Scan asks from best
+    let (mut ar, mut ao) = self.asks.min_slice();
+    while (!ar.is_null() && count < max_removals) {
+        let ord = slice_borrow(self.asks.borrow_slice(ar), ao);
+        if (ord.expire_timestamp > now_ts) { break };
+        let oid = ord.order_id;
+        self.asks.remove(oid);
+        removed.push_back(oid);
+        (ar, ao) = self.asks.next_slice(ar, ao);
+        count = count + 1;
+    };
+    // Scan bids from best
+    let (mut br, mut bo) = self.bids.max_slice();
+    while (!br.is_null() && count < max_removals) {
+        let ord2 = slice_borrow(self.bids.borrow_slice(br), bo);
+        if (ord2.expire_timestamp > now_ts) { break };
+        let oid2 = ord2.order_id;
+        self.bids.remove(oid2);
+        removed.push_back(oid2);
+        (br, bo) = self.bids.prev_slice(br, bo);
+        count = count + 1;
+    };
+    removed
+}
+
+/// Return the current best ask order id if any non-expired exists
+public fun best_ask_id(self: &Book, now_ts: u64): (bool, u128) {
+    let (mut r, mut off) = self.asks.min_slice();
+    while (!r.is_null()) {
+        let ord = slice_borrow(self.asks.borrow_slice(r), off);
+        if (ord.expire_timestamp >= now_ts) { return (true, ord.order_id) };
+        (r, off) = self.asks.next_slice(r, off);
+    };
+    (false, 0)
+}
+
+/// Return the current best bid order id if any non-expired exists
+public fun best_bid_id(self: &Book, now_ts: u64): (bool, u128) {
+    let (mut r, mut off) = self.bids.max_slice();
+    while (!r.is_null()) {
+        let ord = slice_borrow(self.bids.borrow_slice(r), off);
+        if (ord.expire_timestamp >= now_ts) { return (true, ord.order_id) };
+        (r, off) = self.bids.prev_slice(r, off);
+    };
+    (false, 0)
+}
 
 public fun mid_price(self: &Book, current_timestamp: u64): u64 {
     let (mut ask_ref, mut ask_offset) = self.asks.min_slice();

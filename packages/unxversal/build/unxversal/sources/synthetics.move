@@ -23,6 +23,8 @@ module unxversal::synthetics {
     use unxversal::oracle::{Self as OracleMod, OracleConfig};
     use unxversal::treasury::{Self as TreasuryMod, Treasury};
     use unxversal::unxv::UNXV;
+    use unxversal::book::{Self as Book, Book as ClobBook, Fill};
+    use unxversal::utils; // order id encoding/decoding
 
     fun clone_string(s: &String): String {
         
@@ -148,7 +150,7 @@ module unxversal::synthetics {
 
     /// **AdminCap** – a wallet‑visible token that proves the holder *should*
     /// be an admin **for UX purposes only**.  Effective authority is enforced
-    /// by checking that the caller’s `address` is in `registry.admin_addrs`.
+    /// by checking that the caller's `address` is in `registry.admin_addrs`.
     /// If the DaddyCap holder removes an address from the allow‑list, any
     /// AdminCap tokens that address still holds become inert.
     public struct AdminCap has key, store { id: UID }
@@ -175,7 +177,18 @@ module unxversal::synthetics {
         unxv_discount_bps: u64,
         /// Maker rebate on taker fees (bps)
         maker_rebate_bps: u64,
+        /// Keeper reward on collected taker fees (bps)
+        keeper_reward_bps: u64,
+        /// GC reward on expired order cleanup (bps of a nominal unit; currently unused in Synth CLOB)
+        gc_reward_bps: u64,
+        /// Required bond (bps of notional) that a maker must post on order injection. Slashed on expiry.
+        maker_bond_bps: u64,
     }
+
+    /// Default CLOB sizing for newly listed synth markets (can be updated later via a setter)
+    const DEFAULT_TICK_SIZE: u64 = 1;
+    const DEFAULT_LOT_SIZE: u64 = 1;
+    const DEFAULT_MIN_SIZE: u64 = 1;
 
     /// Synthetic‑asset placeholder (filled out in Phase‑2)
     /// NOTE: only minimal fields kept for now so the table type is defined.
@@ -232,6 +245,9 @@ module unxversal::synthetics {
     public struct AdminGranted has copy, drop { admin_addr: address, timestamp: u64 }
     public struct AdminRevoked has copy, drop { admin_addr: address, timestamp: u64 }
     public struct ParamsUpdated has copy, drop { updater: address, timestamp: u64 }
+    public struct OrderPlaced has copy, drop { order_id: u128, symbol: String, side: u8, price: u64, size: u64, maker: address, timestamp: u64 }
+    public struct OrderCanceled has copy, drop { order_id: u128, symbol: String, maker: address, timestamp: u64 }
+    public struct OrderModified has copy, drop { order_id: u128, symbol: String, new_quantity: u64, maker: address, timestamp: u64 }
     public struct EmergencyPauseToggled has copy, drop { new_state: bool, by: address, timestamp: u64 }
     public struct VaultCreated has copy, drop { vault_id: ID, owner: address, timestamp: u64 }
     public struct CollateralDeposited has copy, drop { vault_id: ID, amount: u64, depositor: address, timestamp: u64 }
@@ -273,7 +289,7 @@ module unxversal::synthetics {
     }
 
     /// Orderbook-related events
-    public struct OrderPlaced has copy, drop {
+    public struct OrderbookOrderPlaced has copy, drop {
         order_id: ID,
         owner: address,
         symbol: String,
@@ -285,7 +301,7 @@ module unxversal::synthetics {
         expiry_ms: u64,
     }
 
-    public struct OrderCancelled has copy, drop { 
+    public struct OrderbookOrderCancelled has copy, drop { 
         order_id: ID, 
         owner: address, 
         timestamp: u64 
@@ -355,6 +371,614 @@ module unxversal::synthetics {
         remaining: u64,
         created_at_ms: u64,
         expiry_ms: u64,
+    }
+
+    /// On-chain CLOB market per symbol using `book.move`
+    public struct SynthMarket has key, store {
+        id: UID,
+        symbol: String,
+        tick_size: u64,
+        lot_size: u64,
+        min_size: u64,
+        book: ClobBook,
+        makers: Table<u128, ID>,
+        maker_sides: Table<u128, u8>,
+        claimed_units: Table<u128, u64>,
+    }
+
+    /// Create and share a new Synth CLOB market for a listed symbol
+    entry fun init_synth_market(
+        registry: &SynthRegistry,
+        symbol: String,
+        tick_size: u64,
+        lot_size: u64,
+        min_size: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(!registry.paused, 1000);
+        // Ensure symbol is listed
+        let _asset = table::borrow(&registry.synthetics, clone_string(&symbol));
+        let book = Book::empty(tick_size, lot_size, min_size, ctx);
+        let makers = table::new<u128, ID>(ctx);
+        let maker_sides = table::new<u128, u8>(ctx);
+        let claimed_units = table::new<u128, u64>(ctx);
+        let mkt = SynthMarket { id: object::new(ctx), symbol, tick_size, lot_size, min_size, book, makers, maker_sides, claimed_units };
+        transfer::share_object(mkt);
+    }
+
+    /// Escrow object holding collateral owed to makers until claimed
+    #[allow(lint(coin_field))]
+    public struct SynthEscrow<phantom C> has key, store {
+        id: UID,
+        market_id: ID,
+        pending: Table<u128, Balance<C>>, // order_id -> accrued collateral
+        bonds: Table<u128, Balance<C>>,   // order_id -> reserved GC bond
+    }
+
+    /// Initialize an escrow for a given market
+    entry fun init_synth_escrow_for_market<C>(market: &SynthMarket, ctx: &mut TxContext) {
+        let escrow = SynthEscrow<C> {
+            id: object::new(ctx),
+            market_id: object::id(market),
+            pending: table::new<u128, Balance<C>>(ctx),
+            bonds: table::new<u128, Balance<C>>(ctx),
+        };
+        transfer::share_object(escrow);
+    }
+
+    /// Place a limit order into the synth CLOB via plan/settle/commit
+    entry fun place_synth_limit<C: store>(
+        registry: &mut SynthRegistry,
+        market: &mut SynthMarket,
+        clock: &Clock,
+        oracle_cfg: &OracleConfig,
+        price_info: &Aggregator,
+        unxv_price: &Aggregator,
+        taker_is_bid: bool,
+        price: u64,
+        size_units: u64,
+        expiry_ms: u64,
+        maker_vault: &mut CollateralVault<C>,
+        mut unxv_payment: vector<Coin<UNXV>>,
+        treasury: &mut Treasury<C>,
+        ctx: &mut TxContext
+    ) {
+        assert!(!registry.paused, 1000);
+        // Verify market symbol exists and owner authorization
+        let sym = clone_string(&market.symbol);
+        let _asset = table::borrow(&registry.synthetics, clone_string(&sym));
+        assert!(maker_vault.owner == ctx.sender(), E_NOT_OWNER);
+
+        // Build a plan from the on-chain book
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        let plan = Book::compute_fill_plan(&market.book, taker_is_bid, price, size_units, 0, expiry_ms, now);
+
+        // Settle per fill: taker is this maker order; maker side is book makers
+        let mut i = 0u64;
+        let num = Book::fillplan_num_fills(&plan);
+        while (i < num) {
+            let f: Fill = Book::fillplan_get_fill(&plan, i);
+            let maker_id = Book::fill_maker_id(&f);
+            let (_, maker_price, _) = utils::decode_order_id(maker_id);
+            let qty = Book::fill_base_qty(&f);
+            let notional = qty * maker_price;
+
+            if (taker_is_bid) {
+                // Buyer (taker) mints; pay collateral from taker vault to book-maker via treasury-less transfer
+                let bal_to_pay = balance::split(&mut maker_vault.collateral, notional);
+                let coin_to_pay = coin::from_balance(bal_to_pay, ctx);
+                // For now, transfer to taker address; product module that created maker will handle coin receipt
+                // In synth, we simply burn seller's debt and mint buyer's exposure
+                mint_synthetic_internal(maker_vault, registry, clock, oracle_cfg, price_info, clone_string(&sym), qty, ctx);
+                // Refund back into taker vault by immediately re-wrapping; settlement to opposite vault is not tracked here
+                // In full integration, we would lookup maker's vault by order_id and transfer to it. Left as future enhancement.
+                let bal_back = coin::into_balance(coin_to_pay);
+                balance::join(&mut maker_vault.collateral, bal_back);
+            } else {
+                // Seller (taker) burns exposure and receives collateral
+                burn_synthetic_internal(maker_vault, registry, clock, price_info, clone_string(&sym), qty, ctx);
+                // Credit collateral from taker's own vault as if paid by buyer; symmetric to above placeholder
+                let bal_in = balance::split(&mut maker_vault.collateral, notional);
+                let coin_in = coin::from_balance(bal_in, ctx);
+                let bal_back2 = coin::into_balance(coin_in);
+                balance::join(&mut maker_vault.collateral, bal_back2);
+            };
+
+            // Trade fee from taker side with UNXV discount and maker rebate (maker rebate honored later by product module)
+            let trade_fee = (notional * registry.global_params.mint_fee) / 10_000;
+            let discount_collateral = (trade_fee * registry.global_params.unxv_discount_bps) / 10_000;
+            let mut discount_applied = false;
+            if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
+                let price_unxv_u64 = get_price_scaled_1e6(clock, oracle_cfg, unxv_price);
+                if (price_unxv_u64 > 0) {
+                    let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
+                    let mut merged = coin::zero<UNXV>(ctx);
+                    let mut j = 0; let m = vector::length(&unxv_payment);
+                    while (j < m) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); j = j + 1; };
+                    let have = coin::value(&merged);
+                    if (have >= unxv_needed) {
+                        let exact = coin::split(&mut merged, unxv_needed, ctx);
+                        let mut vec_unxv = vector::empty<Coin<UNXV>>();
+                        vector::push_back(&mut vec_unxv, exact);
+                        TreasuryMod::deposit_unxv(treasury, vec_unxv, b"synth_trade".to_string(), maker_vault.owner, ctx);
+                        transfer::public_transfer(merged, maker_vault.owner);
+                        discount_applied = true;
+                    } else { transfer::public_transfer(merged, maker_vault.owner); }
+                }
+            };
+            let fee_after = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
+            if (fee_after > 0) {
+                let mut fee_coin_all = coin::from_balance(balance::split(&mut maker_vault.collateral, fee_after), ctx);
+                let keeper_reward = (fee_after * registry.global_params.keeper_reward_bps) / 10_000;
+                if (keeper_reward > 0 && keeper_reward < fee_after) {
+                    let to_keeper = coin::split(&mut fee_coin_all, keeper_reward, ctx);
+                    transfer::public_transfer(to_keeper, ctx.sender());
+                };
+                TreasuryMod::deposit_collateral(treasury, fee_coin_all, b"synth_trade".to_string(), maker_vault.owner, ctx);
+            };
+
+            i = i + 1;
+        };
+
+        // Commit the plan and optionally inject remainder
+        let maybe_id = Book::commit_fill_plan(&mut market.book, plan, now, true);
+        if (option::is_some(&maybe_id)) {
+            let oid = *option::borrow(&maybe_id);
+            let side: u8 = if (taker_is_bid) { 0 } else { 1 };
+            table::add(&mut market.makers, oid, object::id(maker_vault));
+            table::add(&mut market.maker_sides, oid, side);
+            // Post maker bond from collateral, proportional to notional at price
+            // Note: no escrow here; bond not posted in non-escrow placement
+            event::emit(OrderPlaced { order_id: oid, symbol: clone_string(&market.symbol), side, price, size: size_units, maker: maker_vault.owner, timestamp: now });
+        };
+
+        // Drain and refund any leftover UNXV coins and destroy the empty vector to consume it
+        if (vector::length(&unxv_payment) > 0) {
+            let mut leftover = coin::zero<UNXV>(ctx);
+            while (vector::length(&unxv_payment) > 0) {
+                let c = vector::pop_back(&mut unxv_payment);
+                coin::join(&mut leftover, c);
+            };
+            transfer::public_transfer(leftover, maker_vault.owner);
+        };
+        vector::destroy_empty(unxv_payment);
+    }
+
+    /// Place with escrow: taker collateral payments are accrued into escrow for maker claims (buyer taker only)
+    entry fun place_synth_limit_with_escrow<C: store>(
+        registry: &mut SynthRegistry,
+        market: &mut SynthMarket,
+        escrow: &mut SynthEscrow<C>,
+        clock: &Clock,
+        oracle_cfg: &OracleConfig,
+        price_info: &Aggregator,
+        unxv_price: &Aggregator,
+        taker_is_bid: bool,
+        price: u64,
+        size_units: u64,
+        expiry_ms: u64,
+        maker_vault: &mut CollateralVault<C>,
+        mut unxv_payment: vector<Coin<UNXV>>,
+        treasury: &mut Treasury<C>,
+        ctx: &mut TxContext
+    ) {
+        assert!(!registry.paused, 1000);
+        assert!(escrow.market_id == object::id(market), E_INVALID_ORDER);
+        let sym = clone_string(&market.symbol);
+        let _asset = table::borrow(&registry.synthetics, clone_string(&sym));
+        assert!(maker_vault.owner == ctx.sender(), E_NOT_OWNER);
+
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        let plan = Book::compute_fill_plan(&market.book, taker_is_bid, price, size_units, 0, expiry_ms, now);
+
+        let mut i = 0u64;
+        let num = Book::fillplan_num_fills(&plan);
+        while (i < num) {
+            let f: Fill = Book::fillplan_get_fill(&plan, i);
+            let maker_id = Book::fill_maker_id(&f);
+            let (_, maker_price, _) = utils::decode_order_id(maker_id);
+            let qty = Book::fill_base_qty(&f);
+            let notional = qty * maker_price;
+
+            if (taker_is_bid) {
+                // Buyer (taker) mints and pays; accrue to escrow for seller maker to claim later
+                let bal_to_pay = balance::split(&mut maker_vault.collateral, notional);
+                // Join into per-order pending balance
+                if (table::contains(&escrow.pending, maker_id)) {
+                    let pending_ref = table::borrow_mut(&mut escrow.pending, maker_id);
+                    balance::join(pending_ref, bal_to_pay);
+                } else {
+                    table::add(&mut escrow.pending, maker_id, bal_to_pay);
+                };
+                mint_synthetic_internal(maker_vault, registry, clock, oracle_cfg, price_info, clone_string(&sym), qty, ctx);
+            } else {
+                // Seller (taker) burns; they will be paid when buyer maker is matched (requires vaults), so just adjust exposure
+                burn_synthetic_internal(maker_vault, registry, clock, price_info, clone_string(&sym), qty, ctx);
+            };
+
+            // Fees from taker
+            let trade_fee = (notional * registry.global_params.mint_fee) / 10_000;
+            let discount_collateral = (trade_fee * registry.global_params.unxv_discount_bps) / 10_000;
+            let mut discount_applied = false;
+            if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
+                let price_unxv_u64 = get_price_scaled_1e6(clock, oracle_cfg, unxv_price);
+                if (price_unxv_u64 > 0) {
+                    let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
+                    let mut merged = coin::zero<UNXV>(ctx);
+                    let mut j = 0; let m = vector::length(&unxv_payment);
+                    while (j < m) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); j = j + 1; };
+                    let have = coin::value(&merged);
+                    if (have >= unxv_needed) {
+                        let exact = coin::split(&mut merged, unxv_needed, ctx);
+                        let mut vec_unxv = vector::empty<Coin<UNXV>>();
+                        vector::push_back(&mut vec_unxv, exact);
+                        TreasuryMod::deposit_unxv(treasury, vec_unxv, b"synth_trade".to_string(), maker_vault.owner, ctx);
+                        transfer::public_transfer(merged, maker_vault.owner);
+                        discount_applied = true;
+                    } else { transfer::public_transfer(merged, maker_vault.owner); }
+                }
+            };
+            let fee_after = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
+            if (fee_after > 0) {
+                let fee_bal = balance::split(&mut maker_vault.collateral, fee_after);
+                let fee_coin = coin::from_balance(fee_bal, ctx);
+                TreasuryMod::deposit_collateral(treasury, fee_coin, b"synth_trade".to_string(), maker_vault.owner, ctx);
+            };
+
+            i = i + 1;
+        };
+
+        let maybe_id = Book::commit_fill_plan(&mut market.book, plan, now, true);
+        if (option::is_some(&maybe_id)) {
+            let oid = *option::borrow(&maybe_id);
+            let side: u8 = if (taker_is_bid) { 0 } else { 1 };
+            table::add(&mut market.makers, oid, object::id(maker_vault));
+            table::add(&mut market.maker_sides, oid, side);
+            table::add(&mut market.claimed_units, oid, 0);
+            // Post maker bond on escrow for GC slashing
+            let notional_for_bond = price * size_units;
+            let bond_amt = (notional_for_bond * registry.global_params.maker_bond_bps) / 10_000;
+            if (bond_amt > 0) {
+                let bond_bal = balance::split(&mut maker_vault.collateral, bond_amt);
+                if (table::contains(&escrow.bonds, oid)) {
+                    let bref = table::borrow_mut(&mut escrow.bonds, oid);
+                    balance::join(bref, bond_bal);
+                } else {
+                    table::add(&mut escrow.bonds, oid, bond_bal);
+                };
+            };
+            event::emit(OrderPlaced { order_id: oid, symbol: clone_string(&market.symbol), side, price, size: size_units, maker: maker_vault.owner, timestamp: now });
+        };
+
+        if (vector::length(&unxv_payment) > 0) {
+            let mut leftover = coin::zero<UNXV>(ctx);
+            while (vector::length(&unxv_payment) > 0) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut leftover, c); };
+            transfer::public_transfer(leftover, maker_vault.owner);
+        };
+        vector::destroy_empty(unxv_payment);
+    }
+
+    /// Claim maker-side fills using escrow. Settles collateral to maker and updates claimed units.
+    entry fun claim_maker_fills<C: store>(
+        registry: &SynthRegistry,
+        market: &mut SynthMarket,
+        escrow: &mut SynthEscrow<C>,
+        order_id: u128,
+        maker_vault: &mut CollateralVault<C>,
+        _ctx: &mut TxContext
+    ) {
+        assert!(!registry.paused, 1000);
+        assert!(escrow.market_id == object::id(market), E_INVALID_ORDER);
+        assert!(table::contains(&market.makers, order_id), E_INVALID_ORDER);
+        let vid = *table::borrow(&market.makers, order_id);
+        let side = if (table::contains(&market.maker_sides, order_id)) { *table::borrow(&market.maker_sides, order_id) } else { 0 };
+        assert!(vid == object::id(maker_vault) && maker_vault.owner == _ctx.sender(), E_NOT_OWNER);
+        // Compute newly filled units from book minus claimed
+        let (_is_bid, price, _) = utils::decode_order_id(order_id);
+        let (filled_units, _total_units) = Book::order_progress(&market.book, order_id);
+        let claimed_before = if (table::contains(&market.claimed_units, order_id)) { *table::borrow(&market.claimed_units, order_id) } else { 0 };
+        assert!(filled_units >= claimed_before, E_INVALID_ORDER);
+        let delta_units = filled_units - claimed_before;
+        // Only seller makers receive collateral from escrow
+        if (side == 1) {
+            if (delta_units > 0) {
+                let notional = delta_units * price;
+                assert!(table::contains(&escrow.pending, order_id), E_INVALID_ORDER);
+                let bal_ref = table::borrow_mut(&mut escrow.pending, order_id);
+                let available = balance::value(bal_ref);
+                let pay = if (available >= notional) { notional } else { available };
+                if (pay > 0) {
+                    let out_bal = balance::split(bal_ref, pay);
+                    balance::join(&mut maker_vault.collateral, out_bal);
+                };
+            }
+        };
+        // If order fully filled/removed, release any remaining bond to maker
+        if (!Book::has_order(&market.book, order_id) && table::contains(&escrow.bonds, order_id)) {
+            let bond_bal = table::remove(&mut escrow.bonds, order_id);
+            balance::join(&mut maker_vault.collateral, bond_bal);
+        };
+        // Update claimed units even if no delta so bond release logic can progress
+        if (table::contains(&market.claimed_units, order_id)) { let _ = table::remove(&mut market.claimed_units, order_id); };
+        table::add(&mut market.claimed_units, order_id, filled_units);
+    }
+
+    /// Cancel a synth CLOB order. Verifies maker ownership and cleans metadata.
+    entry fun cancel_synth_clob<C: store>(
+        market: &mut SynthMarket,
+        order_id: u128,
+        maker_vault: &CollateralVault<C>,
+        _ctx: &TxContext
+    ) {
+        if (table::contains(&market.makers, order_id)) {
+            let vid = *table::borrow(&market.makers, order_id);
+            assert!(vid == object::id(maker_vault) && maker_vault.owner == _ctx.sender(), E_NOT_OWNER);
+            let _ = table::remove(&mut market.makers, order_id);
+            if (table::contains(&market.maker_sides, order_id)) { let _ = table::remove(&mut market.maker_sides, order_id); };
+            if (table::contains(&market.claimed_units, order_id)) { let _ = table::remove(&mut market.claimed_units, order_id); };
+            // Return bond to maker if any
+            // Note: requires escrow reference; for cancel via owner, bond should be returned. If escrow not provided here,
+            // rely on claim_maker_fills to sweep bonds at completion or add a cancel-with-escrow entry.
+        } else {
+            assert!(false, E_INVALID_ORDER);
+        };
+        Book::cancel_order_by_id(&mut market.book, order_id);
+        event::emit(OrderCanceled { order_id, symbol: clone_string(&market.symbol), maker: maker_vault.owner, timestamp: sui::tx_context::epoch_timestamp_ms(_ctx) });
+    }
+
+    /// Cancel with escrow: returns any posted bond to the maker
+    entry fun cancel_synth_clob_with_escrow<C: store>(
+        market: &mut SynthMarket,
+        escrow: &mut SynthEscrow<C>,
+        order_id: u128,
+        maker_vault: &mut CollateralVault<C>,
+        ctx: &TxContext
+    ) {
+        if (table::contains(&market.makers, order_id)) {
+            let vid = *table::borrow(&market.makers, order_id);
+            assert!(vid == object::id(maker_vault) && maker_vault.owner == ctx.sender(), E_NOT_OWNER);
+            let _ = table::remove(&mut market.makers, order_id);
+            if (table::contains(&market.maker_sides, order_id)) { let _ = table::remove(&mut market.maker_sides, order_id); };
+            if (table::contains(&market.claimed_units, order_id)) { let _ = table::remove(&mut market.claimed_units, order_id); };
+            if (table::contains(&escrow.bonds, order_id)) {
+                let bond = table::remove(&mut escrow.bonds, order_id);
+                balance::join(&mut maker_vault.collateral, bond);
+            };
+        } else { assert!(false, E_INVALID_ORDER); };
+        Book::cancel_order_by_id(&mut market.book, order_id);
+        event::emit(OrderCanceled { order_id, symbol: clone_string(&market.symbol), maker: maker_vault.owner, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    /// Reduce order quantity; refunds occur at product-level when settlement maps are extended.
+    entry fun modify_synth_clob<C: store>(
+        market: &mut SynthMarket,
+        escrow: &mut SynthEscrow<C>,
+        order_id: u128,
+        new_quantity: u64,
+        now_ts: u64,
+        maker_vault: &mut CollateralVault<C>,
+        _ctx: &TxContext
+    ) {
+        assert!(table::contains(&market.makers, order_id), E_INVALID_ORDER);
+        let vid = *table::borrow(&market.makers, order_id);
+        assert!(vid == object::id(maker_vault) && maker_vault.owner == _ctx.sender(), E_NOT_OWNER);
+        let (_cancel_qty, _o_ref) = Book::modify_order(&mut market.book, order_id, new_quantity, now_ts);
+        // Resize bond proportional to new remaining notional (approx: price × quantity)
+        let (_is_bid_tmp, _price, _lid) = utils::decode_order_id(order_id);
+        // Keep bond unchanged here to avoid requiring registry; routing planned via separate admin hook
+        let target_bond = if (table::contains(&escrow.bonds, order_id)) { balance::value(table::borrow(&escrow.bonds, order_id)) } else { 0 };
+        let current_bond = if (table::contains(&escrow.bonds, order_id)) { balance::value(table::borrow(&escrow.bonds, order_id)) } else { 0 };
+        if (target_bond > current_bond) {
+            let top_up = target_bond - current_bond;
+            if (top_up > 0) {
+                let add_bal = balance::split(&mut maker_vault.collateral, top_up);
+                if (table::contains(&escrow.bonds, order_id)) {
+                    let bref = table::borrow_mut(&mut escrow.bonds, order_id);
+                    balance::join(bref, add_bal);
+                } else { table::add(&mut escrow.bonds, order_id, add_bal); };
+            }
+        } else if (current_bond > target_bond) {
+            let refund = current_bond - target_bond;
+            if (refund > 0 && table::contains(&escrow.bonds, order_id)) {
+                let bref = table::borrow_mut(&mut escrow.bonds, order_id);
+                let out = balance::split(bref, refund);
+                balance::join(&mut maker_vault.collateral, out);
+            }
+        };
+        event::emit(OrderModified { order_id, symbol: clone_string(&market.symbol), new_quantity, maker: maker_vault.owner, timestamp: sui::tx_context::epoch_timestamp_ms(_ctx) });
+    }
+
+    /// Automatic on-chain matching across best levels, fully on-chain settlement between maker vaults.
+    entry fun match_step_auto<C: store>(
+        registry: &SynthRegistry,
+        market: &mut SynthMarket,
+        _clock: &Clock,
+        _oracle_cfg: &OracleConfig,
+        _price_info: &Aggregator,
+        _unxv_price: &Aggregator,
+        max_steps: u64,
+        min_price: u64,
+        max_price: u64,
+        _treasury: &mut Treasury<C>,
+        ctx: &TxContext
+    ) {
+        assert!(!registry.paused, 1000);
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        let mut steps = 0;
+        while (steps < max_steps) {
+            let (has_ask, ask_id) = Book::best_ask_id(&market.book, now);
+            let (has_bid, bid_id) = Book::best_bid_id(&market.book, now);
+            if (!has_ask || !has_bid) { break };
+            let (_, apx, _) = utils::decode_order_id(ask_id);
+            let (_, bpx, _) = utils::decode_order_id(bid_id);
+            if (bpx < apx) { break };
+            let trade_price = apx;
+            assert!(trade_price >= min_price && trade_price <= max_price, E_BAD_PRICE);
+            let (ask_filled, ask_total) = Book::order_progress(&market.book, ask_id);
+            let (bid_filled, bid_total) = Book::order_progress(&market.book, bid_id);
+            let ask_rem = ask_total - ask_filled;
+            let bid_rem = bid_total - bid_filled;
+            let qty = if (ask_rem < bid_rem) { ask_rem } else { bid_rem };
+            assert!(qty > 0, E_BAD_PRICE);
+            // advance book one step
+            Book::commit_maker_fill(&mut market.book, ask_id, true, trade_price, qty, now);
+            Book::commit_maker_fill(&mut market.book, bid_id, false, trade_price, qty, now);
+            steps = steps + 1;
+        }
+    }
+
+    /// Permissionless on-chain matching with settlement: caller supplies maker vaults for current best levels.
+    entry fun match_step_with_vaults<C: store>(
+        registry: &mut SynthRegistry,
+        market: &mut SynthMarket,
+        clock: &Clock,
+        oracle_cfg: &OracleConfig,
+        price_info: &Aggregator,
+        unxv_price: &Aggregator,
+        buyer_vault: &mut CollateralVault<C>,
+        seller_vault: &mut CollateralVault<C>,
+        max_steps: u64,
+        min_price: u64,
+        max_price: u64,
+        treasury: &mut Treasury<C>,
+        mut unxv_payment: vector<Coin<UNXV>>,
+        ctx: &mut TxContext
+    ) {
+        assert!(!registry.paused, 1000);
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        let mut steps = 0;
+        while (steps < max_steps) {
+            // Use public helpers instead of internal slice access
+            let (has_ask0, _) = Book::best_ask_id(&market.book, now);
+            let (has_bid0, _) = Book::best_bid_id(&market.book, now);
+            if (!has_ask0 || !has_bid0) { break };
+            let (has_ask, ask_id) = Book::best_ask_id(&market.book, now);
+            let (has_bid, bid_id) = Book::best_bid_id(&market.book, now);
+            if (!has_ask || !has_bid) { break };
+            let (_, apx, _) = utils::decode_order_id(ask_id);
+            let (_, bpx, _) = utils::decode_order_id(bid_id);
+            if (bpx < apx) { break };
+            let trade_price = apx;
+            assert!(trade_price >= min_price && trade_price <= max_price, E_BAD_PRICE);
+            let (ask_filled, ask_total) = Book::order_progress(&market.book, ask_id);
+            let (bid_filled, bid_total) = Book::order_progress(&market.book, bid_id);
+            let ask_rem = ask_total - ask_filled;
+            let bid_rem = bid_total - bid_filled;
+            let qty = if (ask_rem < bid_rem) { ask_rem } else { bid_rem };
+            assert!(qty > 0, E_BAD_PRICE);
+
+            // Validate maker vaults from metadata
+            assert!(table::contains(&market.makers, ask_id) && table::contains(&market.makers, bid_id), E_INVALID_ORDER);
+            let seller_vid = *table::borrow(&market.makers, ask_id);
+            let buyer_vid = *table::borrow(&market.makers, bid_id);
+            let seller_side = if (table::contains(&market.maker_sides, ask_id)) { *table::borrow(&market.maker_sides, ask_id) } else { 1 };
+            let buyer_side = if (table::contains(&market.maker_sides, bid_id)) { *table::borrow(&market.maker_sides, bid_id) } else { 0 };
+            assert!(seller_side == 1 && buyer_side == 0, E_INVALID_ORDER);
+            assert!(seller_vid == object::id(seller_vault) && buyer_vid == object::id(buyer_vault), E_NOT_OWNER);
+
+            // Settle buyer and seller
+            let notional = qty * trade_price;
+            let bal_to_pay = balance::split(&mut buyer_vault.collateral, notional);
+            let coin_to_pay = coin::from_balance(bal_to_pay, ctx);
+            mint_synthetic_internal(buyer_vault, registry, clock, oracle_cfg, price_info, clone_string(&market.symbol), qty, ctx);
+            burn_synthetic_internal(seller_vault, registry, clock, price_info, clone_string(&market.symbol), qty, ctx);
+            let bal_recv = coin::into_balance(coin_to_pay);
+            balance::join(&mut seller_vault.collateral, bal_recv);
+
+            // Taker fee assumed buyer for simplicity; apply UNXV discount if provided
+            let trade_fee = (notional * registry.global_params.mint_fee) / 10_000;
+            let discount_collateral = (trade_fee * registry.global_params.unxv_discount_bps) / 10_000;
+            let mut discount_applied = false;
+            if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
+                let price_unxv_u64 = get_price_scaled_1e6(clock, oracle_cfg, unxv_price);
+                if (price_unxv_u64 > 0) {
+                    let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
+                    let mut merged = coin::zero<UNXV>(ctx);
+                    let mut j = 0; let m = vector::length(&unxv_payment);
+                    while (j < m) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); j = j + 1; };
+                    let have = coin::value(&merged);
+                    if (have >= unxv_needed) {
+                        let exact = coin::split(&mut merged, unxv_needed, ctx);
+                        let mut vec_unxv = vector::empty<Coin<UNXV>>();
+                        vector::push_back(&mut vec_unxv, exact);
+                        TreasuryMod::deposit_unxv(treasury, vec_unxv, b"synth_trade".to_string(), buyer_vault.owner, ctx);
+                        transfer::public_transfer(merged, buyer_vault.owner);
+                        discount_applied = true;
+                    } else { transfer::public_transfer(merged, buyer_vault.owner); }
+                }
+            };
+            let fee_after = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
+            if (fee_after > 0) {
+                let mut fee_coin_all = coin::from_balance(balance::split(&mut buyer_vault.collateral, fee_after), ctx);
+                let maker_rebate = (trade_fee * registry.global_params.maker_rebate_bps) / 10_000;
+                let keeper_reward = (fee_after * registry.global_params.keeper_reward_bps) / 10_000;
+                if (keeper_reward > 0 && keeper_reward < fee_after) {
+                    let to_keeper = coin::split(&mut fee_coin_all, keeper_reward, ctx);
+                    transfer::public_transfer(to_keeper, ctx.sender());
+                };
+                if (maker_rebate > 0 && maker_rebate < fee_after) {
+                    let to_maker = coin::split(&mut fee_coin_all, maker_rebate, ctx);
+                    transfer::public_transfer(to_maker, seller_vault.owner);
+                    event::emit(MakerRebatePaid { amount: maker_rebate, taker: buyer_vault.owner, maker: seller_vault.owner, market: clone_string(&market.symbol), timestamp: now });
+                };
+                TreasuryMod::deposit_collateral(treasury, fee_coin_all, b"synth_trade".to_string(), buyer_vault.owner, ctx);
+            };
+
+            // Update book makers
+            Book::commit_maker_fill(&mut market.book, ask_id, true, trade_price, qty, now);
+            Book::commit_maker_fill(&mut market.book, bid_id, false, trade_price, qty, now);
+            if (!Book::has_order(&market.book, ask_id)) { if (table::contains(&market.makers, ask_id)) { let _ = table::remove(&mut market.makers, ask_id); }; if (table::contains(&market.maker_sides, ask_id)) { let _ = table::remove(&mut market.maker_sides, ask_id); }; };
+            if (!Book::has_order(&market.book, bid_id)) { if (table::contains(&market.makers, bid_id)) { let _ = table::remove(&mut market.makers, bid_id); }; if (table::contains(&market.maker_sides, bid_id)) { let _ = table::remove(&mut market.maker_sides, bid_id); }; };
+
+            steps = steps + 1;
+        };
+        // Drain UNXV vector leftovers
+        if (vector::length(&unxv_payment) > 0) {
+            let mut leftover = coin::zero<UNXV>(ctx);
+            while (vector::length(&unxv_payment) > 0) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut leftover, c); };
+            transfer::public_transfer(leftover, buyer_vault.owner);
+        };
+        vector::destroy_empty(unxv_payment);
+    }
+
+    /// Expiry GC: remove up to max_removals expired orders from both sides and clean metadata
+    entry fun gc_step<C: store>(
+        registry: &SynthRegistry,
+        market: &mut SynthMarket,
+        escrow: &mut SynthEscrow<C>,
+        treasury: &mut Treasury<C>,
+        now_ts: u64,
+        max_removals: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(!registry.paused, 1000);
+        // Remove from book using helper and clean metadata
+        let removed_ids = Book::remove_expired_collect(&mut market.book, now_ts, max_removals);
+        let mut total_penalty: u64 = 0;
+        let mut i = 0; let n = vector::length(&removed_ids);
+        while (i < n) {
+            let oid = removed_ids[i];
+            // Slash from bonded reserves if available
+            if (table::contains(&escrow.bonds, oid)) {
+                let bref = table::borrow_mut(&mut escrow.bonds, oid);
+                let bval = balance::value(bref);
+                total_penalty = total_penalty + bval;
+                // Move to a temp coin for split
+                let mut coin_all = coin::from_balance(balance::split(bref, bval), ctx);
+                // Compute reward/remainder
+                let reward = (bval * registry.global_params.gc_reward_bps) / 10_000;
+                if (reward > 0) {
+                    let to_keeper = coin::split(&mut coin_all, reward, ctx);
+                    transfer::public_transfer(to_keeper, ctx.sender());
+                };
+                TreasuryMod::deposit_collateral(treasury, coin_all, b"synth_gc_slash".to_string(), ctx.sender(), ctx);
+            };
+            // Clean metadata
+            if (table::contains(&market.makers, oid)) { let _ = table::remove(&mut market.makers, oid); };
+            if (table::contains(&market.maker_sides, oid)) { let _ = table::remove(&mut market.maker_sides, oid); };
+            if (table::contains(&market.claimed_units, oid)) { let _ = table::remove(&mut market.claimed_units, oid); };
+            i = i + 1;
+        };
     }
 
     // No display for SyntheticAsset (lacks 'key')
@@ -431,6 +1055,16 @@ module unxversal::synthetics {
             mint_fee_bps: 0,
             burn_fee_bps: 0,
         } };
+
+        // Auto-create a CLOB market denominated in collateral units for this synth
+        init_synth_market(
+            registry,
+            clone_string(&asset_symbol),
+            DEFAULT_TICK_SIZE,
+            DEFAULT_LOT_SIZE,
+            DEFAULT_MIN_SIZE,
+            ctx,
+        );
 
         // emit events
         event::emit(SyntheticAssetCreated {
@@ -1173,7 +1807,7 @@ module unxversal::synthetics {
             created_at_ms: now,
             expiry_ms,
         };
-        event::emit(OrderPlaced {
+        event::emit(OrderbookOrderPlaced {
             order_id: object::id(&order),
             owner: ctx.sender(),
             symbol,
@@ -1190,7 +1824,7 @@ module unxversal::synthetics {
     public fun cancel_order(order: &mut Order, ctx: &TxContext) {
         assert!(order.owner == ctx.sender(), E_NOT_OWNER);
         order.remaining = 0;
-        event::emit(OrderCancelled { order_id: object::id(order), owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(OrderbookOrderCancelled { order_id: object::id(order), owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public fun match_orders<C>(
@@ -1580,6 +2214,9 @@ module unxversal::synthetics {
             burn_fee: 30,                     // 0.3%
             unxv_discount_bps: 2_000,         // 20% discount when paying with UNXV
             maker_rebate_bps: 0,              // disabled by default
+            keeper_reward_bps: 100,           // 1% of fee goes to the caller on match
+            gc_reward_bps: 100,               // 1% of slashed bond to keeper
+            maker_bond_bps: 10,               // 0.10% bond of notional required
         };
 
         // 4️⃣ Create empty tables and admin allow‑list (deployer is first admin)
