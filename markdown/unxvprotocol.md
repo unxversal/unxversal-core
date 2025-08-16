@@ -16,10 +16,12 @@ Unxversal is a modular on-chain trading protocol on Sui built around shared obje
 - `futures.move`: Dated futures registry and contracts, open/close/settlement events, fee accounting hooks.
 - `gas_futures.move`: Gas-price based futures with RGP×SUI micro-USD pricing and position management.
 - `perpetuals.move`: Perpetuals with funding index and per-position accrual; off-chain bot refreshes funding rates.
-- `vaults.move`: Vaults for liquidity provisioning and asset management:
-  - `LiquidityVault<Base, C>` integrates with `dex` for base/quote markets.
-  - Synth LP wrappers integrate with `synthetics` order/matching.
-  - `TraderVault<C>`: collateral-only share vault with HWM performance fees and manager stake gating.
+- `vaults.move`: Unified vault and manager staking
+  - ManagerStakeRegistry: UNXV stake with min-stake gating, freeze/slash, active-vault tracking.
+  - Unified `Vault<BaseUSD>`: base-only NAV (base is the global USD stablecoin), deposit/withdraw shares, AUM cap, perf fee/HWM, freeze/close.
+  - `VaultAssetStore<Asset, BaseUSD>`: arbitrary asset custody per vault for DEX asks.
+  - DEX integration (escrow-only): single and range bid/ask; claim/cancel directly to vault stores.
+  - Synthetics integration (escrow-only): place and claim via vault-only wrappers.
 
 ### Cross-cutting Modules
 - `oracle.move`: Provides normalized micro-USD price retrieval with staleness gating (Switchboard aggregators).
@@ -95,12 +97,35 @@ Base URL: `/api/v1`
   - `POST /futures/recordFill` / `POST /gas/recordFill`
   - `POST /futures/position/open|close` / `POST /gas/position/open|close`
 
-- Vaults (Liquidity & Trader)
-  - `POST /vaults/liquidity/create`
-  - `POST /vaults/liquidity/deposit|withdraw`
-  - `POST /vaults/liquidity/dex/place|cancel|match`
-  - `POST /vaults/liquidity/synth/place|cancel|match`
-  - `POST /vaults/trader/create|deposit|withdraw|stake|unstake|fees`
+- Staking (Managers)
+  - `POST /stake/deposit` → `vaults::stake_unxv`
+  - `POST /stake/withdraw` → `vaults::withdraw_stake`
+  - Admin: `POST /stake/freeze`, `POST /stake/slash`, `POST /stake/setMin`
+
+- Vaults (Unified)
+  - `POST /vault/create` → `vaults::create_vault`
+  - `POST /vault/deposit_base` → `vaults::deposit_base`
+  - `POST /vault/withdraw_shares` → `vaults::withdraw_shares`
+  - `POST /vault/set_caps_fees` → `vaults::set_vault_caps_and_fees`
+  - `POST /vault/freeze` → `vaults::set_vault_frozen`
+  - `POST /vault/close` → `vaults::close_vault`
+
+- Vault asset stores
+  - `POST /vault/asset/create`
+  - `POST /vault/asset/deposit`
+  - `POST /vault/asset/withdraw`
+
+- Vault DEX helpers
+  - `POST /vault/dex/place_bid`
+  - `POST /vault/dex/place_ask`
+  - `POST /vault/dex/place_range_bid`
+  - `POST /vault/dex/place_range_ask`
+  - `POST /vault/dex/cancel_to_vault`
+  - `POST /vault/dex/claim_to_vault`
+
+- Vault Synth helpers
+  - `POST /vault/synth/place_with_escrow`
+  - `POST /vault/synth/claim_maker_fills`
 
 All POST endpoints accept JSON inputs and return a serialized transaction (e.g., BCS or base64) ready for wallet signing, plus dry-run gas estimates.
 
@@ -273,11 +298,36 @@ export interface LendingClient {
 }
 
 export interface VaultsClient {
-  createLiquidityVault(params: { registryId: ObjectId; baseSymbol: string; clockId: ObjectId; }): Promise<TxBuildResult>;
-  lpDeposit(params: { vaultId: ObjectId; registryId: ObjectId; oracleCfgId: ObjectId; clockId: ObjectId; basePriceAggId: ObjectId; coin: ObjectId; }): Promise<TxBuildResult>;
-  lpWithdraw(params: { vaultId: ObjectId; registryId: ObjectId; oracleCfgId: ObjectId; clockId: ObjectId; basePriceAggId: ObjectId; shares: bigint; }): Promise<TxBuildResult>;
-  dexPlace(params: { cfgId: ObjectId; vaultId: ObjectId; side: 'buy' | 'sell'; price: bigint; sizeBase: bigint; expiryMs: bigint; }): Promise<TxBuildResult>;
-  synthPlace(params: { registryId: ObjectId; vaultId: ObjectId; collateralVaultId: ObjectId; symbol: string; side: 0 | 1; price: bigint; size: bigint; expiryMs: bigint; }): Promise<TxBuildResult>;
+  // staking
+  stakeDeposit(params: { rsId: ObjectId; unxvCoinIds: ObjectId[] }): Promise<TxBuildResult>;
+  stakeWithdraw(params: { rsId: ObjectId; amount: bigint }): Promise<TxBuildResult>;
+
+  // vault lifecycle
+  createVault(params: { rsId: ObjectId; minCashBps: number }): Promise<TxBuildResult>;
+  setCapsAndFees(params: { vaultId: ObjectId; maxAumBase?: bigint; perfFeeBps?: number }): Promise<TxBuildResult>;
+  freezeVault(params: { vaultId: ObjectId; frozen: boolean }): Promise<TxBuildResult>;
+  closeVault(params: { rsId: ObjectId; vaultId: ObjectId }): Promise<TxBuildResult>;
+
+  // base deposit/withdraw
+  depositBase(params: { vaultId: ObjectId; baseCoinId: ObjectId; amount: bigint; }): Promise<TxBuildResult>;
+  withdrawShares(params: { vaultId: ObjectId; shares: bigint; }): Promise<TxBuildResult>;
+
+  // asset stores
+  createAssetStore(params: { vaultId: ObjectId; }): Promise<TxBuildResult>;
+  depositAsset(params: { vaultId: ObjectId; storeId: ObjectId; assetCoinId: ObjectId; amount: bigint }): Promise<TxBuildResult>;
+  withdrawAsset(params: { vaultId: ObjectId; storeId: ObjectId; amount: bigint }): Promise<TxBuildResult>;
+
+  // DEX
+  placeDexBid(params: { cfgId: ObjectId; marketId: ObjectId; escrowId: ObjectId; vaultId: ObjectId; price: bigint; sizeBase: bigint; expiryMs: bigint; }): Promise<TxBuildResult>;
+  placeDexAsk(params: { cfgId: ObjectId; marketId: ObjectId; escrowId: ObjectId; vaultId: ObjectId; storeId: ObjectId; price: bigint; sizeBase: bigint; expiryMs: bigint; }): Promise<TxBuildResult>;
+  placeDexRangeBid(params: { cfgId: ObjectId; marketId: ObjectId; escrowId: ObjectId; vaultId: ObjectId; pMin: bigint; pMax: bigint; stepTicks: bigint; totalSizeBase: bigint; expiryMs: bigint; }): Promise<TxBuildResult>;
+  placeDexRangeAsk(params: { cfgId: ObjectId; marketId: ObjectId; escrowId: ObjectId; vaultId: ObjectId; storeId: ObjectId; pMin: bigint; pMax: bigint; stepTicks: bigint; totalSizeBase: bigint; expiryMs: bigint; }): Promise<TxBuildResult>;
+  cancelDexToVault(params: { marketId: ObjectId; escrowId: ObjectId; vaultId: ObjectId; orderId: ObjectId; storeId?: ObjectId; }): Promise<TxBuildResult>;
+  claimDexToVault(params: { marketId: ObjectId; escrowId: ObjectId; vaultId: ObjectId; orderId: ObjectId; storeId?: ObjectId; }): Promise<TxBuildResult>;
+
+  // Synths
+  placeSynthWithEscrow(params: { registryId: ObjectId; marketId: ObjectId; escrowId: ObjectId; clockId: ObjectId; oracleCfgId: ObjectId; priceAggId: ObjectId; unxvAggId: ObjectId; takerIsBid: boolean; price: bigint; sizeUnits: bigint; expiryMs: bigint; makerVaultId: ObjectId; unxvCoinIds?: ObjectId[]; treasuryId: ObjectId; }): Promise<TxBuildResult>;
+  claimSynthMakerFills(params: { registryId: ObjectId; marketId: ObjectId; escrowId: ObjectId; orderId: ObjectId; makerVaultId: ObjectId; }): Promise<TxBuildResult>;
 }
 ```
 

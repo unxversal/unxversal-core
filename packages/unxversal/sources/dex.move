@@ -672,6 +672,11 @@ module unxversal::dex {
     public fun get_config_fees(cfg: &DexConfig): (u64, u64, u64, bool) { (cfg.trade_fee_bps, cfg.unxv_discount_bps, cfg.maker_rebate_bps, cfg.paused) }
     public fun get_config_extras(cfg: &DexConfig): (u64, u64, u64) { (cfg.keeper_reward_bps, cfg.gc_reward_bps, cfg.maker_bond_bps) }
 
+    /// Expose book parameters for tick/lot/min-size alignment (for range helpers)
+    public fun get_book_params<Base: store, C: store>(market: &DexMarket<Base, C>): (u64, u64, u64) {
+        (Book::tick_size(&market.book), Book::lot_size(&market.book), Book::min_size(&market.book))
+    }
+
     /*******************************
     * Minimal on-chain CLOB hooks (scaffold)
     * - Future work: define `DexMarket<Base, C>` with `ClobBook`, maker maps, bonds/escrow like synthetics
@@ -800,6 +805,18 @@ module unxversal::dex {
         };
     }
 
+    // package-visible wrappers for vault usage
+    public(package) fun place_dex_limit_with_escrow_bid_pkg<Base: store, C: store>(
+        cfg: &DexConfig,
+        market: &mut DexMarket<Base, C>,
+        escrow: &mut DexEscrow<Base, C>,
+        price: u64,
+        size_base: u64,
+        expiry_ms: u64,
+        taker_collateral: &mut Coin<C>,
+        ctx: &mut TxContext
+    ) { place_dex_limit_with_escrow_bid<Base, C>(cfg, market, escrow, price, size_base, expiry_ms, taker_collateral, ctx) }
+
     /// Taker sells Base; settles immediately from maker collateral escrow, accrues maker base
     entry fun place_dex_limit_with_escrow_ask<Base: store, C: store>(
         cfg: &DexConfig,
@@ -866,11 +883,25 @@ module unxversal::dex {
         };
     }
 
-    /// Maker claims proceeds from accrual maps
-    entry fun claim_dex_maker_fills<Base: store, C: store>(
+    public(package) fun place_dex_limit_with_escrow_ask_pkg<Base: store, C: store>(
+        cfg: &DexConfig,
+        market: &mut DexMarket<Base, C>,
+        escrow: &mut DexEscrow<Base, C>,
+        price: u64,
+        size_base: u64,
+        expiry_ms: u64,
+        taker_base: &mut Coin<Base>,
+        ctx: &mut TxContext
+    ) { place_dex_limit_with_escrow_ask<Base, C>(cfg, market, escrow, price, size_base, expiry_ms, taker_base, ctx) }
+
+    /// Maker claims proceeds from accrual maps.
+    /// Deposits directly into provided coin stores to keep funds inside managed vaults.
+    entry fun claim_dex_maker_fills_to_stores<Base: store, C: store>(
         market: &DexMarket<Base, C>,
         escrow: &mut DexEscrow<Base, C>,
         order_id: u128,
+        to_base_store: &mut Coin<Base>,
+        to_coll_store: &mut Coin<C>,
         ctx: &mut TxContext
     ) {
         assert!(table::contains(&market.makers, order_id), E_NOT_ADMIN);
@@ -881,10 +912,44 @@ module unxversal::dex {
             if (table::contains(&escrow.accrual_collateral, order_id)) {
                 let b = table::remove(&mut escrow.accrual_collateral, order_id);
                 let c = coin::from_balance(b, ctx);
-                transfer::public_transfer(c, maker);
+                coin::join(to_coll_store, c);
             };
         } else {
             // buyer of base → claim base
+            if (table::contains(&escrow.accrual_base, order_id)) {
+                let b = table::remove(&mut escrow.accrual_base, order_id);
+                let c = coin::from_balance(b, ctx);
+                coin::join(to_base_store, c);
+            };
+        };
+    }
+
+    public(package) fun claim_dex_maker_fills_to_stores_pkg<Base: store, C: store>(
+        market: &DexMarket<Base, C>,
+        escrow: &mut DexEscrow<Base, C>,
+        order_id: u128,
+        to_base_store: &mut Coin<Base>,
+        to_coll_store: &mut Coin<C>,
+        ctx: &mut TxContext
+    ) { claim_dex_maker_fills_to_stores<Base, C>(market, escrow, order_id, to_base_store, to_coll_store, ctx) }
+
+    /// Maker claims proceeds and transfers directly to maker address (EOA‑friendly path)
+    entry fun claim_dex_maker_fills<Base: store, C: store>(
+        market: &DexMarket<Base, C>,
+        escrow: &mut DexEscrow<Base, C>,
+        order_id: u128,
+        ctx: &mut TxContext
+    ) {
+        assert!(table::contains(&market.makers, order_id), E_NOT_ADMIN);
+        let maker = *table::borrow(&market.makers, order_id);
+        let side = if (table::contains(&market.maker_sides, order_id)) { *table::borrow(&market.maker_sides, order_id) } else { 0 };
+        if (side == 1) {
+            if (table::contains(&escrow.accrual_collateral, order_id)) {
+                let b = table::remove(&mut escrow.accrual_collateral, order_id);
+                let c = coin::from_balance(b, ctx);
+                transfer::public_transfer(c, maker);
+            };
+        } else {
             if (table::contains(&escrow.accrual_base, order_id)) {
                 let b = table::remove(&mut escrow.accrual_base, order_id);
                 let c = coin::from_balance(b, ctx);
@@ -912,6 +977,48 @@ module unxversal::dex {
         if (table::contains(&market.claimed, order_id)) { let _ = table::remove(&mut market.claimed, order_id); };
         Book::cancel_order_by_id(&mut market.book, order_id);
     }
+
+    /// Cancel and refund maker bond and pending escrow into provided coin stores (vault-friendly)
+    entry fun cancel_dex_clob_with_escrow_to_stores<Base: store, C: store>(
+        market: &mut DexMarket<Base, C>,
+        escrow: &mut DexEscrow<Base, C>,
+        order_id: u128,
+        to_base_store: &mut Coin<Base>,
+        to_coll_store: &mut Coin<C>,
+        ctx: &mut TxContext
+    ) {
+        assert!(table::contains(&market.makers, order_id), E_NOT_ADMIN);
+        let maker = *table::borrow(&market.makers, order_id);
+        assert!(maker == ctx.sender(), E_NOT_ADMIN);
+        if (table::contains(&escrow.pending_base, order_id)) {
+            let b = table::remove(&mut escrow.pending_base, order_id);
+            let c = coin::from_balance(b, ctx);
+            coin::join(to_base_store, c);
+        };
+        if (table::contains(&escrow.pending_collateral, order_id)) {
+            let b = table::remove(&mut escrow.pending_collateral, order_id);
+            let c = coin::from_balance(b, ctx);
+            coin::join(to_coll_store, c);
+        };
+        if (table::contains(&escrow.bonds, order_id)) {
+            let b = table::remove(&mut escrow.bonds, order_id);
+            let c = coin::from_balance(b, ctx);
+            coin::join(to_coll_store, c);
+        };
+        let _ = table::remove(&mut market.makers, order_id);
+        if (table::contains(&market.maker_sides, order_id)) { let _ = table::remove(&mut market.maker_sides, order_id); };
+        if (table::contains(&market.claimed, order_id)) { let _ = table::remove(&mut market.claimed, order_id); };
+        Book::cancel_order_by_id(&mut market.book, order_id);
+    }
+
+    public(package) fun cancel_dex_clob_with_escrow_to_stores_pkg<Base: store, C: store>(
+        market: &mut DexMarket<Base, C>,
+        escrow: &mut DexEscrow<Base, C>,
+        order_id: u128,
+        to_base_store: &mut Coin<Base>,
+        to_coll_store: &mut Coin<C>,
+        ctx: &mut TxContext
+    ) { cancel_dex_clob_with_escrow_to_stores<Base, C>(market, escrow, order_id, to_base_store, to_coll_store, ctx) }
 
     /// Auto-match steps without settlement (advance book only)
     entry fun match_step_auto<Base: store, C: store>(
