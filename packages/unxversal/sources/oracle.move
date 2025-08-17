@@ -1,37 +1,57 @@
 /// Module: unxversal_oracle
 /// ------------------------------------------------------------
-/// * Stores an on‑chain allow‑list of valid Pyth price‑feed IDs
+/// * Provides oracle staleness config and a symbol→aggregator allow‑list
 /// * Admins (validated via `unxversal::synthetics::AdminCap` allow‑list) can
-///   add / remove feeds
-/// * `get_latest_price` returns a fresh `I64` price after staleness + ID checks
-/// * Includes Display metadata so wallets can show a friendly label
+///   set/remove feeds and update staleness policy
+/// * `get_price_scaled_1e6` reads a given aggregator with staleness/positivity checks
+/// * `get_price_for_symbol` validates aggregator identity against the allow‑list for a symbol
 
 module unxversal::oracle {
     // Default aliases for TxContext/object/transfer are available without explicit `use`
     use sui::clock::Clock;          // block‑timestamp source
     use switchboard::aggregator::{Self as aggregator, Aggregator};
     use switchboard::decimal::{Self as decimal};
+    use sui::table::{Self as table, Table};
+    use std::string::{Self as string, String};
+    use unxversal::admin::{Self as AdminMod, AdminRegistry};
+    use sui::event;
 
     // No cross-module admin types to avoid dependency cycles
 
 
-    const E_BAD_PRICE: u64 = 1;      // Non‑positive price
-    const E_STALE: u64    = 2;      // Update too old
-    const E_OVERFLOW: u64 = 3;      // Overflow during scaling
+    const E_BAD_PRICE: u64     = 1;      // Non‑positive price
+    const E_STALE: u64        = 2;      // Update too old
+    const E_OVERFLOW: u64     = 3;      // Overflow during scaling
+    const E_SYMBOL_UNKNOWN: u64 = 4;    // Symbol not registered
+    const E_FEED_MISMATCH: u64  = 5;    // Aggregator id does not match allow‑list
 
     /*******************************
-    * OracleConfig – shared object storing the allow‑list
+    * Legacy OracleConfig – retained for compatibility (staleness policy only)
     *******************************/
     public struct OracleConfig has key, store {
         id: UID,
         max_age_sec: u64,                    // Staleness tolerance (default 60)
     }
 
-    // Admin gating omitted here to avoid dependency cycles. Use a separate governance flow.
+    /*******************************
+    * OracleRegistry – authoritative symbol→aggregator mapping + staleness policy
+    *******************************/
+    public struct OracleRegistry has key, store {
+        id: UID,
+        max_age_sec: u64,
+        feeds: Table<String, ID>,            // symbol → aggregator object id
+    }
 
     /*******************************
-    * INIT  – called once via synthetics deployment script
-    * Creates OracleConfig shared object + Display metadata.
+    * Events
+    *******************************/
+    public struct OracleRegistryInitialized has copy, drop { by: address, timestamp: u64 }
+    public struct OracleFeedSet has copy, drop { symbol: String, aggregator_id: ID, by: address, timestamp: u64 }
+    public struct OracleFeedRemoved has copy, drop { symbol: String, by: address, timestamp: u64 }
+    public struct OracleMaxAgeUpdated has copy, drop { max_age_sec: u64, by: address, timestamp: u64 }
+
+    /*******************************
+    * INIT  – legacy config initializer (kept for backwards compatibility)
     *******************************/
     /// One‑Time Witness enforcing single‑run init
     public struct ORACLE has drop {}
@@ -41,18 +61,46 @@ module unxversal::oracle {
         transfer::share_object(config);
     }
     
-    // Switchboard integration does not maintain an on-chain allow-list here.
+    /*******************************
+    * INIT (new) – create OracleRegistry with default params
+    *******************************/
+    entry fun init_registry(reg_admin: &AdminRegistry, ctx: &mut TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_FEED_MISMATCH);
+        let reg = OracleRegistry { id: object::new(ctx), max_age_sec: 60, feeds: table::new<String, ID>(ctx) };
+        transfer::share_object(reg);
+        event::emit(OracleRegistryInitialized { by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
 
-    /// Optional granular setter for staleness allowance
+    /// Optional granular setter for staleness allowance (legacy config)
+    public fun set_max_age(cfg: &mut OracleConfig, new_max_age: u64, _ctx: &TxContext) { cfg.max_age_sec = new_max_age; }
 
-    public fun set_max_age(
-        cfg: &mut OracleConfig,
-        new_max_age: u64,
-        _ctx: &TxContext
-    ) { cfg.max_age_sec = new_max_age; }
+    /// Set staleness allowance on the new registry (admin‑gated)
+    entry fun set_max_age_registry(reg_admin: &AdminRegistry, reg: &mut OracleRegistry, new_max_age: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_FEED_MISMATCH);
+        reg.max_age_sec = new_max_age;
+        event::emit(OracleMaxAgeUpdated { max_age_sec: new_max_age, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    /// Admin: set or update the aggregator for a symbol in the allow‑list
+    entry fun set_feed(reg_admin: &AdminRegistry, reg: &mut OracleRegistry, symbol: String, agg: &Aggregator, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_FEED_MISMATCH);
+        let sym = clone_string(&symbol);
+        if (table::contains(&reg.feeds, clone_string(&sym))) { let _ = table::remove(&mut reg.feeds, clone_string(&sym)); };
+        table::add(&mut reg.feeds, clone_string(&sym), object::id(agg));
+        event::emit(OracleFeedSet { symbol: sym, aggregator_id: object::id(agg), by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    /// Admin: remove the aggregator mapping for a symbol
+    entry fun remove_feed(reg_admin: &AdminRegistry, reg: &mut OracleRegistry, symbol: String, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_FEED_MISMATCH);
+        let sym = clone_string(&symbol);
+        assert!(table::contains(&reg.feeds, clone_string(&sym)), E_SYMBOL_UNKNOWN);
+        let _ = table::remove(&mut reg.feeds, clone_string(&sym));
+        event::emit(OracleFeedRemoved { symbol: sym, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
 
     /*******************************
-    * Public read – Switchboard aggregator value (scaled to 1e6)
+    * Public reads – Switchboard values (scaled to 1e6)
     *******************************/
     public fun get_price_scaled_1e6(
         cfg: &OracleConfig,
@@ -72,8 +120,42 @@ module unxversal::oracle {
         v as u64
     }
 
+    /// Read price for a symbol using the allow‑listed aggregator id on the registry.
+    /// Verifies: symbol exists, aggregator id matches, staleness and positivity.
+    public fun get_price_for_symbol(
+        reg: &OracleRegistry,
+        clock: &Clock,
+        symbol: &String,
+        agg: &Aggregator
+    ): u64 {
+        assert!(table::contains(&reg.feeds, clone_string(symbol)), E_SYMBOL_UNKNOWN);
+        let expected = *table::borrow(&reg.feeds, clone_string(symbol));
+        assert!(expected == object::id(agg), E_FEED_MISMATCH);
+        let cur = aggregator::current_result(agg);
+        let latest_ms = aggregator::max_timestamp_ms(cur);
+        let now_ms = sui::clock::timestamp_ms(clock);
+        let age_ms = if (now_ms > latest_ms) { now_ms - latest_ms } else { 0 };
+        assert!(age_ms <= reg.max_age_sec * 1000, E_STALE);
+        let dec = aggregator::result(cur);
+        let v = decimal::value(dec);
+        assert!(v > 0, E_BAD_PRICE);
+        assert!(v <= (U64_MAX_LITERAL as u128), E_OVERFLOW);
+        v as u64
+    }
+
     /*******************************
      * Fixed‑point normalization helpers
      *******************************/
     const U64_MAX_LITERAL: u64 = 18_446_744_073_709_551_615;
+
+    /*******************************
+    * Helpers
+    *******************************/
+    fun clone_string(s: &String): String {
+        let bytes = string::as_bytes(s);
+        let mut out = vector::empty<u8>();
+        let mut i = 0; let n = vector::length(bytes);
+        while (i < n) { vector::push_back(&mut out, *vector::borrow(bytes, i)); i = i + 1; };
+        string::utf8(out)
+    }
 }

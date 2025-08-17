@@ -5,10 +5,10 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 ### Cross‑cutting (do first)
 - **Oracle allow‑list + bindings (P0)**: Implement symbol → aggregator ID registry and enforce across all modules. Replace arbitrary `Aggregator` params with bound lookups or bound verifiers. Add staleness guard via `oracle::max_age_sec`.
 - **Arithmetic safety (P0→P1)**: Promote all notional/fee/ratio math to u128 with safe clamps before converting to u64. Add input caps (tick, size, notional) to prevent abort‑on‑overflow DoS.
-- **Admin centralization (P0)**: Gate all admin operations via `synthetics::SynthRegistry` (AdminCap/DaddyCap) as the single source of truth; remove per‑module bespoke admin caps where feasible (or bridge them to synth registry checks).
+- **Admin centralization (P0)**: Introduce `unxversal::admin::AdminRegistry` as the single source of truth for admin addresses. Gate all admin entry functions across modules via this registry and remove/bypass bespoke caps (bridge where unavoidable).
 - **Time source normalization (P0)**: Use `sui::clock::Clock` `timestamp_ms(clock)` in entry paths/events instead of `sui::tx_context::epoch_timestamp_ms` to standardize time semantics, per project preference.
 - **UNXV discount parity (P0)**: Standardize UNXV fee‑discount flow: fetch UNXV/USD via bound oracle; compute `unxv_needed = ceil(discount_usd / px_unxv)`; require and escrow it; refund leftovers. Apply uniformly across DEX, options, futures, gas_futures, perps.
-- **Bot reward policy (P1)**: Harmonize bot reward bps and routing across products; document invariants.
+- **Bot rewards treasury + points system (P1)**: Add a dedicated `BotRewardsTreasury` shared object and a `BotPointsRegistry` that maps protocol function keys (e.g., list_market, refresh_funding) to point weights. Monthly, distribute the bot rewards treasury pro‑rata to addresses by points earned. Treasury gains a config to auto‑transfer X% of every fee it receives into the bot rewards treasury. Immediate split flows (e.g., liquidations) continue to pay out instantly; the points system covers non‑fee or delayed‑fee tasks.
 
 ### 1) `unxv.move`
 - **P0**: None. Confirm SupplyCap holder operational processes and event coverage.
@@ -18,15 +18,15 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 ### 2) `oracle.move`
 - **P0**:
   - Implement `OracleRegistry` shared object: `symbol: String → aggregator_id: ID` map, `max_age_sec` config.
-  - Add `set_feed(symbol, aggregator)` admin path (gated via SynthRegistry).
+  - Add `set_feed(symbol, aggregator)` admin path (gated via `unxversal::admin::AdminRegistry`).
   - Provide `price_for_symbol(clock, symbol)` that fetches aggregator by ID, verifies staleness, returns micro‑USD u64.
-- **P1**: Optional Display; add deviation checks hooks (EMA) for later.
-- **Acceptance**: All downstream modules depend on this API; unit tests use bounded staleness.
+- **P1**: Optional Display; add deviation checks hooks (EMA) for later. Also emit standardized bot‑task events to award points (e.g., feed maintenance tasks) into the central points registry.
+- **Acceptance**: All downstream modules depend on this API; unit tests use bounded staleness; bot‑task events integrate with points registry.
 
 ### 3) `treasury.move`
 - **P0**: None critical. Keep as central fee sink with admin‑gated withdrawals.
-- **P1**: Add optional rate‑limit controls; unify bot reward routing helpers.
-- **Acceptance**: Deposits from all modules succeed; UNXV burn path via SupplyCap works.
+- **P1**: Add optional rate‑limit controls; unify bot reward routing helpers. Add `auto_bot_rewards_bps` to divert a percentage of all incoming fees to `BotRewardsTreasury`. Expose settlement function to distribute pro‑rata by points each epoch/month.
+- **Acceptance**: Deposits from all modules succeed; UNXV burn path via SupplyCap works; auto_bot_rewards_bps routes funds; monthly pro‑rata distribution from BotRewardsTreasury is deterministic and idempotent.
 
 ### 4) `synthetics.move`
 - **P0**:
@@ -34,8 +34,8 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
   - For multi‑asset flows that use `PriceSet`, enforce that `PriceSet` is constructed via module helper that binds aggregator IDs and timestamps; validate within entry to reject foreign/forged `PriceSet` (symbol exist, feed match, staleness within `max_age_sec`). If this cannot be enforced cleanly, deprecate multi‑asset entrypoints and migrate to single‑asset loops.
   - Promote CCR, fee, and liquidation math to u128.
   - Align events to `Clock` timestamps.
-- **P1**: Revisit liquidation incentive split vs treasury; add reconciliation hooks/events for integration with lending (expose per‑vault debt/CCR deltas).
-- **Acceptance**: Mint/burn/liquidate cannot proceed with spoofed prices; no overflows; consistent events.
+- **P1**: Revisit liquidation incentive split vs treasury; add reconciliation hooks/events for integration with lending (expose per‑vault debt/CCR deltas). Add per‑function bot split config and points‑awarding hooks, integrated with `BotRewardsTreasury` (immediate split where applicable; points for non‑fee tasks like risk scans).
+- **Acceptance**: Mint/burn/liquidate cannot proceed with spoofed prices; no overflows; consistent events; bot split config present; points emitted for non‑fee tasks.
 
 ### 5) `lending.move`
 - **P0**:
@@ -43,44 +43,44 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
   - Fix liquidation math to convert scaled balances to units for comparisons; write back scaled via index helpers.
   - Restrict `accrue_synth_market`: gate via admin/bot; derive `dt` from on‑chain time; store last accrual in market state.
   - Centralize admin via SynthRegistry; deprecate bespoke `LendingAdminCap` if possible, or enforce `assert_is_admin_via_synth` wrapper.
-- **P1**: Migrate all u64 notional math to u128; add per‑asset caps; standardize events to `Clock`.
-- **Acceptance**: Health checks immune to spoofed inputs; liquidation math correct; accrual unexploitable.
+- **P1**: Migrate all u64 notional math to u128; add per‑asset caps; standardize events to `Clock`. Add bot split config and points awarding for maintenance tasks (e.g., accrual, rate updates, health scanning), wired into `BotRewardsTreasury`.
+- **Acceptance**: Health checks immune to spoofed inputs; liquidation math correct; accrual unexploitable; bot split config present; points emitted for maintenance tasks.
 
 ### 6) `options.move`
 - **P0**:
   - Fix creation‑fee UNXV discount: require sufficient UNXV by oracle valuation before applying discount; refund leftovers.
   - Bind settlement/exercise aggregators to stored per‑underlying feed identity; validate on call.
   - Promote payouts/fees to u128.
-- **P1**: Evaluate physical settlement orchestration hooks; ensure bot reward consistency.
-- **Acceptance**: No free discounts; settlement/exercise reject wrong feeds; no overflow aborts.
+- **P1**: Evaluate physical settlement orchestration hooks; ensure bot reward consistency. Add bot split config and points for non‑fee tasks (e.g., market listing/orchestration), with treasury auto‑allocation in place.
+- **Acceptance**: No free discounts; settlement/exercise reject wrong feeds; no overflow aborts; bot split config present; points emitted for non‑fee tasks.
 
 ### 7) `futures.move`
 - **P0**:
   - Keep good practice: settlement already binds feed by object ID. Extend binding to any price‑dependent admin ops.
   - Standardize UNXV discount flow and u128 math in `record_fill` and fee routing.
-- **P1**: Add input caps and consistent bot reward policy.
-- **Acceptance**: Trades/settlement safe from overflow; discounts priced correctly.
+- **P1**: Add input caps and consistent bot reward policy. Add per‑function bot split config and points hooks (e.g., queue processing, settlement requests) integrated with bot rewards treasury.
+- **Acceptance**: Trades/settlement safe from overflow; discounts priced correctly; bot split config present; points emitted for non‑fee tasks.
 
 ### 8) `gas_futures.move`
 - **P0**:
   - Bind SUI/USD and UNXV/USD aggregator IDs in registry; reject arbitrary aggregators.
   - Migrate notional/fees to u128; standardize discount flow.
-- **P1**: Confirm RGP×SUI math bounds; document units rigorously.
-- **Acceptance**: Fills/settlement safe; discounts correct; unit math documented.
+- **P1**: Confirm RGP×SUI math bounds; document units rigorously. Add bot split config and points hooks (e.g., gas settlement queue processing, listings) with rewards treasury integration.
+- **Acceptance**: Fills/settlement safe; discounts correct; unit math documented; bot split config present; points emitted for non‑fee tasks.
 
 ### 9) `perpetuals.move`
 - **P0**:
   - Bind index price to oracle: replace caller‑supplied index price with oracle fetch; pass symbol or market→feed binding.
   - Standardize discount flow and u128 math.
-- **P1**: Funding computation caps already present; ensure direction and cap logic tested under bounds.
-- **Acceptance**: Funding cannot be skewed by callers; fills safe; events consistent.
+- **P1**: Funding computation caps already present; ensure direction and cap logic tested under bounds. Add bot split config and points hooks (e.g., funding refresh, risk checks) tied to rewards treasury.
+- **Acceptance**: Funding cannot be skewed by callers; fills safe; events consistent; bot split config present; points emitted for non‑fee tasks.
 
 ### 10) `vaults.move`
 - **P0**:
   - Promote `need = per * p` and similar notional math to u128; pre‑check against u64 max before splitting balances.
   - Ensure all manager actions check stake registry; they do—add unit tests.
-- **P1**: Add optional vault risk limits (per‑order cash buffer enforcement already present).
-- **Acceptance**: Range ladder cannot overflow; manager gating enforced.
+- **P1**: Add optional vault risk limits (per‑order cash buffer enforcement already present). Add bot split config and points hooks for non‑fee tasks (e.g., range ladder upkeep), with rewards treasury integration.
+- **Acceptance**: Range ladder cannot overflow; manager gating enforced; bot split config present; points emitted for non‑fee tasks.
 
 ### Deliverables & sequencing
 - Week 1: Oracle allow‑list + bindings; discount parity implementation; time‑source normalization; arithmetic upgrade skeleton and helper library.
@@ -95,4 +95,8 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 - UNXV discount flow consistent and priced by oracle everywhere.
 - Time source standardized on `sui::clock::Clock` in entry paths/events.
 - Liquidations/settlements cannot be triggered or blocked by user‑supplied price vectors.
+- BotRewardsTreasury deployed and funded via `auto_bot_rewards_bps`; monthly pro‑rata distribution is deterministic, idempotent, and evented.
+- BotPointsRegistry exists with admin‑configurable point weights per task; all non‑immediate bot tasks emit points; immediate‑reward functions have per‑protocol split configs.
+- Treasury fee conservation holds per deposit: immediate splits + auto bot transfer + retained equals fees in.
+- Events exist for points accrual and distributions; indexable for off‑chain accounting.
 - No linter warnings introduced; builds clean; on‑chain invariants documented.
