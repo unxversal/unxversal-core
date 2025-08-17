@@ -10,12 +10,12 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 - **UNXV discount parity (P0)**: Standardize UNXV fee‑discount flow: fetch UNXV/USD via bound oracle; compute `unxv_needed = ceil(discount_usd / px_unxv)`; require and escrow it; refund leftovers. Apply uniformly across DEX, options, futures, gas_futures, perps.
 - **Bot rewards treasury + points system (P1)**: Add a dedicated `BotRewardsTreasury` shared object and a `BotPointsRegistry` that maps protocol function keys (e.g., list_market, refresh_funding) to point weights. Monthly, distribute the bot rewards treasury pro‑rata to addresses by points earned. Treasury gains a config to auto‑transfer X% of every fee it receives into the bot rewards treasury. Immediate split flows (e.g., liquidations) continue to pay out instantly; the points system covers non‑fee or delayed‑fee tasks.
 
-### 1) `unxv.move`
+### 1) `unxv.move` ✅
 - **P0**: None. Confirm SupplyCap holder operational processes and event coverage.
 - **P1**: Add Display metadata if missing icons/links. Ensure burn/mint events include reason/context.
 - **Acceptance**: Cap enforced; mint/burn events present; no u64 overflows.
 
-### 2) `oracle.move`
+### 2) `oracle.move` ✅
 - **P0**:
   - Implement `OracleRegistry` shared object: `symbol: String → aggregator_id: ID` map, `max_age_sec` config.
   - Add `set_feed(symbol, aggregator)` admin path (gated via `unxversal::admin::AdminRegistry`).
