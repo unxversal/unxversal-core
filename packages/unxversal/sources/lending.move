@@ -21,6 +21,7 @@ module unxversal::lending {
 
     use std::string::{Self as string, String};
     use sui::vec_set::{Self as vec_set, VecSet};
+    use unxversal::bot_rewards::{Self as BotRewards, BotPointsRegistry};
 
     // Synthetics integration
     use switchboard::aggregator::Aggregator;

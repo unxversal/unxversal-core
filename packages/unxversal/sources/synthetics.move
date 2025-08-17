@@ -26,6 +26,7 @@ module unxversal::synthetics {
     use unxversal::book::{Self as Book, Book as ClobBook, Fill};
     use unxversal::utils; // order id encoding/decoding
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
+    use unxversal::bot_rewards::{Self as BotRewards, BotPointsRegistry};
 
     fun clone_string(s: &String): String {
         
@@ -497,6 +498,22 @@ module unxversal::synthetics {
         transfer::share_object(mkt);
     }
 
+    /// Variant that awards bot points for market listing orchestration
+    entry fun init_synth_market_with_points(
+        registry: &SynthRegistry,
+        symbol: String,
+        tick_size: u64,
+        lot_size: u64,
+        min_size: u64,
+        points: &mut BotPointsRegistry,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        init_synth_market(registry, clone_string(&symbol), tick_size, lot_size, min_size, ctx);
+        // Award points to caller for non-fee bot task
+        BotRewards::award_points(points, b"synthetics.init_synth_market".to_string(), ctx.sender(), clock);
+    }
+
     /// Escrow object holding collateral owed to makers until claimed
     #[allow(lint(coin_field))]
     public struct SynthEscrow<phantom C> has key, store {
@@ -946,6 +963,26 @@ module unxversal::synthetics {
         }
     }
 
+    /// Award points to keepers running match steps (no direct fee to caller)
+    entry fun match_step_auto_with_points<C: store>(
+        points: &mut BotPointsRegistry,
+        clock: &Clock,
+        registry: &SynthRegistry,
+        market: &mut SynthMarket,
+        _clock: &Clock,
+        _oracle_cfg: &OracleConfig,
+        _price_info: &Aggregator,
+        _unxv_price: &Aggregator,
+        max_steps: u64,
+        min_price: u64,
+        max_price: u64,
+        _treasury: &mut Treasury<C>,
+        ctx: &TxContext
+    ) {
+        match_step_auto<C>(registry, market, _clock, _oracle_cfg, _price_info, _unxv_price, max_steps, min_price, max_price, _treasury, ctx);
+        BotRewards::award_points(points, b"synthetics.match_step_auto".to_string(), ctx.sender(), clock);
+    }
+
     // Removed: direct settlement entry is not supported in escrow-only model
 
     /// Expiry GC: remove up to max_removals expired orders from both sides and clean metadata
@@ -986,6 +1023,22 @@ module unxversal::synthetics {
             if (table::contains(&market.claimed_units, oid)) { let _ = table::remove(&mut market.claimed_units, oid); };
             i = i + 1;
         };
+    }
+
+    /// Award points to GC keepers when no direct fee accrues to caller beyond slashing flows
+    entry fun gc_step_with_points<C: store>(
+        points: &mut BotPointsRegistry,
+        clock: &Clock,
+        registry: &SynthRegistry,
+        market: &mut SynthMarket,
+        escrow: &mut SynthEscrow<C>,
+        treasury: &mut Treasury<C>,
+        now_ts: u64,
+        max_removals: u64,
+        ctx: &mut TxContext
+    ) {
+        gc_step<C>(registry, market, escrow, treasury, now_ts, max_removals, ctx);
+        BotRewards::award_points(points, b"synthetics.gc_step".to_string(), ctx.sender(), clock);
     }
 
     // No display for SyntheticAsset (lacks 'key')
