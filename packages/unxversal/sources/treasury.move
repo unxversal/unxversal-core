@@ -32,7 +32,7 @@ module unxversal::treasury {
     /*******************************
     * Config and capabilities
     *******************************/
-    public struct TreasuryCfg has store, drop { unxv_burn_bps: u64 }
+    public struct TreasuryCfg has store, drop { unxv_burn_bps: u64, auto_bot_rewards_bps: u64 }
 
     public struct TreasuryCap has key, store { id: UID }
 
@@ -46,11 +46,18 @@ module unxversal::treasury {
         cfg: TreasuryCfg,
     }
 
+    /// Bot rewards treasury – accumulates automatic splits for bots
+    public struct BotRewardsTreasury<phantom C> has key, store {
+        id: UID,
+        collateral: Balance<C>,
+        unxv: Balance<UNXV>,
+    }
+
     /*******************************
     * Init and Display
     *******************************/
     entry fun init_treasury<C>(ctx: &mut TxContext) {
-        let t = Treasury<C> { id: object::new(ctx), collateral: balance::zero<C>(), unxv: balance::zero<UNXV>(), cfg: TreasuryCfg { unxv_burn_bps: 0 } };
+        let t = Treasury<C> { id: object::new(ctx), collateral: balance::zero<C>(), unxv: balance::zero<UNXV>(), cfg: TreasuryCfg { unxv_burn_bps: 0, auto_bot_rewards_bps: 0 } };
         let tid = object::id(&t);
         event::emit(TreasuryInitialized { treasury_id: tid, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         transfer::share_object(t);
@@ -65,6 +72,12 @@ module unxversal::treasury {
         disp.add(b"project_url".to_string(), b"https://unxversal.com".to_string());
         disp.update_version();
         transfer::public_transfer(disp, ctx.sender());
+    }
+
+    /// Create a BotRewardsTreasury for collateral type C
+    entry fun init_bot_rewards_treasury<C>(ctx: &mut TxContext) {
+        let b = BotRewardsTreasury<C> { id: object::new(ctx), collateral: balance::zero<C>(), unxv: balance::zero<UNXV>() };
+        transfer::share_object(b);
     }
 
     /*******************************
@@ -118,6 +131,11 @@ module unxversal::treasury {
         event::emit(TreasuryPolicyUpdated { by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
+    /// Set automatic bot rewards split (bps in [0,10000])
+    entry fun set_auto_bot_rewards_bps<C>(_cap: &TreasuryCap, treasury: &mut Treasury<C>, bps: u64, _ctx: &TxContext) {
+        treasury.cfg.auto_bot_rewards_bps = bps;
+    }
+
     /// Burn UNXV from treasury using the protocol's SupplyCap
     entry fun burn_unxv<C>(_cap: &TreasuryCap, treasury: &mut Treasury<C>, sc: &mut SupplyCap, amount: u64, ctx: &mut TxContext) {
         assert!(amount > 0, E_ZERO_AMOUNT);
@@ -152,6 +170,48 @@ module unxversal::treasury {
         assert!(total > 0, E_ZERO_AMOUNT);
         let bal = coin::into_balance(merged);
         balance::join(&mut treasury.unxv, bal);
+        event::emit(FeeReceived { source, asset: b"UNXV".to_string(), amount: total, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        vector::destroy_empty<Coin<UNXV>>(v);
+    }
+
+    /// Deposit variants that apply automatic bot reward split
+    public(package) fun deposit_collateral_with_rewards<C>(treasury: &mut Treasury<C>, bot: &mut BotRewardsTreasury<C>, c: Coin<C>, source: String, payer: address, ctx: &mut TxContext) {
+        let amount = coin::value(&c);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        let bps = treasury.cfg.auto_bot_rewards_bps;
+        if (bps == 0) {
+            let bal = coin::into_balance(c);
+            balance::join(&mut treasury.collateral, bal);
+            event::emit(FeeReceived { source, asset: b"COLLATERAL".to_string(), amount, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+            return
+        };
+        let to_bot = (amount * bps) / 10_000;
+        let mut tmp = c;
+        let bot_coin = if (to_bot > 0) { coin::split(&mut tmp, to_bot, ctx) } else { coin::zero<C>(ctx) };
+        let tre_coin = tmp;
+        if (to_bot > 0) { let bot_bal = coin::into_balance(bot_coin); balance::join(&mut bot.collateral, bot_bal); } else { coin::destroy_zero(bot_coin); };
+        let tre_bal = coin::into_balance(tre_coin); balance::join(&mut treasury.collateral, tre_bal);
+        event::emit(FeeReceived { source, asset: b"COLLATERAL".to_string(), amount, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    public(package) fun deposit_unxv_with_rewards<C>(treasury: &mut Treasury<C>, bot: &mut BotRewardsTreasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {
+        let mut merged = coin::zero<UNXV>(ctx);
+        let mut total: u64 = 0;
+        while (!vector::is_empty(&v)) { let c = vector::pop_back(&mut v); total = total + coin::value(&c); coin::join(&mut merged, c); };
+        assert!(total > 0, E_ZERO_AMOUNT);
+        let bps = treasury.cfg.auto_bot_rewards_bps;
+        if (bps == 0) {
+            let bal = coin::into_balance(merged); balance::join(&mut treasury.unxv, bal);
+            event::emit(FeeReceived { source, asset: b"UNXV".to_string(), amount: total, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+            vector::destroy_empty<Coin<UNXV>>(v);
+            return
+        };
+        let to_bot = (total * bps) / 10_000;
+        let mut tmpu = merged;
+        let bot_unxv = if (to_bot > 0) { coin::split(&mut tmpu, to_bot, ctx) } else { coin::zero<UNXV>(ctx) };
+        let tre_unxv = tmpu;
+        if (to_bot > 0) { let bot_bal_u = coin::into_balance(bot_unxv); balance::join(&mut bot.unxv, bot_bal_u); } else { coin::destroy_zero(bot_unxv); };
+        let tre_bal_u = coin::into_balance(tre_unxv); balance::join(&mut treasury.unxv, tre_bal_u);
         event::emit(FeeReceived { source, asset: b"UNXV".to_string(), amount: total, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         vector::destroy_empty<Coin<UNXV>>(v);
     }
