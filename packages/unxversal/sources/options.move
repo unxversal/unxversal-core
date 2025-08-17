@@ -17,13 +17,15 @@ module unxversal::options {
     use sui::table::{Self as table, Table};
     // timestamp helpers via Clock type import below
     use sui::clock::Clock;
-    use switchboard::aggregator::Aggregator;
-    use unxversal::oracle::{OracleConfig, get_price_scaled_1e6};
-    use unxversal::treasury::{Self as TreasuryMod, Treasury};
+    use switchboard::aggregator::{Self as sb_agg, Aggregator};
+    use unxversal::oracle::{Self as OracleMod, OracleConfig, get_price_scaled_1e6};
+    use unxversal::treasury::{Self as TreasuryMod, Treasury, BotRewardsTreasury};
     use unxversal::unxv::UNXV;
     use sui::coin::{Self as coin, Coin};
     use sui::balance::{Self as BalanceMod, Balance};
     use unxversal::synthetics::{Self as Synth, SynthRegistry, AdminCap, DaddyCap};
+    use unxversal::admin::{Self as AdminMod, AdminRegistry};
+    use unxversal::bot_rewards::{Self as BotRewards, BotPointsRegistry};
 
     /*******************************
     * Errors
@@ -318,6 +320,30 @@ module unxversal::options {
         string::utf8(out)
     }
 
+    fun eq_vec_u8(a: &vector<u8>, b: &vector<u8>): bool {
+        let la = vector::length(a);
+        let lb = vector::length(b);
+        if (la != lb) { return false };
+        let mut i = 0;
+        while (i < la) { if (*vector::borrow(a, i) != *vector::borrow(b, i)) { return false }; i = i + 1; };
+        true
+    }
+
+    /// Strict price read for an underlying: enforce aggregator feed binding from `OptionsRegistry`
+    fun assert_and_get_price_for_underlying(
+        reg: &OptionsRegistry,
+        underlying: &String,
+        clock: &Clock,
+        oracle_cfg: &OracleConfig,
+        agg: &Aggregator
+    ): u64 {
+        assert!(table::contains(&reg.supported_underlyings, clone_string(underlying)), E_UNDERLYING_UNKNOWN);
+        let ua = table::borrow(&reg.supported_underlyings, clone_string(underlying));
+        let actual = sb_agg::feed_hash(agg);
+        assert!(eq_vec_u8(&actual, &ua.oracle_feed), E_MISMATCH);
+        OracleMod::get_price_scaled_1e6(oracle_cfg, clock, agg)
+    }
+
     fun clone_bytes(src: &vector<u8>): vector<u8> {
         let mut out = vector::empty<u8>();
         let mut i = 0; let n = vector::length(src);
@@ -419,10 +445,13 @@ module unxversal::options {
 
     public fun set_treasury<C>(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, treasury: &Treasury<C>, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.treasury_id = object::id(treasury); }
     public fun set_fee_config(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, trade_fee_bps: u64, unxv_discount_bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.trade_fee_bps = trade_fee_bps; reg.unxv_discount_bps = unxv_discount_bps; }
+    public fun set_fee_config_admin(reg_admin: &AdminRegistry, reg: &mut OptionsRegistry, trade_fee_bps: u64, unxv_discount_bps: u64, ctx: &TxContext) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); reg.trade_fee_bps = trade_fee_bps; reg.unxv_discount_bps = unxv_discount_bps; }
     public fun set_settlement_fee_bps(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.settlement_fee_bps = bps; }
+    public fun set_settlement_fee_bps_admin(reg_admin: &AdminRegistry, reg: &mut OptionsRegistry, bps: u64, ctx: &TxContext) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); reg.settlement_fee_bps = bps; }
     public fun set_liq_penalty_bps(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.liq_penalty_bps = bps; }
     public fun set_bot_reward_bps(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, liq_bot_bps: u64, close_bot_bps: u64, settle_bot_bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.liq_bot_reward_bps = liq_bot_bps; reg.close_bot_reward_bps = close_bot_bps; reg.settlement_bot_reward_bps = settle_bot_bps; }
     public fun set_maker_rebate_bps_close(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut OptionsRegistry, bps: u64, ctx: &TxContext) { assert_is_admin_via_synth(synth_reg, ctx.sender()); reg.maker_rebate_bps_close = bps; }
+    public fun set_maker_rebate_bps_close_admin(reg_admin: &AdminRegistry, reg: &mut OptionsRegistry, bps: u64, ctx: &TxContext) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); reg.maker_rebate_bps_close = bps; }
     public fun set_default_market_params(
         _admin: &AdminCap,
         synth_reg: &SynthRegistry,
@@ -482,10 +511,14 @@ module unxversal::options {
         strike_price: u64,       // micro‑USD
         expiry_ms: u64,
         settlement_type: String, // "CASH" | "PHYSICAL" | "BOTH"
-        treasury: &mut Treasury<C>,
-        mut unxv_payment: vector<Coin<UNXV>>,
-        creation_fee: u64,
-        mut creation_fee_coin: Coin<C>,
+        _treasury: &mut Treasury<C>,
+        _unxv_payment: vector<Coin<UNXV>>,
+        _creation_fee: u64,
+        _creation_fee_coin: Coin<C>,
+        _oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        _unxv_price: &Aggregator,
+        points: &mut BotPointsRegistry,
         ctx: &mut TxContext
     ): (Coin<C>, vector<Coin<UNXV>>) {
         assert!(!reg.paused, E_PAUSED);
@@ -534,36 +567,13 @@ module unxversal::options {
         // track market key for listing
         vector::push_back(&mut reg.market_key_list, clone_bytes(&key_bytes));
 
-        // Optional creation fee collection with UNXV discount at source
-        if (creation_fee > 0) {
-            // Apply UNXV discount
-            let discount_collateral = (creation_fee * reg.unxv_discount_bps) / 10_000;
-            let mut discount_applied = false;
-            if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
-                // Require caller to pass an oracle‑priced UNXV cost off‑chain or integrate here later
-                // For now, accept UNXV as is and deposit; creation fee reduced accordingly
-                let mut merged = coin::zero<UNXV>(ctx);
-                let mut i = 0; while (i < vector::length(&unxv_payment)) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); i = i + 1; };
-                if (coin::value(&merged) > 0) {
-                    let mut vecu = vector::empty<Coin<UNXV>>();
-                    vector::push_back(&mut vecu, merged);
-                    TreasuryMod::deposit_unxv_ext(treasury, vecu, b"options_market_create".to_string(), ctx.sender(), ctx);
-                    discount_applied = true;
-                } else { coin::destroy_zero(merged); };
-            };
-            let fee_due = if (discount_applied && creation_fee > discount_collateral) { creation_fee - discount_collateral } else { creation_fee };
-            if (fee_due > 0) {
-                let pay = coin::split(&mut creation_fee_coin, fee_due, ctx);
-                TreasuryMod::deposit_collateral_ext(treasury, pay, b"options_market_create".to_string(), ctx.sender(), ctx);
-            };
-            // return any leftover UNXV to caller via return tuple
-        } else {
-            // return any provided UNXV vector untouched
-        };
+        // No creation fee; rely on admin gating and tick/listing constraints
 
         event::emit(OptionMarketCreated { market_id: mid, market_key_bytes: key_bytes, underlying, option_type, strike_price, expiry_ms, settlement_type, creator: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        // Award points for non-fee listing orchestration
+        BotRewards::award_points(points, b"options.create_option_market".to_string(), ctx.sender(), clock, ctx);
         // Return leftover creation fee coin and any remaining UNXV back to caller for composability
-        (creation_fee_coin, unxv_payment)
+        (_creation_fee_coin, _unxv_payment)
     }
 
     public fun init_settlement_queue(dispute_window_ms: u64, ctx: &mut TxContext) {
@@ -576,7 +586,7 @@ module unxversal::options {
         table::add(&mut queue.requested_at_ms, object::id(market), sui::tx_context::epoch_timestamp_ms(ctx));
     }
 
-    public fun process_due_settlement(queue: &mut SettlementQueue, reg: &OptionsRegistry, market: &mut OptionMarket, oracle_cfg: &OracleConfig, clock: &Clock, price: &Aggregator, ctx: &mut TxContext) {
+    public fun process_due_settlement(queue: &mut SettlementQueue, reg: &OptionsRegistry, market: &mut OptionMarket, oracle_cfg: &OracleConfig, clock: &Clock, price: &Aggregator, points: &mut BotPointsRegistry, ctx: &mut TxContext) {
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
         let mid = object::id(market);
         if (table::contains(&queue.requested_at_ms, mid)) {
@@ -584,6 +594,8 @@ module unxversal::options {
             if (now >= t + queue.dispute_window_ms) {
                 expire_and_settle_market_cash(reg, market, oracle_cfg, clock, price, ctx);
                 let _ = table::remove(&mut queue.requested_at_ms, mid);
+                // award points for maintenance
+                BotRewards::award_points(points, b"options.process_due_settlement".to_string(), ctx.sender(), clock, ctx);
                 // rebuild pending without mid
                 let mut new_pending = vector::empty<ID>();
                 let mut j = 0;
@@ -600,6 +612,7 @@ module unxversal::options {
     /*******************************
     * Early/manual exercise (American)
     *******************************/
+    #[allow(lint(self_transfer))]
     public fun exercise_american_now<C>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
@@ -610,12 +623,14 @@ module unxversal::options {
         clock: &Clock,
         price_info: &Aggregator,
         treasury: &mut Treasury<C>,
+        bot_treasury: &mut BotRewardsTreasury<C>,
+        points: &mut BotPointsRegistry,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused && (market.exercise_style == b"AMERICAN".to_string()), E_PAUSED);
         assert!(quantity > 0 && quantity <= long_pos.quantity && quantity <= short_pos.quantity, E_AMOUNT);
         // Oracle price (symbol existence checked at market creation)
-        let spot = get_price_scaled_1e6(oracle_cfg, clock, price_info);
+        let spot = assert_and_get_price_for_underlying(reg, &market.underlying, clock, oracle_cfg, price_info);
         let mut payout = 0u64;
         if (long_pos.option_type == b"CALL".to_string()) {
             if (spot > market.strike_price) { payout = (spot - market.strike_price) * quantity; }
@@ -631,9 +646,13 @@ module unxversal::options {
             transfer::public_transfer(to_long, long_pos.owner);
         };
         if (fee > 0) {
-            let fee_bal = BalanceMod::split(&mut short_pos.collateral_locked, fee);
+            let mut fee_bal = BalanceMod::split(&mut short_pos.collateral_locked, fee);
+            // immediate bot cut
+            let bot_cut = (fee * reg.settlement_bot_reward_bps) / 10_000;
+            if (bot_cut > 0) { let bot_bal = BalanceMod::split(&mut fee_bal, bot_cut); let bot_coin = coin::from_balance(bot_bal, ctx); transfer::public_transfer(bot_coin, ctx.sender()); };
             let fee_coin = coin::from_balance(fee_bal, ctx);
-            TreasuryMod::deposit_collateral_ext(treasury, fee_coin, b"options_exercise".to_string(), ctx.sender(), ctx);
+            let epoch_id = BotRewards::current_epoch(points, clock);
+            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id, fee_coin, b"options_exercise".to_string(), ctx.sender(), ctx);
         };
         long_pos.quantity = long_pos.quantity - quantity;
         short_pos.quantity = short_pos.quantity - quantity;
@@ -650,6 +669,7 @@ module unxversal::options {
     /*******************************
     * Pre‑expiry close/offset with fee; refunds short margin proportionally
     *******************************/
+    #[allow(lint(self_transfer))]
     public fun close_positions_by_premium<C>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
@@ -664,6 +684,8 @@ module unxversal::options {
         clock: &Clock,
         unxv_price: &Aggregator,
         treasury: &mut Treasury<C>,
+        bot_treasury: &mut BotRewardsTreasury<C>,
+        points: &mut BotPointsRegistry,
         ctx: &mut TxContext
     ): Coin<C> {
         assert!(!reg.paused && market.is_active && !market.paused, E_PAUSED);
@@ -678,7 +700,7 @@ module unxversal::options {
         let mut discount_applied = false;
         let payer_addr = if (payer_is_long) { long_pos.owner } else { short_pos.owner };
         if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
-            let price_unxv_u64 = get_price_scaled_1e6(oracle_cfg, clock, unxv_price);
+            let price_unxv_u64 = OracleMod::get_price_scaled_1e6(oracle_cfg, clock, unxv_price);
             if (price_unxv_u64 > 0) {
                 let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
                 let mut merged = coin::zero<UNXV>(ctx);
@@ -711,11 +733,9 @@ module unxversal::options {
                     transfer::public_transfer(to_maker, short_pos.owner);
                 };
                 let bot_cut = (coin::value(&fee_all) * reg.close_bot_reward_bps) / 10_000;
-                if (bot_cut > 0) {
-                    let to_bots = coin::split(&mut fee_all, bot_cut, ctx);
-                    TreasuryMod::deposit_collateral_ext(treasury, to_bots, b"options_close_bot".to_string(), long_pos.owner, ctx);
-                };
-                TreasuryMod::deposit_collateral_ext(treasury, fee_all, b"options_close".to_string(), long_pos.owner, ctx);
+                if (bot_cut > 0) { let to_bots = coin::split(&mut fee_all, bot_cut, ctx); transfer::public_transfer(to_bots, ctx.sender()); };
+                let epoch_id = BotRewards::current_epoch(points, clock);
+                TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id, fee_all, b"options_close".to_string(), long_pos.owner, ctx);
             };
         } else {
             // Short pays long to close (buy-back)
@@ -730,11 +750,9 @@ module unxversal::options {
                     transfer::public_transfer(to_maker, long_pos.owner);
                 };
                 let bot_cut = (coin::value(&fee_all) * reg.close_bot_reward_bps) / 10_000;
-                if (bot_cut > 0) {
-                    let to_bots = coin::split(&mut fee_all, bot_cut, ctx);
-                    TreasuryMod::deposit_collateral_ext(treasury, to_bots, b"options_close_bot".to_string(), short_pos.owner, ctx);
-                };
-                TreasuryMod::deposit_collateral_ext(treasury, fee_all, b"options_close".to_string(), short_pos.owner, ctx);
+                if (bot_cut > 0) { let to_bots = coin::split(&mut fee_all, bot_cut, ctx); transfer::public_transfer(to_bots, ctx.sender()); };
+                let epoch_id = BotRewards::current_epoch(points, clock);
+                TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id, fee_all, b"options_close".to_string(), short_pos.owner, ctx);
             };
         };
         // Refund proportional initial margin to short for closed quantity
@@ -775,7 +793,7 @@ module unxversal::options {
         assert!(!reg.paused, E_PAUSED);
         assert!(quantity > 0 && quantity <= long_pos.quantity && quantity <= short_pos.quantity, E_AMOUNT);
         // Underlying exists check done implicitly at market creation; keep logic local
-        let spot = get_price_scaled_1e6(oracle_cfg, clock, price_info);
+        let spot = assert_and_get_price_for_underlying(reg, &market.underlying, clock, oracle_cfg, price_info);
         // Maintenance health
         let notional = quantity * market.strike_price;
         let maint_needed = (notional * market.maint_margin_bps_short) / 10_000;
@@ -1300,6 +1318,7 @@ module unxversal::options {
     /*******************************
     * Settle a matched long/short pair after market settlement (cash)
     *******************************/
+    #[allow(lint(self_transfer))]
     public fun settle_positions_cash<C>(
         reg: &mut OptionsRegistry,
         market: &mut OptionMarket,
@@ -1307,6 +1326,9 @@ module unxversal::options {
         short_pos: &mut OptionPosition<C>,
         quantity: u64,
         treasury: &mut Treasury<C>,
+        bot_treasury: &mut BotRewardsTreasury<C>,
+        points: &mut BotPointsRegistry,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, E_PAUSED);
@@ -1340,10 +1362,12 @@ module unxversal::options {
 
         if (fee > 0) {
             let mut fee_bal = BalanceMod::split(&mut short_pos.collateral_locked, fee);
-            let bot_cut = (BalanceMod::value(&fee_bal) * reg.settlement_bot_reward_bps) / 10_000;
-            if (bot_cut > 0) { let bot_bal = BalanceMod::split(&mut fee_bal, bot_cut); let bot_coin = coin::from_balance(bot_bal, ctx); TreasuryMod::deposit_collateral_ext(treasury, bot_coin, b"options_settlement_bot".to_string(), ctx.sender(), ctx); };
+            // immediate bot cut
+            let bot_cut = (fee * reg.settlement_bot_reward_bps) / 10_000;
+            if (bot_cut > 0) { let bot_bal = BalanceMod::split(&mut fee_bal, bot_cut); let bot_coin = coin::from_balance(bot_bal, ctx); transfer::public_transfer(bot_coin, ctx.sender()); };
             let fee_coin = coin::from_balance(fee_bal, ctx);
-            TreasuryMod::deposit_collateral_ext(treasury, fee_coin, b"options_settlement".to_string(), ctx.sender(), ctx);
+            let epoch_id = BotRewards::current_epoch(points, clock);
+            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id, fee_coin, b"options_settlement".to_string(), ctx.sender(), ctx);
         };
 
         // Return remaining proportional collateral to short when fully settled externally (not handled here)
@@ -1589,16 +1613,20 @@ module unxversal::options {
         long_pos: &OptionPosition<C>,
         quantity: u64,
         min_settlement_price: u64,
-        ctx: &TxContext
-    ) { assert!(quantity > 0 && quantity <= long_pos.quantity, E_AMOUNT); event::emit(PhysicalDeliveryRequested { market_id: object::id(market), requester: long_pos.owner, side: 0, quantity, min_settlement_price, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
+        points: &mut BotPointsRegistry,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) { assert!(quantity > 0 && quantity <= long_pos.quantity, E_AMOUNT); event::emit(PhysicalDeliveryRequested { market_id: object::id(market), requester: long_pos.owner, side: 0, quantity, min_settlement_price, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); BotRewards::award_points(points, b"options.request_physical_delivery_long".to_string(), ctx.sender(), clock, ctx); }
 
     public fun request_physical_delivery_short<C>(
         market: &OptionMarket,
         short_pos: &OptionPosition<C>,
         quantity: u64,
         min_settlement_price: u64,
-        ctx: &TxContext
-    ) { assert!(quantity > 0 && quantity <= short_pos.quantity, E_AMOUNT); event::emit(PhysicalDeliveryRequested { market_id: object::id(market), requester: short_pos.owner, side: 1, quantity, min_settlement_price, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
+        points: &mut BotPointsRegistry,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) { assert!(quantity > 0 && quantity <= short_pos.quantity, E_AMOUNT); event::emit(PhysicalDeliveryRequested { market_id: object::id(market), requester: short_pos.owner, side: 1, quantity, min_settlement_price, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); BotRewards::award_points(points, b"options.request_physical_delivery_short".to_string(), ctx.sender(), clock, ctx); }
 }
 
 
