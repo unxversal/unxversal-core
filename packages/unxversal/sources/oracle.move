@@ -143,6 +143,15 @@ module unxversal::oracle {
         v as u64
     }
 
+    /// Expose expected feed ID for a symbol for external validation
+    public fun expected_feed_id(reg: &OracleRegistry, symbol: &String): ID {
+        assert!(table::contains(&reg.feeds, clone_string(symbol)), E_SYMBOL_UNKNOWN);
+        *table::borrow(&reg.feeds, clone_string(symbol))
+    }
+
+    /// Expose max staleness in milliseconds for external validation
+    public fun max_age_ms(reg: &OracleRegistry): u64 { reg.max_age_sec * 1000 }
+
     /*******************************
      * Fixed‑point normalization helpers
      *******************************/

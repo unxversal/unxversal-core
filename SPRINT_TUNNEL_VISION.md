@@ -29,7 +29,7 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 - **P1**: Add optional rate‑limit controls; unify bot reward routing helpers. Add `auto_bot_rewards_bps` to divert a percentage of all incoming fees to `BotRewardsTreasury`. Expose settlement function to distribute pro‑rata by points each epoch/month.
 - **Acceptance**: Deposits from all modules succeed; UNXV burn path via SupplyCap works; auto_bot_rewards_bps routes funds; monthly pro‑rata distribution from BotRewardsTreasury is deterministic and idempotent.
 
-### 4) `synthetics.move`
+### 4) `synthetics.move` ✅
 - **P0**:
   - Ensure all single‑asset paths call oracle‑bound price helpers.
   - For multi‑asset flows that use `PriceSet`, enforce that `PriceSet` is constructed via module helper that binds aggregator IDs and timestamps; validate within entry to reject foreign/forged `PriceSet` (symbol exist, feed match, staleness within `max_age_sec`). If this cannot be enforced cleanly, deprecate multi‑asset entrypoints and migrate to single‑asset loops.
@@ -40,14 +40,14 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
   - Migrate admin gating to `unxversal::admin::AdminRegistry` (authoritative). Keep `AdminCap/DaddyCap` for UX only and add a thin bridge to mirror `AdminRegistry` updates into `SynthRegistry.admin_addrs` until callers are updated.
 - **Acceptance**: Mint/burn/liquidate cannot proceed with spoofed prices; no overflows; canonical events emitted with per‑symbol amounts; reconciliation helpers available; bot split config present; points emitted for non‑fee tasks.
 
-### 5) `lending.move`
+### 5) `lending.move` ✅
 - **P0**:
   - Replace caller‑supplied `symbols`/`prices` vectors in LTV/health/liquidation with oracle‑bound price reads per asset, or require a verified `PriceSet` built via oracle module and validate it internally.
   - Fix liquidation math to convert scaled balances to units for comparisons; write back scaled via index helpers.
   - Restrict `accrue_synth_market`: gate via admin/bot; derive `dt` from on‑chain time; store last accrual in market state.
   - Centralize admin via `unxversal::admin::AdminRegistry`; deprecate bespoke `LendingAdminCap` if possible, or add a thin adapter that checks `AdminRegistry`.
-- **P1**: Migrate all u64 notional math to u128; add per‑asset caps; standardize events to `Clock`. Add bot split config and points awarding for maintenance tasks (e.g., accrual, rate updates, health scanning), wired into `BotRewardsTreasury`. Implement/read reconciliation path that re‑evaluates account health when synthetics emits mint/burn/liquidation events.
-- **Acceptance**: Health checks immune to spoofed inputs; liquidation math correct; accrual unexploitable; reacts to synthetics events for health recomputation; bot split config present; points emitted for maintenance tasks.
+- **P1**: Migrate all u64 notional math to u128; add per‑asset caps; standardize events to `Clock`. Add bot split config and points awarding for maintenance tasks (e.g., accrual, rate updates, health scanning), wired into `BotRewardsTreasury`. Implement/read reconciliation path that re‑evaluates account health when synthetics emits mint/burn/liquidation events. Per‑tx input caps added; liquidation bonus can auto‑route treasury share via `liq_bot_treasury_bps`.
+- **Acceptance**: Health checks immune to spoofed inputs; liquidation math correct; accrual unexploitable; reacts to synthetics events for health recomputation; bot split config present; points emitted for maintenance tasks; admin gating via `unxversal::admin::AdminRegistry` in all admin paths.
 
 ### 6) `options.move`
 - **P0**:
