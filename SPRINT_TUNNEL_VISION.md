@@ -113,7 +113,20 @@ Implementation notes:
 - Enforce UNXV discount pricing; add per‑function split configs where fees are collected.
 - Emit bot points for non‑fee orchestration tasks (e.g., listings); integrate with `BotPointsRegistry`.
 
-### 7) `futures.move`
+### 7) `dex.move`
+- P0:
+  - Centralize admin via `unxversal::admin::AdminRegistry` – add admin‑gated setter variants for fees/params (`trade_fee_bps`, `unxv_discount_bps`, `maker_rebate_bps`, `keeper_reward_bps`, `gc_reward_bps`, `maker_bond_bps`, `pause/resume`). Keep legacy `AdminCap` variants for backcompat.
+  - Time source normalization – prefer `Clock` timestamps in new/modified entry paths; legacy events may still use `tx_context` where changing signatures is disruptive.
+  - Arithmetic safety – promote notional and fee math to u128 with clamps before casting to u64 for events or splits.
+  - UNXV discount oracle binding – ensure UNXV price used for discounts is fetched via allow‑listed oracle feed binding (same as other modules) to prevent spoofed aggregators.
+- P1:
+  - Integrate bot rewards treasury: route taker fees and GC slashes via epoch‑aware deposit helpers to `BotRewardsTreasury` with `epoch_id = BotRewards::current_epoch(clock)`.
+  - Points: optionally award points for non‑fee maintenance tasks (e.g., GC runs without slashes) using `BotPointsRegistry`.
+- Acceptance:
+  - AdminRegistry variants present and enforce centralized admin; fees configurable; pause/resume works.
+  - Discount pricing uses bound oracle; no overflow aborts in fee math; epoch‑aware routing active for fee/GC paths.
+
+### 8) `futures.move`
 - **P0**:
   - Keep good practice: settlement already binds feed by object ID. Extend binding to any price‑dependent admin ops.
   - Centralize admin via `unxversal::admin::AdminRegistry`.
@@ -125,7 +138,7 @@ Implementation notes:
 - Bind fee routing and per‑function split configs; standardize discount math.
 - Emit points for maintenance tasks (e.g., funding refresh) and integrate with `BotPointsRegistry`.
 
-### 8) `gas_futures.move`
+### 9) `gas_futures.move`
 - **P0**:
   - Bind SUI/USD and UNXV/USD aggregator IDs in registry; reject arbitrary aggregators.
   - Centralize admin via `unxversal::admin::AdminRegistry`.
@@ -137,7 +150,7 @@ Implementation notes:
 - Bind SUI/UNXV oracle feeds and admin centralization.
 - Add split configs for fee paths; emit points for non‑fee tasks (e.g., settlement queue upkeep).
 
-### 9) `perpetuals.move`
+### 10) `perpetuals.move`
 - **P0**:
   - Bind index price to oracle: replace caller‑supplied index price with oracle fetch; pass symbol or market→feed binding.
   - Standardize discount flow and u128 math.
@@ -149,7 +162,7 @@ Implementation notes:
 - Bind index price to oracle; add split configs for any fee‑collecting tasks.
 - Emit points for non‑fee tasks (funding refresh, risk checks); integrate with `BotPointsRegistry`.
 
-### 10) `vaults.move`
+### 11) `vaults.move`
 - **P0**:
   - Promote `need = per * p` and similar notional math to u128; pre‑check against u64 max before splitting balances.
   - Ensure all manager actions check stake registry; they do—add unit tests.
