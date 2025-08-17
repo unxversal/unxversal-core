@@ -31,9 +31,12 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
   - On successful execution, emit a standardized `BotPointsAwarded { task, points, actor, timestamp }` event AND call `BotPointsRegistry::award_points(actor, task_key)` which looks up `task_key` weight and accrues to `actor`.
   - Admins manage weights centrally in `BotPointsRegistry` (set, update, disable).
 
-- Monthly distribution
-  - At the end of each epoch/month (triggered by a keeper/bot), `BotPointsRegistry::distribute_monthly(rewards_treasury, max_recipients)` computes total points for the period, transfers each actor their pro‑rata claim from `BotRewardsTreasury`, zeroes period counters, and emits a `BotRewardsDistributed` summary event.
-  - Include safeguards: cap recipients per call, carry‑over unclaimed remainder to next cycle, and emit granular per‑recipient events.
+- Epoch‑based, bot‑initiated claims (no batch distributor)
+  - Admin sets epoch schedule once: `epoch_zero_ms` (origin) and `epoch_duration_ms` (e.g., 30d). Current epoch = floor((now - zero)/duration).
+  - Points are tracked per epoch: `points_by_epoch[epoch][actor]` and `total_points_by_epoch[epoch]` inside `BotPointsRegistry`.
+  - Treasury funds reserved per epoch: `epoch_collateral[epoch]` and `epoch_unxv` inside `BotRewardsTreasury`.
+  - Any bot can call `claim_rewards_for_epoch(epoch)` for itself, but only for a closed epoch (`epoch < current_epoch`). Claim pays pro‑rata from the epoch’s reserved funds, zeros the actor’s epoch points, and decrements the epoch reserve.
+  - Rounding leaves dust; a small “sweep epoch dust” admin tool may move leftovers after a grace period.
 
 - Per‑protocol split configs (immediate rewards)
   - Functions that already collect fees/notional at call time (e.g., `lending.liquidate_coin_position`, `synthetics.liquidate_vault`) maintain their own per‑function split configs (direct bot payout share vs treasury share). These do NOT rely on `BotRewardsTreasury` but may still award points.
@@ -61,7 +64,9 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 
 Implementation notes:
 - Add `auto_bot_rewards_bps` config to `Treasury` and route on every deposit.
-- Expose helper to deposit into `BotRewardsTreasury` and conservation checks.
+- Add per‑epoch reserves in `BotRewardsTreasury<C>`: `epoch_collateral: Table<u64,u64>`, `epoch_unxv: Table<u64,u64>`.
+- Add deposit variants that take `epoch_id`: `deposit_collateral_with_rewards_for_epoch`, `deposit_unxv_with_rewards_for_epoch` that split into bot share and increment epoch reserves.
+- Conservation: bot share + retained + (optional burn) equals input; epoch sums must be ≤ bot treasury balances.
 
 ### 4) `synthetics.move` ✅
 - **P0**:
@@ -76,7 +81,8 @@ Implementation notes:
 
 Implementation notes:
 - Maintain immediate split logic (liquidations, maker rebates). Add per‑function split config knobs.
-- Emit `BotPointsAwarded` and call into `BotPointsRegistry::award_points` for non‑fee tasks (listing, accrual) with `Clock` timestamps.
+- Emit `BotPointsAwarded` and call into `BotPointsRegistry::award_points` (now requires `ctx`) for non‑fee tasks (listing, accrual).
+- For fee deposits contributing to bot rewards, use epoch‑aware deposit variants with `epoch_id = BotRewards::current_epoch(clock, points_registry)`.
 - Provide reconciliation events/helpers to downstream modules.
 
 ### 5) `lending.move` ✅
@@ -90,7 +96,8 @@ Implementation notes:
 
 Implementation notes:
 - Keep immediate split logic for liquidations; add per‑function split configs.
-- Award points on non‑fee tasks (e.g., `update_pool_rates`, `accrue_pool_interest`, health scans) and call `BotPointsRegistry::award_points`.
+- Award points on non‑fee tasks (e.g., `update_pool_rates`, `accrue_pool_interest`, health scans) and call `BotPointsRegistry::award_points` (now requires `ctx`).
+- For fee deposits into treasury that should fund bot rewards, call epoch‑aware deposit variant with `epoch_id`.
 - Use `PriceSet` for secure on‑chain price validation.
 
 ### 6) `options.move`
@@ -156,7 +163,7 @@ Implementation notes:
 ### Deliverables & sequencing
 - Week 1: Oracle allow‑list + bindings; discount parity implementation; time‑source normalization; arithmetic upgrade skeleton and helper library.
 - Week 2: Synthetics enforcement on `PriceSet` and multi‑asset decision; Lending health/liquidation refactor + accrual gating + admin centralization.
-- Week 3: Options creation‑fee fix + settlement binding; Futures/Gas/Perps discount and math upgrades; bot reward policy harmonization.
+- Week 3: Options creation‑fee fix + settlement binding; Futures/Gas/Perps discount and math upgrades; bot reward policy harmonization; epoch‑based rewards plumbing (per‑epoch reserves and claims).
 - Week 4: Vaults math hardening; cross‑module event/schema polish; documentation and operational runbooks.
 
 ### Acceptance checklist (must all be green)
@@ -166,8 +173,8 @@ Implementation notes:
 - UNXV discount flow consistent and priced by oracle everywhere.
 - Time source standardized on `sui::clock::Clock` in entry paths/events.
 - Liquidations/settlements cannot be triggered or blocked by user‑supplied price vectors.
-- BotRewardsTreasury deployed and funded via `auto_bot_rewards_bps`; monthly pro‑rata distribution is deterministic, idempotent, and evented.
-- BotPointsRegistry exists with admin‑configurable point weights per task; all non‑immediate bot tasks emit points; immediate‑reward functions have per‑protocol split configs.
+- BotRewardsTreasury deployed and funded via `auto_bot_rewards_bps`; epoch‑based pro‑rata claim is deterministic, idempotent per actor/epoch, and evented.
+- BotPointsRegistry exists with admin‑configurable point weights per task; points tracked per epoch; non‑immediate tasks emit points; immediate‑reward functions have per‑protocol split configs.
 - Treasury fee conservation holds per deposit: immediate splits + auto bot transfer + retained equals fees in.
 - Events exist for points accrual and distributions; indexable for off‑chain accounting.
 - Synthetics emits canonical mint/burn/liquidation events; downstream modules (lending/options/futures/perps) have documented reconciliation paths and tests to validate state consistency after synth liquidation.

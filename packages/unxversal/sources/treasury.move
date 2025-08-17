@@ -10,6 +10,7 @@ module unxversal::treasury {
     use sui::coin::{Self as coin, Coin};
     use sui::balance::{Self as balance, Balance};
     use std::string::String;
+    use sui::table::{Self as table, Table};
     // timestamp helpers available via sui::tx_context::epoch_timestamp_ms
 
     use unxversal::unxv::{UNXV, SupplyCap};
@@ -51,6 +52,8 @@ module unxversal::treasury {
         id: UID,
         collateral: Balance<C>,
         unxv: Balance<UNXV>,
+        epoch_collateral: Table<u64, u64>,
+        epoch_unxv: Table<u64, u64>,
     }
 
     /*******************************
@@ -76,7 +79,13 @@ module unxversal::treasury {
 
     /// Create a BotRewardsTreasury for collateral type C
     entry fun init_bot_rewards_treasury<C>(ctx: &mut TxContext) {
-        let b = BotRewardsTreasury<C> { id: object::new(ctx), collateral: balance::zero<C>(), unxv: balance::zero<UNXV>() };
+        let b = BotRewardsTreasury<C> {
+            id: object::new(ctx),
+            collateral: balance::zero<C>(),
+            unxv: balance::zero<UNXV>(),
+            epoch_collateral: table::new<u64, u64>(ctx),
+            epoch_unxv: table::new<u64, u64>(ctx),
+        };
         transfer::share_object(b);
     }
 
@@ -194,6 +203,26 @@ module unxversal::treasury {
         event::emit(FeeReceived { source, asset: b"COLLATERAL".to_string(), amount, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
+    /// Epoch-aware variant: also increments epoch reserve counters
+    public(package) fun deposit_collateral_with_rewards_for_epoch<C>(treasury: &mut Treasury<C>, bot: &mut BotRewardsTreasury<C>, epoch_id: u64, c: Coin<C>, source: String, payer: address, ctx: &mut TxContext) {
+        let amount = coin::value(&c);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        let bps = treasury.cfg.auto_bot_rewards_bps;
+        let mut tmp = c;
+        let to_bot = (amount * bps) / 10_000;
+        let bot_coin = if (to_bot > 0) { coin::split(&mut tmp, to_bot, ctx) } else { coin::zero<C>(ctx) };
+        let tre_coin = tmp;
+        if (to_bot > 0) {
+            let bot_bal = coin::into_balance(bot_coin); balance::join(&mut bot.collateral, bot_bal);
+            let cur = if (table::contains(&bot.epoch_collateral, epoch_id)) { *table::borrow(&bot.epoch_collateral, epoch_id) } else { 0 };
+            let newv = cur + to_bot;
+            if (table::contains(&bot.epoch_collateral, epoch_id)) { let _ = table::remove(&mut bot.epoch_collateral, epoch_id); };
+            table::add(&mut bot.epoch_collateral, epoch_id, newv);
+        } else { coin::destroy_zero(bot_coin); };
+        let tre_bal = coin::into_balance(tre_coin); balance::join(&mut treasury.collateral, tre_bal);
+        event::emit(FeeReceived { source, asset: b"COLLATERAL".to_string(), amount, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
     public(package) fun deposit_unxv_with_rewards<C>(treasury: &mut Treasury<C>, bot: &mut BotRewardsTreasury<C>, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {
         let mut merged = coin::zero<UNXV>(ctx);
         let mut total: u64 = 0;
@@ -211,6 +240,29 @@ module unxversal::treasury {
         let bot_unxv = if (to_bot > 0) { coin::split(&mut tmpu, to_bot, ctx) } else { coin::zero<UNXV>(ctx) };
         let tre_unxv = tmpu;
         if (to_bot > 0) { let bot_bal_u = coin::into_balance(bot_unxv); balance::join(&mut bot.unxv, bot_bal_u); } else { coin::destroy_zero(bot_unxv); };
+        let tre_bal_u = coin::into_balance(tre_unxv); balance::join(&mut treasury.unxv, tre_bal_u);
+        event::emit(FeeReceived { source, asset: b"UNXV".to_string(), amount: total, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        vector::destroy_empty<Coin<UNXV>>(v);
+    }
+
+    /// Epoch-aware variant for UNXV
+    public(package) fun deposit_unxv_with_rewards_for_epoch<C>(treasury: &mut Treasury<C>, bot: &mut BotRewardsTreasury<C>, epoch_id: u64, mut v: vector<Coin<UNXV>>, source: String, payer: address, ctx: &mut TxContext) {
+        let mut merged = coin::zero<UNXV>(ctx);
+        let mut total: u64 = 0;
+        while (!vector::is_empty(&v)) { let c = vector::pop_back(&mut v); total = total + coin::value(&c); coin::join(&mut merged, c); };
+        assert!(total > 0, E_ZERO_AMOUNT);
+        let bps = treasury.cfg.auto_bot_rewards_bps;
+        let mut tmpu = merged;
+        let to_bot = (total * bps) / 10_000;
+        let bot_unxv = if (to_bot > 0) { coin::split(&mut tmpu, to_bot, ctx) } else { coin::zero<UNXV>(ctx) };
+        let tre_unxv = tmpu;
+        if (to_bot > 0) {
+            let bot_bal_u = coin::into_balance(bot_unxv); balance::join(&mut bot.unxv, bot_bal_u);
+            let curu = if (table::contains(&bot.epoch_unxv, epoch_id)) { *table::borrow(&bot.epoch_unxv, epoch_id) } else { 0 };
+            let newu = curu + to_bot;
+            if (table::contains(&bot.epoch_unxv, epoch_id)) { let _ = table::remove(&mut bot.epoch_unxv, epoch_id); };
+            table::add(&mut bot.epoch_unxv, epoch_id, newu);
+        } else { coin::destroy_zero(bot_unxv); };
         let tre_bal_u = coin::into_balance(tre_unxv); balance::join(&mut treasury.unxv, tre_bal_u);
         event::emit(FeeReceived { source, asset: b"UNXV".to_string(), amount: total, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         vector::destroy_empty<Coin<UNXV>>(v);

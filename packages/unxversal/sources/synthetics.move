@@ -511,7 +511,7 @@ module unxversal::synthetics {
     ) {
         init_synth_market(registry, clone_string(&symbol), tick_size, lot_size, min_size, ctx);
         // Award points to caller for non-fee bot task
-        BotRewards::award_points(points, b"synthetics.init_synth_market".to_string(), ctx.sender(), clock);
+        BotRewards::award_points(points, b"synthetics.init_synth_market".to_string(), ctx.sender(), clock, ctx);
     }
 
     /// Escrow object holding collateral owed to makers until claimed
@@ -980,7 +980,7 @@ module unxversal::synthetics {
         ctx: &TxContext
     ) {
         match_step_auto<C>(registry, market, _clock, _oracle_cfg, _price_info, _unxv_price, max_steps, min_price, max_price, _treasury, ctx);
-        BotRewards::award_points(points, b"synthetics.match_step_auto".to_string(), ctx.sender(), clock);
+        BotRewards::award_points(points, b"synthetics.match_step_auto".to_string(), ctx.sender(), clock, ctx);
     }
 
     // Removed: direct settlement entry is not supported in escrow-only model
@@ -1038,7 +1038,7 @@ module unxversal::synthetics {
         ctx: &mut TxContext
     ) {
         gc_step<C>(registry, market, escrow, treasury, now_ts, max_removals, ctx);
-        BotRewards::award_points(points, b"synthetics.gc_step".to_string(), ctx.sender(), clock);
+        BotRewards::award_points(points, b"synthetics.gc_step".to_string(), ctx.sender(), clock, ctx);
     }
 
     // No display for SyntheticAsset (lacks 'key')

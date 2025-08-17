@@ -26,7 +26,7 @@ module unxversal::lending {
     // Synthetics integration
     use switchboard::aggregator::Aggregator;
     use unxversal::oracle::{OracleConfig, OracleRegistry, get_price_for_symbol, get_price_scaled_1e6};
-    use unxversal::treasury::Treasury;
+    use unxversal::treasury::{Treasury, BotRewardsTreasury};
     use unxversal::unxv::UNXV;
     use unxversal::synthetics::{Self as Synth, SynthRegistry, CollateralVault, CollateralConfig};
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
@@ -736,6 +736,18 @@ module unxversal::lending {
         if (reg.global_params.points_update_rates > 0) { event::emit(BotPointsAwarded { task: b"update_pool_rates".to_string(), points: reg.global_params.points_update_rates, actor: ctx.sender(), timestamp: sui::clock::timestamp_ms(clock) }); }
     }
 
+    /// Variant that also awards points via central registry for non-fee bot tasks
+    public entry fun update_pool_rates_with_points<T>(
+        reg: &LendingRegistry,
+        pool: &mut LendingPool<T>,
+        clock: &Clock,
+        points: &mut BotPointsRegistry,
+        ctx: &mut TxContext
+    ) {
+        update_pool_rates<T>(reg, pool, clock, ctx);
+        BotRewards::award_points(points, b"lending.update_pool_rates".to_string(), ctx.sender(), clock, ctx);
+    }
+
     public entry fun accrue_pool_interest<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, clock: &Clock, ctx: &TxContext) {
         let now = sui::clock::timestamp_ms(clock);
         if (now <= pool.last_update_ms) { return };
@@ -766,6 +778,18 @@ module unxversal::lending {
         let emitted_res = if (reserves_added > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { reserves_added as u64 };
         event::emit(InterestAccrued { asset: clone_string(&pool.asset), dt_ms: dt, new_borrow_index: pool.borrow_index, new_supply_index: pool.supply_index, delta_borrows: emitted_delta, reserves_added: emitted_res, timestamp: now });
         if (reg.global_params.points_accrue_pool > 0) { event::emit(BotPointsAwarded { task: b"accrue_pool_interest".to_string(), points: reg.global_params.points_accrue_pool, actor: ctx.sender(), timestamp: now }); }
+    }
+
+    /// Variant that also awards points via central registry for non-fee bot tasks
+    public entry fun accrue_pool_interest_with_points<T>(
+        reg: &LendingRegistry,
+        pool: &mut LendingPool<T>,
+        clock: &Clock,
+        points: &mut BotPointsRegistry,
+        ctx: &mut TxContext
+    ) {
+        accrue_pool_interest<T>(reg, pool, clock, ctx);
+        BotRewards::award_points(points, b"lending.accrue_pool_interest".to_string(), ctx.sender(), clock, ctx);
     }
 
     /*******************************
@@ -867,6 +891,9 @@ module unxversal::lending {
         prices: &PriceSet,
         supply_indexes: vector<u64>,
         borrow_indexes: vector<u64>,
+        treasury: &mut Treasury<Coll>,
+        points: &mut BotPointsRegistry,
+        bot_treasury: &mut BotRewardsTreasury<Coll>,
         // Optional internal routing flags could be added here
         ctx: &mut TxContext
     ) {
@@ -918,7 +945,7 @@ module unxversal::lending {
         let new_debt_units = cur_debt_units - repay_amount;
         let new_scaled_debt = scaled_from_units(new_debt_units, debt_pool.borrow_index);
         table::add(&mut debtor.borrow_balances, clone_string(&debt_sym), new_scaled_debt);
-        // compute seize amount in collateral units
+        // compute seize amount in collateral units and split between bot and treasury per config
         let pd = get_price_scaled_1e6(oracle_cfg, clock, debt_price) as u128;
         let pc = get_price_scaled_1e6(oracle_cfg, clock, coll_price) as u128;
         assert!(pd > 0 && pc > 0, E_BAD_PRICE);
@@ -926,33 +953,46 @@ module unxversal::lending {
         let coll_sym = clone_string(&coll_pool.asset);
         let coll_cfg = table::borrow(&reg.supported_assets, clone_string(&coll_sym));
         let base_bonus_bps = coll_cfg.liq_penalty_bps as u128;
-        let mut seize_val = repay_val + (repay_val * base_bonus_bps) / 10_000u128;
-        // optional treasury share of bonus
-        if (reg.global_params.liq_bot_treasury_bps > 0) {
-            let share = (seize_val * (reg.global_params.liq_bot_treasury_bps as u128)) / 10_000u128;
-            seize_val = seize_val - share; // reduce bot payout by treasury share
-            // Note: actual routing of share to Treasury<C> is out of scope here; handled by caller path if desired.
-        };
-        let mut seize_units = seize_val / pc;
-        if (seize_units * pc < seize_val) { seize_units = seize_units + 1; }; // ceil
-        let seize_u64 = if (seize_units > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { seize_units as u64 };
+        let seize_total_val = repay_val + (repay_val * base_bonus_bps) / 10_000u128;
+        let treasury_share_val = if (reg.global_params.liq_bot_treasury_bps > 0) { (seize_total_val * (reg.global_params.liq_bot_treasury_bps as u128)) / 10_000u128 } else { 0 };
+        let mut seize_total_units = seize_total_val / pc; if (seize_total_units * pc < seize_total_val) { seize_total_units = seize_total_units + 1; };
+        let mut treasury_units = treasury_share_val / pc; if (treasury_units * pc < treasury_share_val && treasury_share_val > 0) { treasury_units = treasury_units + 1; };
+        if (treasury_units > seize_total_units) { treasury_units = seize_total_units; };
+        let bot_units_u128 = seize_total_units - treasury_units;
+        let seize_u64 = if (seize_total_units > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { seize_total_units as u64 };
+        let _bot_units_u64 = if (bot_units_u128 > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { bot_units_u128 as u64 };
+        let tre_units_u64 = if (treasury_units > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { treasury_units as u64 };
         // check debtor has collateral in this asset
         assert!(table::contains(&debtor.supply_balances, clone_string(&coll_sym)), E_NO_COLLATERAL);
         let cur_scaled_coll = *table::borrow(&debtor.supply_balances, clone_string(&coll_sym));
         let cur_coll_units = units_from_scaled(cur_scaled_coll, coll_pool.supply_index);
         assert!(cur_coll_units >= seize_u64, E_INSUFFICIENT_LIQUIDITY);
-        // ensure pool has liquidity to deliver
+        // ensure pool has liquidity to deliver total
         let cash_coll = BalanceMod::value(&coll_pool.cash);
         assert!(cash_coll >= seize_u64, E_INSUFFICIENT_LIQUIDITY);
-        // update balances
+        // update balances using total seized units
         let new_coll_units = cur_coll_units - seize_u64;
         let new_scaled_coll = scaled_from_units(new_coll_units, coll_pool.supply_index);
         table::add(&mut debtor.supply_balances, clone_string(&coll_sym), new_scaled_coll);
         coll_pool.total_supply = coll_pool.total_supply - seize_u64;
-        // pay liquidator full seize (treasury share already reflected in seize_u64 via seize_val reduction above)
-        let out_bal = BalanceMod::split(&mut coll_pool.cash, seize_u64);
-        let out = coin::from_balance(out_bal, ctx);
-        transfer::public_transfer(out, ctx.sender());
+        // split seize between bot and treasury
+        let out_all_bal = BalanceMod::split(&mut coll_pool.cash, seize_u64);
+        let mut coin_all = coin::from_balance(out_all_bal, ctx);
+        if (tre_units_u64 > 0) {
+            let to_treas = coin::split(&mut coin_all, tre_units_u64, ctx);
+            // epoch-aware deposit into bot rewards and treasury
+            let epoch_id = BotRewards::current_epoch(points, clock);
+            unxversal::treasury::deposit_collateral_with_rewards_for_epoch(
+                treasury,
+                bot_treasury,
+                epoch_id,
+                to_treas,
+                b"lending_liquidation".to_string(),
+                ctx.sender(),
+                ctx
+            );
+        };
+        transfer::public_transfer(coin_all, ctx.sender());
         // prices set is read-only; nothing to consume
     }
 
@@ -963,6 +1003,9 @@ module unxversal::lending {
         _reg: &LendingRegistry,
         pool: &mut LendingPool<C>,
         treasury: &mut Treasury<C>,
+        bot_treasury: &mut BotRewardsTreasury<C>,
+        points: &mut BotPointsRegistry,
+        clock: &Clock,
         amount: u64,
         ctx: &mut TxContext
     ) {
@@ -972,7 +1015,16 @@ module unxversal::lending {
         assert!(pool.total_reserves >= amount, E_INSUFFICIENT_LIQUIDITY);
         let out_bal = BalanceMod::split(&mut pool.cash, amount);
         let out = coin::from_balance(out_bal, ctx);
-        unxversal::treasury::deposit_collateral(treasury, out, b"lending_reserve".to_string(), ctx.sender(), ctx);
+        let epoch_id = BotRewards::current_epoch(points, clock);
+        unxversal::treasury::deposit_collateral_with_rewards_for_epoch(
+            treasury,
+            bot_treasury,
+            epoch_id,
+            out,
+            b"lending_reserve_skim".to_string(),
+            ctx.sender(),
+            ctx
+        );
         pool.total_reserves = pool.total_reserves - amount;
     }
 
@@ -990,17 +1042,36 @@ module unxversal::lending {
         transfer::public_transfer(out, ctx.sender());
     }
 
-    public entry fun repay_flash_loan<T>(_reg: &LendingRegistry, pool: &mut LendingPool<T>, mut principal: Coin<T>, proof_amount: u64, proof_fee: u64, proof_asset: String, ctx: &mut TxContext) {
+    public entry fun repay_flash_loan<T>(
+        _reg: &LendingRegistry,
+        pool: &mut LendingPool<T>,
+        mut principal: Coin<T>,
+        proof_amount: u64,
+        proof_fee: u64,
+        proof_asset: String,
+        treasury: &mut Treasury<T>,
+        bot_treasury: &mut BotRewardsTreasury<T>,
+        points: &mut BotPointsRegistry,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
         // validate proof matches this pool/asset
         assert!(eq_string(&proof_asset, &pool.asset), E_VIOLATION);
         let due = proof_amount + proof_fee;
         let have = coin::value(&principal);
         assert!(have >= due, E_INSUFFICIENT_LIQUIDITY);
         let fee_coin = coin::split(&mut principal, proof_fee, ctx);
-        // fees go to reserves (remain as cash but tracked in reserves)
-        let fee_bal = coin::into_balance(fee_coin);
-        BalanceMod::join(&mut pool.cash, fee_bal);
-        pool.total_reserves = pool.total_reserves + proof_fee;
+        // deposit fee to treasury with epoch-aware bot rewards routing
+        let epoch_id = BotRewards::current_epoch(points, clock);
+        unxversal::treasury::deposit_collateral_with_rewards_for_epoch(
+            treasury,
+            bot_treasury,
+            epoch_id,
+            fee_coin,
+            b"lending_flash_fee".to_string(),
+            ctx.sender(),
+            ctx
+        );
         // principal back
         let principal_bal = coin::into_balance(principal);
         BalanceMod::join(&mut pool.cash, principal_bal);
@@ -1269,6 +1340,20 @@ module unxversal::lending {
         m.last_update_ms = now;
         event::emit(SynthAccrued { symbol, delta_units: delta as u64, reserve_units: to_reserve as u64, timestamp: now });
         if (reg.global_params.points_accrue_synth > 0) { event::emit(BotPointsAwarded { task: b"accrue_synth_market".to_string(), points: reg.global_params.points_accrue_synth, actor: ctx.sender(), timestamp: now }); }
+    }
+
+    /// Variant that also awards points via central registry for non-fee bot tasks
+    public entry fun accrue_synth_market_with_points(
+        reg: &mut LendingRegistry,
+        symbol: String,
+        apr_bps: u64,
+        clock: &Clock,
+        admin_reg: &AdminRegistry,
+        points: &mut BotPointsRegistry,
+        ctx: &mut TxContext
+    ) {
+        accrue_synth_market(reg, clone_string(&symbol), apr_bps, clock, admin_reg, ctx);
+        BotRewards::award_points(points, b"lending.accrue_synth_market".to_string(), ctx.sender(), clock, ctx);
     }
 
     /*******************************
