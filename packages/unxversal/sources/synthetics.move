@@ -25,6 +25,7 @@ module unxversal::synthetics {
     use unxversal::unxv::UNXV;
     use unxversal::book::{Self as Book, Book as ClobBook, Fill};
     use unxversal::utils; // order id encoding/decoding
+    use unxversal::admin::{Self as AdminMod, AdminRegistry};
 
     fun clone_string(s: &String): String {
         
@@ -108,6 +109,7 @@ module unxversal::synthetics {
     }
 
     // Lookup helper: find price for a symbol inside the parallel vectors. Returns 0 if not found.
+    #[allow(unused_function)]
     fun price_for_symbol(symbols: &vector<String>, prices: &vector<u64>, sym: &String): u64 {
         let mut i = 0; let n = vector::length(symbols);
         while (i < n) {
@@ -121,6 +123,19 @@ module unxversal::synthetics {
     // Local price scaling helper (micro-USD), avoids dependency cycle with oracle module
     // Using Switchboard's aggregator recency; no per-call max-age here
     const U64_MAX_LITERAL: u64 = 18_446_744_073_709_551_615;
+
+    fun clamp_u128_to_u64(x: u128): u64 { if (x > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { x as u64 } }
+
+    #[allow(unused_function)]
+    fun safe_mul_u64(a: u64, b: u64): u64 { clamp_u128_to_u64((a as u128) * (b as u128)) }
+
+    #[allow(unused_function)]
+    fun safe_ratio_bps(numerator_value: u64, denominator_value: u64): u64 {
+        if (denominator_value == 0) { return U64_MAX_LITERAL };
+        let num: u128 = (numerator_value as u128) * 10_000u128;
+        let den: u128 = denominator_value as u128;
+        clamp_u128_to_u64(num / den)
+    }
     fun get_price_scaled_1e6(clock: &Clock, cfg: &OracleConfig, agg: &Aggregator): u64 { OracleMod::get_price_scaled_1e6(cfg, clock, agg) }
 
     // Vector<u8> equality by bytes (for oracle feed hash binding)
@@ -185,6 +200,16 @@ module unxversal::synthetics {
         assert!(table::contains(&ps.prices, k), E_BAD_PRICE);
         *table::borrow(&ps.prices, clone_string(symbol))
     }
+
+    #[allow(unused_function)]
+    fun get_symbol_ts_from_set(ps: &PriceSet, symbol: &String): u64 {
+        let k = clone_string(symbol);
+        assert!(table::contains(&ps.ts_ms, k), E_BAD_PRICE);
+        *table::borrow(&ps.ts_ms, clone_string(symbol))
+    }
+
+    #[allow(unused_function)]
+    fun ensure_recent_from_set(_clock: &Clock, _oracle_cfg: &OracleConfig, _ps: &PriceSet, _symbol: &String) { }
 
     /// Error codes (0‑99 reserved for general)
     const E_NOT_ADMIN: u64 = 1;            // Caller not in admin allow‑list
@@ -1077,6 +1102,20 @@ module unxversal::synthetics {
         asset.stability_fee_bps = bps;
     }
 
+    /// AdminRegistry-gated variant (migration bridge)
+    public fun set_asset_stability_fee_admin(
+        reg_admin: &AdminRegistry,
+        registry: &mut SynthRegistry,
+        symbol: String,
+        bps: u64,
+        ctx: &TxContext
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        let k = clone_string(&symbol);
+        let asset = table::borrow_mut(&mut registry.synthetics, k);
+        asset.stability_fee_bps = bps;
+    }
+
     public fun set_asset_liquidation_threshold(
         registry: &mut SynthRegistry,
         symbol: String,
@@ -1085,6 +1124,19 @@ module unxversal::synthetics {
         ctx: &TxContext
     ) {
         assert_is_admin(registry, ctx.sender());
+        let k = clone_string(&symbol);
+        let asset = table::borrow_mut(&mut registry.synthetics, k);
+        asset.liquidation_threshold_bps = bps;
+    }
+
+    public fun set_asset_liquidation_threshold_admin(
+        reg_admin: &AdminRegistry,
+        registry: &mut SynthRegistry,
+        symbol: String,
+        bps: u64,
+        ctx: &TxContext
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
         let k = clone_string(&symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k);
         asset.liquidation_threshold_bps = bps;
@@ -1103,6 +1155,19 @@ module unxversal::synthetics {
         asset.liquidation_penalty_bps = bps;
     }
 
+    public fun set_asset_liquidation_penalty_admin(
+        reg_admin: &AdminRegistry,
+        registry: &mut SynthRegistry,
+        symbol: String,
+        bps: u64,
+        ctx: &TxContext
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        let k = clone_string(&symbol);
+        let asset = table::borrow_mut(&mut registry.synthetics, k);
+        asset.liquidation_penalty_bps = bps;
+    }
+
     public fun set_asset_mint_fee(
         registry: &mut SynthRegistry,
         symbol: String,
@@ -1116,6 +1181,19 @@ module unxversal::synthetics {
         asset.mint_fee_bps = bps;
     }
 
+    public fun set_asset_mint_fee_admin(
+        reg_admin: &AdminRegistry,
+        registry: &mut SynthRegistry,
+        symbol: String,
+        bps: u64,
+        ctx: &TxContext
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        let k = clone_string(&symbol);
+        let asset = table::borrow_mut(&mut registry.synthetics, k);
+        asset.mint_fee_bps = bps;
+    }
+
     public fun set_asset_burn_fee(
         registry: &mut SynthRegistry,
         symbol: String,
@@ -1124,6 +1202,19 @@ module unxversal::synthetics {
         ctx: &TxContext
     ) {
         assert_is_admin(registry, ctx.sender());
+        let k = clone_string(&symbol);
+        let asset = table::borrow_mut(&mut registry.synthetics, k);
+        asset.burn_fee_bps = bps;
+    }
+
+    public fun set_asset_burn_fee_admin(
+        reg_admin: &AdminRegistry,
+        registry: &mut SynthRegistry,
+        symbol: String,
+        bps: u64,
+        ctx: &TxContext
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
         let k = clone_string(&symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k);
         asset.burn_fee_bps = bps;
@@ -1223,6 +1314,7 @@ module unxversal::synthetics {
         amount: u64,
         ctx: &mut TxContext
     ): Coin<C> {
+        assert!(false, E_DEPRECATED);
         assert!(!registry.paused, 1000);
         assert!(vault.owner == ctx.sender(), E_NOT_OWNER);
         assert_cfg_matches(registry, cfg);
@@ -1280,16 +1372,17 @@ module unxversal::synthetics {
         ctx: &TxContext
     ) {
         assert!(!registry.paused, 1000);
+        let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
         let k_sym = clone_string(&synthetic_symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k_sym);
-        let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
         let debt_table = &mut vault.synthetic_debt;
         let k1 = clone_string(&synthetic_symbol);
         let old_debt = if (table::contains(debt_table, clone_string(&synthetic_symbol))) { *table::borrow(debt_table, k1) } else { 0 };
         let new_debt = old_debt + amount;
         let collateral_usd = balance::value(&vault.collateral);
-        let debt_usd = new_debt * price_u64;
-        let new_ratio = if (debt_usd == 0) { U64_MAX_LITERAL } else { (collateral_usd * 10_000) / debt_usd };
+        let debt_usd_u128: u128 = (new_debt as u128) * (price_u64 as u128);
+        let coll_u128: u128 = collateral_usd as u128;
+        let new_ratio = if (debt_usd_u128 == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64((coll_u128 * 10_000u128) / debt_usd_u128) };
         let min_req = if (asset.min_collateral_ratio > registry.global_params.min_collateral_ratio) { asset.min_collateral_ratio } else { registry.global_params.min_collateral_ratio };
         assert!(new_ratio >= min_req, E_RATIO_TOO_LOW);
         if (table::contains(debt_table, clone_string(&synthetic_symbol))) {
@@ -1353,18 +1446,19 @@ module unxversal::synthetics {
 
         // Annualized stability fee in bps applied to USD value of debt (per-asset override)
         let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
-        let debt_value = debt_units * price_u64;
+        let debt_value_u128: u128 = (debt_units as u128) * (price_u64 as u128);
         let akey = clone_string(&synthetic_symbol);
         let asset = table::borrow(&registry.synthetics, akey);
         let apr_bps = if (asset.stability_fee_bps > 0) { asset.stability_fee_bps } else { registry.global_params.stability_fee };
         // prorated fee ≈ debt_value * apr_bps/10k * (elapsed_ms / 31_536_000_000)
-        let prorated_numerator = debt_value * apr_bps * elapsed_ms;
+        let prorated_numerator: u128 = debt_value_u128 * (apr_bps as u128) * (elapsed_ms as u128);
         let year_ms = 31_536_000_000; // 365d
-        let fee_value = prorated_numerator / (10_000 * year_ms);
+        let fee_value_u128: u128 = prorated_numerator / ((10_000u128) * (year_ms as u128));
 
+        let fee_value = clamp_u128_to_u64(fee_value_u128);
         if (fee_value > 0 && price_u64 > 0) {
             // Convert fee_value (collateral USD) into synth units to add to debt
-            let delta_units = fee_value / price_u64;
+            let delta_units = if (price_u64 > 0) { fee_value / price_u64 } else { 0 };
             if (delta_units > 0) {
                 debt_units = debt_units + delta_units;
                 let k_rm2 = clone_string(&synthetic_symbol);
@@ -1393,12 +1487,12 @@ module unxversal::synthetics {
     ) {
         assert!(!registry.paused, 1000);
         assert_cfg_matches(registry, cfg);
-        // asset must exist
+        // price in USD (with oracle staleness check) – fetch BEFORE mutably borrowing registry
+        let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
+
+        // asset must exist – now safe to mutably borrow
         let k_ms = clone_string(&synthetic_symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k_ms);
-
-        // price in USD (with oracle staleness check)
-        let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
 
         // compute new collateral ratio
         let debt_table = &mut vault.synthetic_debt;
@@ -1407,8 +1501,8 @@ module unxversal::synthetics {
         } else { 0 };
         let new_debt = old_debt + amount;
         let collateral_usd = balance::value(&vault.collateral); // collateral units (assumed $1 peg)
-        let debt_usd = new_debt * price_u64;
-        let new_ratio = if (debt_usd == 0) { U64_MAX_LITERAL } else { (collateral_usd * 10_000) / debt_usd };
+        let debt_usd_u128: u128 = (new_debt as u128) * (price_u64 as u128);
+        let new_ratio = if (debt_usd_u128 == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64(((collateral_usd as u128) * 10_000u128) / debt_usd_u128) };
 
         // enforce ratio ≥ per‑asset min & global min
         let min_req = if (asset.min_collateral_ratio > registry.global_params.min_collateral_ratio) {
@@ -1427,7 +1521,8 @@ module unxversal::synthetics {
 
         // Fee for mint: allow UNXV discount; remainder in collateral (per-asset override)
         let mint_bps = if (asset.mint_fee_bps > 0) { asset.mint_fee_bps } else { registry.global_params.mint_fee };
-        let base_fee = (debt_usd * mint_bps) / 10_000;
+        let base_fee_u128: u128 = (debt_usd_u128 * (mint_bps as u128)) / 10_000u128;
+        let base_fee = clamp_u128_to_u64(base_fee_u128);
         let discount_collateral = (base_fee * registry.global_params.unxv_discount_bps) / 10_000;
         let mut discount_applied = false;
 
@@ -1460,7 +1555,7 @@ module unxversal::synthetics {
             }
         };
 
-        let fee_to_collect = if (discount_applied) { base_fee - discount_collateral } else { base_fee };
+        let fee_to_collect = if (discount_applied && base_fee > discount_collateral) { base_fee - discount_collateral } else { if (discount_applied) { 0 } else { base_fee } };
         if (fee_to_collect > 0) {
             let fee_bal = balance::split(&mut vault.collateral, fee_to_collect);
             let fee_coin = coin::from_balance(fee_bal, ctx);
@@ -1551,8 +1646,8 @@ module unxversal::synthetics {
 
         // Mint fee with UNXV discount (reuse target_price)
         let mint_bps = if (asset.mint_fee_bps > 0) { asset.mint_fee_bps } else { registry.global_params.mint_fee };
-        let notional = amount * target_price;
-        let base_fee = (notional * mint_bps) / 10_000;
+        let notional_u128: u128 = (amount as u128) * (target_price as u128);
+        let base_fee = clamp_u128_to_u64((notional_u128 * (mint_bps as u128)) / 10_000u128);
         let discount_collateral = (base_fee * registry.global_params.unxv_discount_bps) / 10_000;
         let mut discount_applied = false;
         if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
@@ -1602,7 +1697,7 @@ module unxversal::synthetics {
     ) {
         assert!(!registry.paused, 1000);
         assert_cfg_matches(registry, cfg);
-        let asset = table::borrow_mut(&mut registry.synthetics, clone_string(&synthetic_symbol));
+        // price is fetched later; adjust ordering to avoid freezes when borrowing mut from registry
         let debt_table = &mut vault.synthetic_debt;
         assert!(table::contains(debt_table, clone_string(&synthetic_symbol)), E_UNKNOWN_ASSET);
 
@@ -1612,10 +1707,13 @@ module unxversal::synthetics {
         let _ = table::remove(debt_table, clone_string(&synthetic_symbol));
         table::add(debt_table, clone_string(&synthetic_symbol), new_debt);
         if (new_debt == 0) { remove_symbol_if_present(&mut vault.debt_symbols, &synthetic_symbol); };
+        // Burn supply after we have a mutable asset reference
+        // Fetch price first to avoid overlapping borrows
+        let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
+        let asset = table::borrow_mut(&mut registry.synthetics, clone_string(&synthetic_symbol));
         asset.total_supply = asset.total_supply - amount;
 
         // Fee for burn – allow UNXV discount; per-asset override
-        let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, symbol, price);
         let base_value = amount * price_u64;
         let burn_bps = if (asset.burn_fee_bps > 0) { asset.burn_fee_bps } else { registry.global_params.burn_fee };
         let base_fee = (base_value * burn_bps) / 10_000;
@@ -1654,13 +1752,20 @@ module unxversal::synthetics {
         };
         // fee details are recorded in treasury; external FeeCollected removed here
 
+        // Compute ratio after burn using current price for downstream health reconciliation
+        let px_now = get_price_scaled_1e6(clock, oracle_cfg, price);
+        let coll_val = balance::value(&vault.collateral) as u128;
+        let debt_now = *table::borrow(&vault.synthetic_debt, clone_string(&synthetic_symbol));
+        let debt_val = (debt_now as u128) * (px_now as u128);
+        let ratio_after = if (debt_val == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64((coll_val * 10_000u128) / debt_val) };
+
         event::emit(SyntheticBurned {
             vault_id: object::id(vault),
             synthetic_type: synthetic_symbol,
             amount_burned: amount,
             collateral_withdrawn: 0,
             burner: ctx.sender(),
-            new_collateral_ratio: 0,
+            new_collateral_ratio: ratio_after,
             timestamp: sui::tx_context::epoch_timestamp_ms(ctx),
         });
 
@@ -1690,8 +1795,8 @@ module unxversal::synthetics {
         let price_u64 = get_price_scaled_1e6(clock, oracle_cfg, price);
         assert!(price_u64 > 0, E_BAD_PRICE);
         let collateral_value = balance::value(&vault.collateral);
-        let debt_value = debt * price_u64;
-        let ratio = if (debt_value == 0) { U64_MAX_LITERAL } else { (collateral_value * 10_000) / debt_value };
+        let debt_value_u128: u128 = (debt as u128) * (price_u64 as u128);
+        let ratio = if (debt_value_u128 == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64(((collateral_value as u128) * 10_000u128) / debt_value_u128) };
         let ka = clone_string(symbol);
         let asset = table::borrow(&registry.synthetics, ka);
         let threshold = if (asset.liquidation_threshold_bps > 0) { asset.liquidation_threshold_bps } else { registry.global_params.liquidation_threshold };
@@ -1701,37 +1806,12 @@ module unxversal::synthetics {
 
     /// Multi-asset health: uses oracle-validated `PriceSet` supplied in this tx.
     public fun check_vault_health_multi<C>(
-        vault: &CollateralVault<C>,
-        registry: &SynthRegistry,
+        _vault: &CollateralVault<C>,
+        _registry: &SynthRegistry,
         _clock: &Clock,
-        symbols: vector<String>,
-        prices: &PriceSet
-    ): (u64, bool) {
-        let collateral_value = balance::value(&vault.collateral);
-        let mut total_debt_value: u64 = 0;
-        let mut i = 0;
-        let mut max_threshold = registry.global_params.liquidation_threshold;
-        while (i < vector::length(&symbols)) {
-            let sym = *vector::borrow(&symbols, i);
-            let ks = clone_string(&sym);
-            if (table::contains(&vault.synthetic_debt, ks)) {
-                let debt_units = *table::borrow(&vault.synthetic_debt, clone_string(&sym));
-                if (debt_units > 0) {
-                    let px = get_symbol_price_from_set(prices, &sym);
-                    assert!(px > 0, E_BAD_PRICE);
-                    total_debt_value = total_debt_value + (debt_units * px);
-                    // threshold override
-                    let a = table::borrow(&registry.synthetics, clone_string(&sym));
-                    let th = if (a.liquidation_threshold_bps > 0) { a.liquidation_threshold_bps } else { registry.global_params.liquidation_threshold };
-                    if (th > max_threshold) { max_threshold = th; };
-                }
-            };
-            i = i + 1;
-        };
-        let ratio = if (total_debt_value == 0) { U64_MAX_LITERAL } else { (collateral_value * 10_000) / total_debt_value };
-        let liq = ratio < max_threshold;
-        (ratio, liq)
-    }
+        _symbols: vector<String>,
+        _prices: &PriceSet
+    ): (u64, bool) { assert!(false, E_DEPRECATED); (0, false) }
 
     /// Helper getters for bots/indexers
     public fun list_vault_debt_symbols<C>(vault: &CollateralVault<C>): vector<String> { clone_string_vec(&vault.debt_symbols) }
@@ -1974,7 +2054,7 @@ module unxversal::synthetics {
     /// Uses provided PriceSet for symbol prices.
     public fun rank_vault_liquidation_order<C>(
         vault: &CollateralVault<C>,
-        symbols: &vector<String>,
+        _symbols: &vector<String>,
         prices: &PriceSet
     ): vector<String> {
         let work_syms = clone_string_vec(&vault.debt_symbols);
@@ -2029,8 +2109,9 @@ module unxversal::synthetics {
         if (!table::contains(&vault.synthetic_debt, clone_string(symbol))) { return (collateral_value, 0, U64_MAX_LITERAL) };
         let debt_units = *table::borrow(&vault.synthetic_debt, clone_string(symbol));
         let px = assert_and_get_price_for_symbol(clock, oracle_cfg, _registry, symbol, price);
-        let debt_value = debt_units * px;
-        let ratio = if (debt_value == 0) { U64_MAX_LITERAL } else { (collateral_value * 10_000) / debt_value };
+        let debt_value_u128: u128 = (debt_units as u128) * (px as u128);
+        let debt_value = clamp_u128_to_u64(debt_value_u128);
+        let ratio = if (debt_value_u128 == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64(((collateral_value as u128) * 10_000u128) / debt_value_u128) };
         (collateral_value, debt_value, ratio)
     }
 
@@ -2062,11 +2143,13 @@ module unxversal::synthetics {
 
         // Price in micro-USD units and penalty
         let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
-        let notional = repay * price_u64;
+        let notional_u128: u128 = (repay as u128) * (price_u64 as u128);
         let asset_for_liq = table::borrow(&registry.synthetics, clone_string(&synthetic_symbol));
         let liq_pen_bps = if (asset_for_liq.liquidation_penalty_bps > 0) { asset_for_liq.liquidation_penalty_bps } else { registry.global_params.liquidation_penalty };
-        let penalty = (notional * liq_pen_bps) / 10_000;
-        let seize = notional + penalty;
+        let penalty_u128: u128 = (notional_u128 * (liq_pen_bps as u128)) / 10_000u128;
+        let penalty = clamp_u128_to_u64(penalty_u128);
+        let seize_u128: u128 = notional_u128 + (penalty as u128);
+        let seize = clamp_u128_to_u64(seize_u128);
 
         // Reduce debt
         let new_debt = outstanding - repay;
@@ -2350,6 +2433,17 @@ module unxversal::synthetics {
         event::emit(ParamsUpdated { updater: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
+    public fun update_global_params_admin(
+        reg_admin: &AdminRegistry,
+        registry: &mut SynthRegistry,
+        new_params: GlobalParams,
+        ctx: &TxContext
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        registry.global_params = new_params;
+        event::emit(ParamsUpdated { updater: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
     /// Flip the `paused` flag on. Prevents state‑changing funcs in later phases.
     public fun emergency_pause(registry: &mut SynthRegistry, ctx: &TxContext) {
         assert_is_admin(registry, ctx.sender());
@@ -2360,6 +2454,18 @@ module unxversal::synthetics {
    /// Turn the circuit breaker **off**.
     public fun resume(registry: &mut SynthRegistry, ctx: &TxContext) {
         assert_is_admin(registry, ctx.sender());
+        registry.paused = false;
+        event::emit(EmergencyPauseToggled { new_state: false, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    public fun emergency_pause_admin(reg_admin: &AdminRegistry, registry: &mut SynthRegistry, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        registry.paused = true;
+        event::emit(EmergencyPauseToggled { new_state: true, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    public fun resume_admin(reg_admin: &AdminRegistry, registry: &mut SynthRegistry, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
         registry.paused = false;
         event::emit(EmergencyPauseToggled { new_state: false, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }

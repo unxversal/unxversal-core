@@ -5,7 +5,7 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 ### Cross‑cutting (do first)
 - **Oracle allow‑list + bindings (P0)**: Implement symbol → aggregator ID registry and enforce across all modules. Replace arbitrary `Aggregator` params with bound lookups or bound verifiers. Add staleness guard via `oracle::max_age_sec`.
 - **Arithmetic safety (P0→P1)**: Promote all notional/fee/ratio math to u128 with safe clamps before converting to u64. Add input caps (tick, size, notional) to prevent abort‑on‑overflow DoS.
-- **Admin centralization (P0)**: Introduce `unxversal::admin::AdminRegistry` as the single source of truth for admin addresses. Gate all admin entry functions across modules via this registry and remove/bypass bespoke caps (bridge where unavoidable).
+- **Admin centralization (P0)**: Introduce `unxversal::admin::AdminRegistry` as the single source of truth for admin addresses. Gate all admin entry functions across modules via this registry and remove/bypass bespoke caps (bridge where unavoidable). For `synthetics`, migrate from `DaddyCap/AdminCap + admin_addrs` to authoritative checks via `AdminRegistry` (preserve caps for UX/backcompat and mirror sets until fully deprecated).
 - **Time source normalization (P0)**: Use `sui::clock::Clock` `timestamp_ms(clock)` in entry paths/events instead of `sui::tx_context::epoch_timestamp_ms` to standardize time semantics, per project preference.
 - **UNXV discount parity (P0)**: Standardize UNXV fee‑discount flow: fetch UNXV/USD via bound oracle; compute `unxv_needed = ceil(discount_usd / px_unxv)`; require and escrow it; refund leftovers. Apply uniformly across DEX, options, futures, gas_futures, perps.
 - **Bot rewards treasury + points system (P1)**: Add a dedicated `BotRewardsTreasury` shared object and a `BotPointsRegistry` that maps protocol function keys (e.g., list_market, refresh_funding) to point weights. Monthly, distribute the bot rewards treasury pro‑rata to addresses by points earned. Treasury gains a config to auto‑transfer X% of every fee it receives into the bot rewards treasury. Immediate split flows (e.g., liquidations) continue to pay out instantly; the points system covers non‑fee or delayed‑fee tasks.
@@ -37,6 +37,7 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
   - Align events to `Clock` timestamps.
 -  Emit canonical events for mint/burn/liquidation with per‑symbol amounts and participants; provide reconciliation helpers for downstream consumers.
 - **P1**: Revisit liquidation incentive split vs treasury; add reconciliation hooks/events for integration with lending (expose per‑vault debt/CCR deltas). Add per‑function bot split config and points‑awarding hooks, integrated with `BotRewardsTreasury` (immediate split where applicable; points for non‑fee tasks like risk scans).
+  - Migrate admin gating to `unxversal::admin::AdminRegistry` (authoritative). Keep `AdminCap/DaddyCap` for UX only and add a thin bridge to mirror `AdminRegistry` updates into `SynthRegistry.admin_addrs` until callers are updated.
 - **Acceptance**: Mint/burn/liquidate cannot proceed with spoofed prices; no overflows; canonical events emitted with per‑symbol amounts; reconciliation helpers available; bot split config present; points emitted for non‑fee tasks.
 
 ### 5) `lending.move`
@@ -44,7 +45,7 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
   - Replace caller‑supplied `symbols`/`prices` vectors in LTV/health/liquidation with oracle‑bound price reads per asset, or require a verified `PriceSet` built via oracle module and validate it internally.
   - Fix liquidation math to convert scaled balances to units for comparisons; write back scaled via index helpers.
   - Restrict `accrue_synth_market`: gate via admin/bot; derive `dt` from on‑chain time; store last accrual in market state.
-  - Centralize admin via SynthRegistry; deprecate bespoke `LendingAdminCap` if possible, or enforce `assert_is_admin_via_synth` wrapper.
+  - Centralize admin via `unxversal::admin::AdminRegistry`; deprecate bespoke `LendingAdminCap` if possible, or add a thin adapter that checks `AdminRegistry`.
 - **P1**: Migrate all u64 notional math to u128; add per‑asset caps; standardize events to `Clock`. Add bot split config and points awarding for maintenance tasks (e.g., accrual, rate updates, health scanning), wired into `BotRewardsTreasury`. Implement/read reconciliation path that re‑evaluates account health when synthetics emits mint/burn/liquidation events.
 - **Acceptance**: Health checks immune to spoofed inputs; liquidation math correct; accrual unexploitable; reacts to synthetics events for health recomputation; bot split config present; points emitted for maintenance tasks.
 
@@ -52,6 +53,7 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 - **P0**:
   - Fix creation‑fee UNXV discount: require sufficient UNXV by oracle valuation before applying discount; refund leftovers.
   - Bind settlement/exercise aggregators to stored per‑underlying feed identity; validate on call.
+  - Centralize admin via `unxversal::admin::AdminRegistry` (replace Synth‑admin checks).
   - Promote payouts/fees to u128.
 - **P1**: Evaluate physical settlement orchestration hooks; ensure bot reward consistency. Add bot split config and points for non‑fee tasks (e.g., market listing/orchestration), with treasury auto‑allocation in place. Reconcile or restrict use of synthetics as collateral/underlying with clear behavior on synth liquidation (e.g., indexer‑driven closes or margin checks).
 - **Acceptance**: No free discounts; settlement/exercise reject wrong feeds; no overflow aborts; synthetics‑downstream behavior documented and implemented; bot split config present; points emitted for non‑fee tasks.
@@ -59,6 +61,7 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 ### 7) `futures.move`
 - **P0**:
   - Keep good practice: settlement already binds feed by object ID. Extend binding to any price‑dependent admin ops.
+  - Centralize admin via `unxversal::admin::AdminRegistry`.
   - Standardize UNXV discount flow and u128 math in `record_fill` and fee routing.
 - **P1**: Add input caps and consistent bot reward policy. Add per‑function bot split config and points hooks (e.g., queue processing, settlement requests) integrated with bot rewards treasury. If a futures market references a synthetic underlying, document and implement reconciliation of funding/mark/reference on synth liquidation events.
 - **Acceptance**: Trades/settlement safe from overflow; discounts priced correctly; reacts to synthetics events where applicable; bot split config present; points emitted for non‑fee tasks.
@@ -66,6 +69,7 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 ### 8) `gas_futures.move`
 - **P0**:
   - Bind SUI/USD and UNXV/USD aggregator IDs in registry; reject arbitrary aggregators.
+  - Centralize admin via `unxversal::admin::AdminRegistry`.
   - Migrate notional/fees to u128; standardize discount flow.
 - **P1**: Confirm RGP×SUI math bounds; document units rigorously. Add bot split config and points hooks (e.g., gas settlement queue processing, listings) with rewards treasury integration. N/A for synth downstream unless gas products reference synths; if they do, align reconciliation similar to futures.
 - **Acceptance**: Fills/settlement safe; discounts correct; unit math documented; (if applicable) synth reconciliation paths documented; bot split config present; points emitted for non‑fee tasks.
@@ -74,6 +78,7 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 - **P0**:
   - Bind index price to oracle: replace caller‑supplied index price with oracle fetch; pass symbol or market→feed binding.
   - Standardize discount flow and u128 math.
+  - Centralize admin via `unxversal::admin::AdminRegistry`.
 - **P1**: Funding computation caps already present; ensure direction and cap logic tested under bounds. Add bot split config and points hooks (e.g., funding refresh, risk checks) tied to rewards treasury. If perps reference synth index prices, ensure indexer/bot applies reconciliation on synth liquidation to avoid stale risk.
 - **Acceptance**: Funding cannot be skewed by callers; fills safe; events consistent; (if applicable) synth reconciliation implemented; bot split config present; points emitted for non‑fee tasks.
 
@@ -93,7 +98,7 @@ This plan enumerates concrete, ordered tasks to bring the protocol to production
 ### Acceptance checklist (must all be green)
 - All price reads are oracle‑bound (symbol→aggregator ID) with staleness checks.
 - All notional/fee/ratio arithmetic uses u128 intermediates with clamps and input caps.
-- Single admin list enforced via SynthRegistry across modules.
+- Single admin list enforced via `unxversal::admin::AdminRegistry` across modules (until all migrations are complete, bridges may mirror AdminRegistry into legacy allow‑lists).
 - UNXV discount flow consistent and priced by oracle everywhere.
 - Time source standardized on `sui::clock::Clock` in entry paths/events.
 - Liquidations/settlements cannot be triggered or blocked by user‑supplied price vectors.
