@@ -229,6 +229,7 @@ module unxversal::synthetics {
     const E_ORACLE_FEED_NOT_SET: u64 = 15;
     const E_ORACLE_MISMATCH: u64 = 16;
     const E_DEPRECATED: u64 = 17;
+    const E_ZERO_AMOUNT: u64 = 18;
 
     /// One‑Time Witness (OTW)
     /// Guarantees `init` executes exactly once when the package is published.
@@ -1480,6 +1481,7 @@ module unxversal::synthetics {
         last_burn_amount: u64,
         last_burn_vault: ID,
         last_burn_new_cr: u64,
+        last_unxv_leftover: u64,
     }
 
     #[test_only]
@@ -1496,6 +1498,7 @@ module unxversal::synthetics {
             last_burn_amount: 0,
             last_burn_vault: object::id_from_address(@0x0),
             last_burn_new_cr: 0,
+            last_unxv_leftover: 0,
         }
     }
 
@@ -1515,11 +1518,24 @@ module unxversal::synthetics {
         mirror: &mut EventMirror,
         ctx: &mut TxContext
     ) {
+        // compute expected leftover before moving coins
+        let mut total_unxv_in: u64 = 0;
+        let mut i0 = 0; let n0 = vector::length(&unxv_payment);
+        while (i0 < n0) { total_unxv_in = total_unxv_in + coin::value(vector::borrow(&unxv_payment, i0)); i0 = i0 + 1; };
+        let px_synth = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
+        let notional_u128: u128 = (amount as u128) * (px_synth as u128);
+        let asset = table::borrow(&registry.synthetics, clone_string(&synthetic_symbol));
+        let mint_bps = if (asset.mint_fee_bps > 0) { asset.mint_fee_bps } else { registry.global_params.mint_fee };
+        let base_fee_u128 = (notional_u128 * (mint_bps as u128)) / 10_000u128;
+        let base_fee = clamp_u128_to_u64(base_fee_u128);
+        let discount_collateral = (base_fee * registry.global_params.unxv_discount_bps) / 10_000;
+        let px_unxv = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &b"UNXV".to_string(), unxv_price);
+        let unxv_needed = if (px_unxv == 0) { 0 } else { (discount_collateral + px_unxv - 1) / px_unxv };
         mint_synthetic<C>(cfg, vault, registry, clock, oracle_cfg, price, clone_string(&synthetic_symbol), amount, unxv_payment, unxv_price, treasury, ctx);
         // recompute new ratio
         let px = get_price_scaled_1e6(clock, oracle_cfg, price);
         let coll_val = balance::value(&vault.collateral) as u128;
-        let debt_units = if (table::contains(&vault.synthetic_debt, clone_string(&synthetic_symbol))) { *table::borrow(&vault.synthetic_debt, clone_string(&synthetic_symbol)) } else { 0 } as u128;
+        let debt_units = (if (table::contains(&vault.synthetic_debt, clone_string(&synthetic_symbol))) { *table::borrow(&vault.synthetic_debt, clone_string(&synthetic_symbol)) } else { 0 }) as u128;
         let debt_val = debt_units * (px as u128);
         let new_cr = if (debt_val == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64((coll_val * 10_000u128) / debt_val) };
         mirror.mint_count = mirror.mint_count + 1;
@@ -1527,6 +1543,7 @@ module unxversal::synthetics {
         mirror.last_mint_amount = amount;
         mirror.last_mint_vault = object::id(vault);
         mirror.last_mint_new_cr = new_cr;
+        mirror.last_unxv_leftover = if (total_unxv_in > unxv_needed) { total_unxv_in - unxv_needed } else { 0 };
     }
 
     #[test_only]
@@ -1548,7 +1565,7 @@ module unxversal::synthetics {
         burn_synthetic<C>(cfg, vault, registry, clock, oracle_cfg, price, clone_string(&synthetic_symbol), amount, unxv_payment, unxv_price, treasury, ctx);
         let px = get_price_scaled_1e6(clock, oracle_cfg, price);
         let coll_val = balance::value(&vault.collateral) as u128;
-        let debt_units = if (table::contains(&vault.synthetic_debt, clone_string(&synthetic_symbol))) { *table::borrow(&vault.synthetic_debt, clone_string(&synthetic_symbol)) } else { 0 } as u128;
+        let debt_units = (if (table::contains(&vault.synthetic_debt, clone_string(&synthetic_symbol))) { *table::borrow(&vault.synthetic_debt, clone_string(&synthetic_symbol)) } else { 0 }) as u128;
         let debt_val = debt_units * (px as u128);
         let new_cr = if (debt_val == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64((coll_val * 10_000u128) / debt_val) };
         mirror.burn_count = mirror.burn_count + 1;
@@ -1569,6 +1586,15 @@ module unxversal::synthetics {
     #[test_only] public fun em_last_burn_amount(m: &EventMirror): u64 { m.last_burn_amount }
     #[test_only] public fun em_last_burn_vault(m: &EventMirror): ID { m.last_burn_vault }
     #[test_only] public fun em_last_burn_new_cr(m: &EventMirror): u64 { m.last_burn_new_cr }
+    #[test_only] public fun em_last_unxv_leftover(m: &EventMirror): u64 { m.last_unxv_leftover }
+
+    #[test_only]
+    public fun escrow_bond_value<C>(escrow: &SynthEscrow<C>, order_id: u128): u64 {
+        if (table::contains(&escrow.bonds, order_id)) { balance::value(table::borrow(&escrow.bonds, order_id)) } else { 0 }
+    }
+
+    #[test_only]
+    public fun vault_collateral_value<C>(vault: &CollateralVault<C>): u64 { balance::value(&vault.collateral) }
 
     /// Deposit collateral into caller‑owned vault
     public fun deposit_collateral<C>(
@@ -1805,6 +1831,7 @@ module unxversal::synthetics {
         ctx: &mut TxContext
     ) {
         assert!(!registry.paused, 1000);
+        assert!(amount > 0, E_ZERO_AMOUNT);
         assert_cfg_matches(registry, cfg);
         // price in USD (with oracle staleness check) – fetch BEFORE mutably borrowing registry
         let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
@@ -2015,6 +2042,7 @@ module unxversal::synthetics {
         ctx: &mut TxContext
     ) {
         assert!(!registry.paused, 1000);
+        assert!(amount > 0, E_ZERO_AMOUNT);
         assert_cfg_matches(registry, cfg);
         // price is fetched later; adjust ordering to avoid freezes when borrowing mut from registry
         let debt_table = &mut vault.synthetic_debt;

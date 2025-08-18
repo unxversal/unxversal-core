@@ -315,6 +315,9 @@ module unxversal::treasury {
 
     public(package) fun tre_balance_collateral<C>(treasury: &Treasury<C>): u64 { balance::value(&treasury.collateral) }
     public(package) fun tre_balance_unxv<C>(treasury: &Treasury<C>): u64 { balance::value(&treasury.unxv) }
+
+    #[test_only]
+    public fun tre_balance_collateral_for_testing<C>(treasury: &Treasury<C>): u64 { tre_balance_collateral<C>(treasury) }
     public(package) fun bot_balance_collateral<C>(bot: &BotRewardsTreasury<C>): u64 { balance::value(&bot.collateral) }
     public(package) fun bot_balance_unxv<C>(bot: &BotRewardsTreasury<C>): u64 { balance::value(&bot.unxv) }
 }

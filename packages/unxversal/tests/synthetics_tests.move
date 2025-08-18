@@ -191,6 +191,14 @@ module unxversal::synthetics_discount_and_clob_tests {
         let expected_unxv = if (discount % 2_000_000 == 0) { discount / 2_000_000 } else { (discount / 2_000_000) + 1 };
         assert!(Tre::tre_balance_unxv<TestBaseUSD>(&tre) == expected_unxv);
 
+        // Mirror-based leftover assertion
+        let mut mirror = Syn::new_event_mirror_for_testing(ctx);
+        let mut pay_vec2 = vector::empty<Coin<UNXV>>();
+        let unxv_coins2: Coin<UNXV> = UNXVMod::mint_coin_for_testing(&mut cap, 10_000_000, ctx);
+        vector::push_back(&mut pay_vec2, unxv_coins2);
+        Syn::mint_synthetic_with_event_mirror<TestBaseUSD>(&cfg, &mut vault, &mut reg, &clk, &ocfg_d, &agg_susd, string::utf8(b"sUSD"), 1_000, pay_vec2, &agg_unxv, &mut tre, &mut mirror, ctx);
+        assert!(Syn::em_last_unxv_leftover(&mirror) == (10_000_000 - expected_unxv));
+
         // Clean up
         sui::transfer::public_share_object(cap);
         switchboard::aggregator::share_for_testing(agg_susd);
@@ -200,6 +208,7 @@ module unxversal::synthetics_discount_and_clob_tests {
         sui::transfer::public_share_object(vault);
         sui::transfer::public_share_object(cfg);
         sui::transfer::public_share_object(ocfg_d);
+        sui::transfer::public_share_object(mirror);
         clock::destroy_for_testing(clk);
         test_scenario::end(scen);
     }
@@ -332,6 +341,69 @@ module unxversal::synthetics_discount_and_clob_tests {
     }
 
     #[test]
+    fun clob_bond_cancel_and_gc_slash() {
+        let owner = @0x37;
+        let mut scen = test_scenario::begin(owner);
+        let ctx = scen.ctx();
+
+        // Registry, config, listing
+        let mut reg = Syn::new_registry_for_testing(ctx);
+        let cfg: CollateralConfig<TestBaseUSD> = Syn::set_collateral_for_testing<TestBaseUSD>(&mut reg, ctx);
+        Syn::add_synthetic_for_testing(&mut reg, string::utf8(b"Synthetix"), string::utf8(b"sUSD"), 6, 1500, ctx);
+
+        // Clock and price binding
+        let clk = clock::create_for_testing(ctx);
+        let mut agg = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"sUSD_px"), owner, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, ctx);
+        aggregator::set_current_value(&mut agg, decimal::new(1_000_000, false), 1, 1, 1, decimal::new(0, false), decimal::new(0, false), decimal::new(0, false), decimal::new(0, false), decimal::new(0, false));
+        Syn::set_oracle_feed_binding_for_testing(&mut reg, string::utf8(b"sUSD"), &agg);
+
+        // Market, escrow, treasury
+        let mut market: SynthMarket = Syn::new_market_for_testing(string::utf8(b"sUSD"), 1, 1, 1, ctx);
+        let mut escrow: SynthEscrow<TestBaseUSD> = Syn::new_escrow_for_testing<TestBaseUSD>(&market, ctx);
+        let mut tre: Treasury<TestBaseUSD> = Tre::new_treasury_for_testing<TestBaseUSD>(ctx);
+
+        // Maker vault with collateral
+        let mut v_maker: CollateralVault<TestBaseUSD> = Syn::create_vault_for_testing<TestBaseUSD>(&cfg, &reg, ctx);
+        let c = coin::mint_for_testing<TestBaseUSD>(5_000_000, ctx);
+        Syn::deposit_collateral<TestBaseUSD>(&cfg, &mut v_maker, c, ctx);
+
+        // Place maker (ask) with escrow, no immediate match, ensure bond exists
+        let ocfg = Oracle::new_config_for_testing(ctx);
+        let oid_opt = Syn::place_with_escrow_return_id<TestBaseUSD>(&mut reg, &mut market, &mut escrow, &clk, &ocfg, &agg, &agg, /*taker_is_bid=*/false, /*price=*/10, /*size=*/100, /*expiry=*/1000, &mut v_maker, vector::empty<Coin<UNXV>>(), &mut tre, ctx);
+        assert!(option::is_some(&oid_opt));
+        let oid = *option::borrow(&oid_opt);
+        let bond_before = Syn::escrow_bond_value<TestBaseUSD>(&escrow, oid);
+        assert!(bond_before > 0);
+
+        // Cancel with escrow and assert bond returned to vault
+        let maker_before = Syn::vault_collateral_value<TestBaseUSD>(&v_maker);
+        Syn::cancel_synth_clob_with_escrow<TestBaseUSD>(&mut market, &mut escrow, oid, &mut v_maker, ctx);
+        let maker_after = Syn::vault_collateral_value<TestBaseUSD>(&v_maker);
+        assert!(maker_after >= maker_before + bond_before);
+        assert!(Syn::escrow_bond_value<TestBaseUSD>(&escrow, oid) == 0);
+
+        // Place an expired maker (expiry < now) and run GC; assert treasury collateral increases
+        let oid2_opt = Syn::place_with_escrow_return_id<TestBaseUSD>(&mut reg, &mut market, &mut escrow, &clk, &ocfg, &agg, &agg, /*taker_is_bid=*/false, /*price=*/10, /*size=*/50, /*expiry=*/1, &mut v_maker, vector::empty<Coin<UNXV>>(), &mut tre, ctx);
+        assert!(option::is_some(&oid2_opt));
+        let tre_before = Tre::tre_balance_collateral_for_testing<TestBaseUSD>(&tre);
+        Syn::gc_step<TestBaseUSD>(&reg, &mut market, &mut escrow, &mut tre, /*now_ts=*/2, /*max_removals=*/1000, ctx);
+        let tre_after = Tre::tre_balance_collateral_for_testing<TestBaseUSD>(&tre);
+        assert!(tre_after >= tre_before);
+
+        // Cleanup
+        switchboard::aggregator::share_for_testing(agg);
+        sui::transfer::public_share_object(reg);
+        sui::transfer::public_share_object(tre);
+        sui::transfer::public_share_object(market);
+        sui::transfer::public_share_object(escrow);
+        sui::transfer::public_share_object(v_maker);
+        sui::transfer::public_share_object(cfg);
+        sui::transfer::public_share_object(ocfg);
+        clock::destroy_for_testing(clk);
+        test_scenario::end(scen);
+    }
+
+    #[test]
     fun mint_and_burn_event_mirror_validates_fields() {
         let owner = @0x34;
         let mut scen = test_scenario::begin(owner);
@@ -361,6 +433,8 @@ module unxversal::synthetics_discount_and_clob_tests {
         assert!(Syn::em_last_mint_amount(&mirror) == 500);
         assert!(Syn::em_last_mint_vault(&mirror) == sui::object::id(&vault));
         assert!(Syn::em_last_mint_new_cr(&mirror) >= 1500);
+        // no UNXV passed => leftover 0
+        assert!(Syn::em_last_unxv_leftover(&mirror) == 0);
 
         // Burn 200
         Syn::burn_synthetic_with_event_mirror<TestBaseUSD>(&cfg, &mut vault, &mut reg, &clk, &ocfg_em, &agg, string::utf8(b"sUSD"), 200, vector::empty<Coin<UNXV>>(), &agg, &mut tre, &mut mirror, ctx);
