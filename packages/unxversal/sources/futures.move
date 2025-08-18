@@ -550,6 +550,8 @@ module unxversal::futures {
         pos: &mut FuturesPosition<C>,
         clock: &Clock,
         treasury: &mut Treasury<C>,
+        bot_treasury: &mut BotRewardsTreasury<C>,
+        points: &BotPointsRegistry,
         ctx: &mut TxContext
     ) {
         assert!(!reg.paused, E_PAUSED);
@@ -578,7 +580,16 @@ module unxversal::futures {
                         transfer::public_transfer(to_bot, ctx.sender());
                     };
                 };
-                TreasuryMod::deposit_collateral_ext(treasury, fee_coin, b"futures_settlement".to_string(), pos.owner, ctx);
+                let epoch_id = BotRewards::current_epoch(points, clock);
+                TreasuryMod::deposit_collateral_with_rewards_for_epoch(
+                    treasury,
+                    bot_treasury,
+                    epoch_id,
+                    fee_coin,
+                    b"futures_settlement".to_string(),
+                    pos.owner,
+                    ctx
+                );
             }
         } else {
             // Losses: clamp to available margin, route to treasury as sink
