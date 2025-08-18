@@ -977,7 +977,7 @@ module unxversal::synthetics {
         min_price: u64,
         max_price: u64,
         _treasury: &mut Treasury<C>,
-        ctx: &TxContext
+        ctx: &mut TxContext
     ) {
         match_step_auto<C>(registry, market, _clock, _oracle_cfg, _price_info, _unxv_price, max_steps, min_price, max_price, _treasury, ctx);
         BotRewards::award_points(points, b"synthetics.match_step_auto".to_string(), ctx.sender(), clock, ctx);

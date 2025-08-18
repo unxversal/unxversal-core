@@ -267,6 +267,35 @@ module unxversal::treasury {
         event::emit(FeeReceived { source, asset: b"UNXV".to_string(), amount: total, payer, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         vector::destroy_empty<Coin<UNXV>>(v);
     }
+
+    /*******************************
+     * BotRewardsTreasury epoch helpers (package scope)
+     *******************************/
+    public(package) fun epoch_reserves<C>(bot: &BotRewardsTreasury<C>, epoch_id: u64): (u64, u64) {
+        let coll = if (table::contains(&bot.epoch_collateral, epoch_id)) { *table::borrow(&bot.epoch_collateral, epoch_id) } else { 0 };
+        let unxv_amt = if (table::contains(&bot.epoch_unxv, epoch_id)) { *table::borrow(&bot.epoch_unxv, epoch_id) } else { 0 };
+        (coll, unxv_amt)
+    }
+
+    public(package) fun payout_epoch_shares<C>(bot: &mut BotRewardsTreasury<C>, epoch_id: u64, pay_coll: u64, pay_unxv: u64, to: address, ctx: &mut TxContext) {
+        if (pay_coll > 0) {
+            let bal_c = balance::split(&mut bot.collateral, pay_coll);
+            let coin_c: Coin<C> = coin::from_balance(bal_c, ctx);
+            transfer::public_transfer(coin_c, to);
+        };
+        if (pay_unxv > 0) {
+            let bal_u = balance::split(&mut bot.unxv, pay_unxv);
+            let coin_u: Coin<UNXV> = coin::from_balance(bal_u, ctx);
+            transfer::public_transfer(coin_u, to);
+        };
+        let (cur_coll, cur_unxv) = epoch_reserves(bot, epoch_id);
+        let new_coll = if (cur_coll > pay_coll) { cur_coll - pay_coll } else { 0 };
+        let new_unxv = if (cur_unxv > pay_unxv) { cur_unxv - pay_unxv } else { 0 };
+        if (table::contains(&bot.epoch_collateral, epoch_id)) { let _ = table::remove(&mut bot.epoch_collateral, epoch_id); };
+        table::add(&mut bot.epoch_collateral, epoch_id, new_coll);
+        if (table::contains(&bot.epoch_unxv, epoch_id)) { let _ = table::remove(&mut bot.epoch_unxv, epoch_id); };
+        table::add(&mut bot.epoch_unxv, epoch_id, new_unxv);
+    }
 }
 
 
