@@ -83,4 +83,27 @@ module unxversal::unxv {
         // consume the emptied vector of non-drop coins
         vector::destroy_empty<Coin<UNXV>>(coins);
     }
+
+    #[test_only]
+    public fun new_supply_cap_for_testing(ctx: &mut TxContext): SupplyCap {
+        let witness = UNXV {};
+        let (raw_cap, _metadata) = coin::create_currency(
+            witness,
+            6,
+            b"UNXV",
+            b"Unxversal Token",
+            b"",
+            option::none(),
+            ctx
+        );
+        SupplyCap { id: object::new(ctx), cap: raw_cap, max_supply: 1_000_000_000, current: 0 }
+    }
+
+    #[test_only]
+    public fun mint_coin_for_testing(sc: &mut SupplyCap, amount: u64, ctx: &mut TxContext): Coin<UNXV> {
+        assert!(sc.current + amount <= sc.max_supply, 1);
+        let c = coin::mint(&mut sc.cap, amount, ctx);
+        sc.current = sc.current + amount;
+        c
+    }
 }

@@ -296,6 +296,27 @@ module unxversal::treasury {
         if (table::contains(&bot.epoch_unxv, epoch_id)) { let _ = table::remove(&mut bot.epoch_unxv, epoch_id); };
         table::add(&mut bot.epoch_unxv, epoch_id, new_unxv);
     }
+
+    /*******************************
+     * Test-only constructors and getters
+     *******************************/
+    #[test_only]
+    public fun new_treasury_for_testing<C>(ctx: &mut TxContext): Treasury<C> {
+        Treasury<C> { id: object::new(ctx), collateral: balance::zero<C>(), unxv: balance::zero<UNXV>(), cfg: TreasuryCfg { unxv_burn_bps: 0, auto_bot_rewards_bps: 0 } }
+    }
+
+    #[test_only]
+    public fun new_bot_rewards_treasury_for_testing<C>(ctx: &mut TxContext): BotRewardsTreasury<C> {
+        BotRewardsTreasury<C> { id: object::new(ctx), collateral: balance::zero<C>(), unxv: balance::zero<UNXV>(), epoch_collateral: table::new<u64, u64>(ctx), epoch_unxv: table::new<u64, u64>(ctx) }
+    }
+
+    #[test_only]
+    public fun set_auto_bot_rewards_bps_for_testing<C>(treasury: &mut Treasury<C>, bps: u64) { treasury.cfg.auto_bot_rewards_bps = bps }
+
+    public(package) fun tre_balance_collateral<C>(treasury: &Treasury<C>): u64 { balance::value(&treasury.collateral) }
+    public(package) fun tre_balance_unxv<C>(treasury: &Treasury<C>): u64 { balance::value(&treasury.unxv) }
+    public(package) fun bot_balance_collateral<C>(bot: &BotRewardsTreasury<C>): u64 { balance::value(&bot.collateral) }
+    public(package) fun bot_balance_unxv<C>(bot: &BotRewardsTreasury<C>): u64 { balance::value(&bot.unxv) }
 }
 
 

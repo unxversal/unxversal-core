@@ -89,6 +89,19 @@ module unxversal::bot_rewards {
         };
     }
 
+    #[test_only]
+    public fun new_points_registry_for_testing(ctx: &mut TxContext): BotPointsRegistry {
+        BotPointsRegistry {
+            id: object::new(ctx),
+            epoch_zero_ms: 0,
+            epoch_duration_ms: 1_000,
+            weights: table::new<String, u64>(ctx),
+            points: table::new<address, u64>(ctx),
+            points_by_epoch: table::new<u64, Table<address, u64>>(ctx),
+            total_points_by_epoch: table::new<u64, u128>(ctx),
+        }
+    }
+
     /// Distribute rewards from BotRewardsTreasury pro-rata to provided recipients based on current points.
     /// Resets points for processed recipients. Can be called in chunks by passing a subset list.
     public entry fun claim_rewards_for_epoch<C>(

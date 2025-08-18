@@ -1,6 +1,148 @@
 ## UNXVERSAL: Straight‑Shot Plan to Production Robustness (Sprint Tunnel Vision)
 
-This plan enumerates concrete, ordered tasks to bring the protocol to production‑grade robustness. Follow the dependency order requested: `unxv` → `oracle` → `treasury` → `synthetics` → `lending` → `options` → `futures` → `gas_futures` → `perpetuals` → `vaults`. Each section lists: must‑fix items (P0), hardening (P1), and acceptance checks.
+This plan enumerates concrete, ordered tasks to bring the protocol to production‑grade robustness. Follow the dependency order requested: `unxv` → `oracle` → `treasury` → `synthetics` → `lending` → `options` → `futures` → `gas_futures` → `perpetuals` → `vaults`. 
+
+## Testing plan overview
+
+### Goals
+- Validate correctness, safety, and invariants under adversarial inputs.
+- Prove oracle binding, arithmetic safety (u128 promotion, clamping), admin centralization, time semantics, and bot rewards accounting (immediate vs epoch‑based).
+- Exercise end‑to‑end flows across modules in the specified dependency order.
+
+### Tooling and conventions
+- Move unit tests using `#[test]`/`#[test_only]` and `sui::test_scenario` for shared‑object flows.
+- Prefer `sui::clock::create_for_testing` to simulate time; avoid `tx_context` timestamps in tests except legacy checks.
+- Assert events where applicable; compare emitted fields, not object IDs when nondeterministic.
+- Use helper builders/fixtures in `#[test_only]` functions to reduce boilerplate.
+- Name tests with module prefix and intent: `oracle__set_feed_happy_path`, `lending__liquidation_immediate_split_routing`.
+
+## Order of implementation and test suites
+
+### 1) unxv
+- Unit tests
+  - Mint/burn with `SupplyCap`: happy path and cap violations.
+  - Event coverage: `UNXVBurned` emission.
+- Invariants
+  - Total supply conservation across burns within test scenario.
+
+### 2) oracle
+- Unit tests
+  - Init registry, `set_feed`, `remove_feed` admin‑gated via `AdminRegistry`.
+  - `get_price_scaled_1e6`: staleness boundary, non‑positive price aborts.
+  - `get_price_for_symbol`: feed ID mismatch aborts; happy path.
+- Negative
+  - Unregistered symbol; stale feed; zero price.
+
+### 3) treasury (incl. BotRewardsTreasury)
+- Unit tests
+  - `deposit_collateral`/`deposit_unxv`: fee events, zero‑amount aborts.
+  - `set_auto_bot_rewards_bps` and routing split math for several bps values (0, 100, 10000).
+  - Epoch‑aware: `deposit_*_with_rewards_for_epoch` increments epoch counters and updates balances consistently.
+  - `epoch_reserves` and `payout_epoch_shares`: correctness under partial and full payouts; dust handling remains.
+- Invariants
+  - Conservation: retained + bot + burned (if any) equals input.
+  - Epoch counters never exceed treasury balances.
+
+### 4) bot_rewards
+- Unit tests
+  - `init_points_registry`, `set_weight`, `set_epoch_config` via `AdminRegistry`.
+  - `current_epoch` with simulated clock.
+  - `award_points`: zero weight → no change; weighted tasks accrue points; epoch tables updated; totals match.
+  - `claim_rewards_for_epoch`: pro‑rata payouts for multiple actors; zeroing claimant’s points; idempotency (second claim yields zero).
+- Negative
+  - Claim with zero total points; claim with zero actor points; future epoch claim rejected by caller policy (function is permissive; test callers validate epoch).
+
+### 5) synthetics
+- Unit tests
+  - Oracle‑bound price reads for mint/burn; UNXV discount handling with refund of leftovers.
+  - CLOB helpers: order placement/cancel emits events; escrow path basic accrual and claims.
+  - Bot points: `init_synth_market_with_points`, `match_step_auto_with_points`, `gc_step_with_points` call `award_points` (verify events/accumulation).
+- Integration
+  - Mint, then burn; verify CCR changes and events; fee deposits route to Treasury; UNXV discount path deposits UNXV.
+
+### 6) lending
+- Unit tests
+  - Supply/withdraw scaled math; borrow/repay scaled math.
+  - LTV/health guard using `PriceSet` (construct via helpers) and single‑asset price usage.
+  - Accrual: index and totals update over time slice; reserves accumulation.
+  - Liquidation (coins): immediate bot reward vs treasury share via epoch‑aware deposit; debtor balances updated.
+  - Flash loans: fee routing via epoch‑aware deposit.
+  - Reserve skim: epoch‑aware deposit and `total_reserves` reduction.
+- Invariants
+  - Scaled↔units transformations are inverses under same index; totals align with event emissions.
+
+### 7) options
+- Unit tests
+  - Exercise and settlement: oracle‑bound pricing; immediate bot cut; epoch‑aware remainder.
+  - Points for maintenance (market settlement requests/processing).
+- Negative
+  - Wrong aggregator feed; zero/overflow guards.
+
+### 8) dex
+- Unit tests
+  - Admin setters (AdminRegistry) for fees; pause/resume.
+  - Fee calculation at match paths with u128 safety; UNXV discount via oracle.
+  - GC path: slashed bonds routing and optional points awarding variant.
+
+### 9) futures
+- Unit tests
+  - `record_fill`: u128 notional, discount parity; fee routing to Treasury (epoch‑aware where configured).
+  - Settlement paths: funding/settlement math bounds; events.
+  - Points for non‑fee tasks (e.g., settlement queue processing) if present.
+
+### 10) gas_futures
+- Unit tests
+  - SUI/USD + UNXV/USD binding; discount parity; u128 safety.
+  - Settlement and queue processing points (if present).
+
+### 11) perpetuals
+- Unit tests
+  - Index price binding to oracle; u128 safety; admin centralization.
+  - Funding refresh path: correctness and bounds; points for maintenance if present.
+
+### 12) vaults
+- Unit tests
+  - Manager stake registry (stake/withdraw/slash/freeze), admin‑gated via `AdminRegistry`.
+  - Create vault; deposit/withdraw base; share math.
+  - Range ladder placement: u128 notional checks; min‑cash buffer enforcement.
+  - Points variants for range upkeep (if used publicly) – award and accumulation.
+
+## Cross‑module integration tests (E2E)
+- Synthetics mint → Lending health recomputation → Options exercise/settlement fee routing → Treasury epoch reserves growth → Bot claims.
+- Lending liquidation immediate bot split + epoch remainder → Bot claims after epoch ends.
+- DEX trade with UNXV discount → Treasury deposits (both collateral and UNXV) → auto bot rewards routing → epoch accounting convergence.
+- Perpetuals funding refresh awarding points; later epoch claim matches weights.
+
+## Fuzzing and property tests
+- Randomized order/size/price within caps for CLOB paths; invariants: no overflow aborts, balances non‑negative, escrow conservation.
+- Randomized lending flows: supply/borrow/repay/withdraw sequences respecting caps; invariant: cash + borrows − reserves equals owed balances.
+- Oracle staleness fuzz: prices varying over time; functions abort when stale; accept when within `max_age`.
+
+## Performance and gas checks
+- Measure typical flows (mint/burn, borrow/repay, liquidation, match) under expected sizes; assert they are within deployment gas budgets.
+- Benchmark points awarding and epoch deposits to ensure O(1) per call overhead.
+
+## CI pipeline
+- Lint and build on every change.
+- Run unit tests per package with shardable grouping by module.
+- Run integration suites nightly with longer fuzzing.
+- Emit coverage (function/branch/event assertions) and fail if coverage drops below thresholds.
+
+## Coverage thresholds (initial)
+- Unit tests: ≥85% function coverage per module.
+- Critical paths (oracle binding, liquidation/exercise, treasury deposits/epoch): ≥95% line coverage.
+- Integration: at least one passing E2E for each cross‑module scenario listed.
+
+## Fixtures and helpers
+- Test‑only helpers to create `AdminRegistry`, `OracleRegistry`, `Treasury`, `BotRewardsTreasury`, `BotPointsRegistry`, and price aggregators.
+- Builders for `PriceSet`, vaults/accounts, DEX/Synth markets.
+- Clock helper: advance ms deterministically.
+
+## Exit criteria
+- All suites green across modules in dependency order.
+- Invariant and fuzz tests pass with no unexpected aborts.
+- Gas/perf within budget; no linter warnings.
+- Documentation updates: describe how to run tests and interpret results.
 
 ### Cross‑cutting (do first)
 - **Oracle allow‑list + bindings (P0)**: Implement symbol → aggregator ID registry and enforce across all modules. Replace arbitrary `Aggregator` params with bound lookups or bound verifiers. Add staleness guard via `oracle::max_age_sec`.
