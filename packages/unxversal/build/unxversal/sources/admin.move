@@ -33,6 +33,13 @@ module unxversal::admin {
     }
 
     public fun is_admin(reg: &AdminRegistry, who: address): bool { vec_set::contains(&reg.admins, &who) }
+
+    #[test_only]
+    public fun new_admin_registry_for_testing(ctx: &mut TxContext): AdminRegistry {
+        let mut set = vec_set::empty<address>();
+        vec_set::insert(&mut set, ctx.sender());
+        AdminRegistry { id: object::new(ctx), admins: set }
+    }
 }
 
 

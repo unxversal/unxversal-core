@@ -318,6 +318,11 @@ module unxversal::treasury {
 
     #[test_only]
     public fun tre_balance_collateral_for_testing<C>(treasury: &Treasury<C>): u64 { tre_balance_collateral<C>(treasury) }
+
+    #[test_only]
+    public fun epoch_reserves_for_testing<C>(bot: &BotRewardsTreasury<C>, epoch: u64): (u64, u64) {
+        epoch_reserves(bot, epoch)
+    }
     public(package) fun bot_balance_collateral<C>(bot: &BotRewardsTreasury<C>): u64 { balance::value(&bot.collateral) }
     public(package) fun bot_balance_unxv<C>(bot: &BotRewardsTreasury<C>): u64 { balance::value(&bot.unxv) }
 }

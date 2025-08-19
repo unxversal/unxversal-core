@@ -167,4 +167,14 @@ module unxversal::oracle {
         while (i < n) { vector::push_back(&mut out, *vector::borrow(bytes, i)); i = i + 1; };
         string::utf8(out)
     }
+
+    #[test_only]
+    public fun new_registry_for_testing(ctx: &mut TxContext): OracleRegistry {
+        OracleRegistry { id: object::new(ctx), max_age_sec: 60, feeds: table::new<String, ID>(ctx) }
+    }
+
+    #[test_only]
+    public fun new_config_for_testing(ctx: &mut TxContext): OracleConfig {
+        OracleConfig { id: object::new(ctx), max_age_sec: 60 }
+    }
 }

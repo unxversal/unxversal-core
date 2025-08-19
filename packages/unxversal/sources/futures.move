@@ -219,6 +219,75 @@ module unxversal::futures {
     }
 
     /*******************************
+     * Test Event Mirror (capture emitted event semantics)
+     *******************************/
+    #[test_only]
+    public struct EventMirror has key, store {
+        id: UID,
+        vm_count: u64,
+        last_vm_qty: u64,
+        last_vm_from: u64,
+        last_vm_to: u64,
+        last_vm_new_margin: u64,
+        pc_count: u64,
+        last_pc_qty: u64,
+        last_pc_price: u64,
+        liq_count: u64,
+        last_liq_size: u64,
+        last_liq_price: u64,
+        last_liq_seized: u64,
+        ps_count: u64,
+        last_ps_size: u64,
+        last_ps_price: u64,
+        last_ps_fee_paid: u64,
+    }
+
+    #[test_only]
+    public fun new_event_mirror_for_testing(ctx: &mut TxContext): EventMirror {
+        EventMirror { id: object::new(ctx), vm_count: 0, last_vm_qty: 0, last_vm_from: 0, last_vm_to: 0, last_vm_new_margin: 0, pc_count: 0, last_pc_qty: 0, last_pc_price: 0, liq_count: 0, last_liq_size: 0, last_liq_price: 0, last_liq_seized: 0, ps_count: 0, last_ps_size: 0, last_ps_price: 0, last_ps_fee_paid: 0 }
+    }
+
+    #[test_only]
+    public fun close_with_event_mirror<C>(reg: &FuturesRegistry, market: &mut FuturesContract, pos: &mut FuturesPosition<C>, clock: &Clock, close_price: u64, quantity: u64, treasury: &mut Treasury<C>, mirror: &mut EventMirror, ctx: &mut TxContext) {
+        let from_px = pos.avg_price; let _pre_margin = balance::value(&pos.margin);
+        close_position<C>(reg, market, pos, clock, close_price, quantity, treasury, ctx);
+        let new_margin_val = balance::value(&pos.margin);
+        mirror.vm_count = mirror.vm_count + 1; mirror.last_vm_qty = quantity; mirror.last_vm_from = from_px; mirror.last_vm_to = close_price; mirror.last_vm_new_margin = new_margin_val;
+        mirror.pc_count = mirror.pc_count + 1; mirror.last_pc_qty = quantity; mirror.last_pc_price = close_price;
+    }
+
+    #[test_only]
+    public fun liquidate_with_event_mirror<C>(reg: &FuturesRegistry, market: &mut FuturesContract, pos: &mut FuturesPosition<C>, clock: &Clock, mark_price: u64, treasury: &mut Treasury<C>, mirror: &mut EventMirror, ctx: &mut TxContext) {
+        let pre_size = pos.size; let seized_total = balance::value(&pos.margin);
+        liquidate_position<C>(reg, market, pos, clock, mark_price, treasury, ctx);
+        mirror.liq_count = mirror.liq_count + 1; mirror.last_liq_size = pre_size; mirror.last_liq_price = mark_price; mirror.last_liq_seized = seized_total;
+    }
+
+    #[test_only]
+    public fun settle_position_with_event_mirror<C>(reg: &FuturesRegistry, market: &FuturesContract, pos: &mut FuturesPosition<C>, clock: &Clock, treasury: &mut Treasury<C>, bot: &mut BotRewardsTreasury<C>, points: &BotPointsRegistry, mirror: &mut EventMirror, ctx: &mut TxContext) {
+        let size_before = pos.size; let px = market.settlement_price;
+        // compute fee for event (same as in entry)
+        let (pnl_abs, pnl_gain) = if (pos.side == 0) {
+            if (px >= pos.avg_price) { (((px - pos.avg_price) as u128) * (pos.size as u128), true) } else { (((pos.avg_price - px) as u128) * (pos.size as u128), false) }
+        } else {
+            if (pos.avg_price >= px) { (((pos.avg_price - px) as u128) * (pos.size as u128), true) } else { (((px - pos.avg_price) as u128) * (pos.size as u128), false) }
+        };
+        let fee_for_event = ((if (pnl_gain) { if (pnl_abs > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { pnl_abs as u64 } } else { 0 }) * reg.settlement_fee_bps) / 10_000;
+        settle_position<C>(reg, market, pos, clock, treasury, bot, points, ctx);
+        mirror.ps_count = mirror.ps_count + 1; mirror.last_ps_size = size_before; mirror.last_ps_price = px; mirror.last_ps_fee_paid = fee_for_event;
+    }
+
+    // Getters for EventMirror fields
+    #[test_only] public fun em_vm_count(m: &EventMirror): u64 { m.vm_count }
+    #[test_only] public fun em_last_vm_qty(m: &EventMirror): u64 { m.last_vm_qty }
+    #[test_only] public fun em_last_vm_from(m: &EventMirror): u64 { m.last_vm_from }
+    #[test_only] public fun em_last_vm_to(m: &EventMirror): u64 { m.last_vm_to }
+    #[test_only] public fun em_liq_count(m: &EventMirror): u64 { m.liq_count }
+    #[test_only] public fun em_last_liq_price(m: &EventMirror): u64 { m.last_liq_price }
+    #[test_only] public fun em_ps_count(m: &EventMirror): u64 { m.ps_count }
+    #[test_only] public fun em_last_ps_price(m: &EventMirror): u64 { m.last_ps_price }
+
+    /*******************************
      * Record fill – metrics + fees (maker rebate, UNXV discount, bot split)
      *******************************/
     entry fun record_fill<C>(
@@ -706,6 +775,149 @@ module unxversal::futures {
         while (i < n) { vector::push_back(&mut out, *vector::borrow(src, i)); i = i + 1; };
         string::utf8(out)
     }
+
+    /*******************************
+     * Test-only helpers
+     *******************************/
+    #[test_only]
+    public struct Dummy has key, store { id: UID }
+
+    #[test_only]
+    public fun new_registry_for_testing(ctx: &mut TxContext): FuturesRegistry {
+        let dummy = Dummy { id: object::new(ctx) };
+        let tre_id = object::id(&dummy);
+        let reg = FuturesRegistry {
+            id: object::new(ctx),
+            paused: false,
+            underlyings: vec_set::empty<String>(),
+            price_feeds: table::new<String, ID>(ctx),
+            contracts: table::new<String, ID>(ctx),
+            settlement_fee_bps: 10,
+            settlement_bot_reward_bps: 0,
+            min_list_interval_ms: 1,
+            trade_fee_bps: 30,
+            maker_rebate_bps: 100,
+            unxv_discount_bps: 0,
+            trade_bot_reward_bps: 0,
+            dispute_window_ms: 0,
+            last_list_ms: table::new<String, u64>(ctx),
+            treasury_id: tre_id,
+        };
+        // consume dummy shared object so test caller can find it or ignore it
+        transfer::public_share_object(dummy);
+        reg
+    }
+
+    #[test_only]
+    public fun whitelist_underlying_for_testing(reg: &mut FuturesRegistry, underlying: String, aggregator: &Aggregator, clock: &Clock) {
+        vec_set::insert(&mut reg.underlyings, clone_string(&underlying));
+        table::add(&mut reg.price_feeds, clone_string(&underlying), object::id(aggregator));
+        event::emit(UnderlyingWhitelisted { underlying, by: @0x0, timestamp: sui::clock::timestamp_ms(clock) });
+    }
+
+    #[test_only]
+    public fun list_futures_for_testing(reg: &mut FuturesRegistry, underlying: String, symbol: String, contract_size: u64, tick_size: u64, expiry_ms: u64, init_margin_bps: u64, maint_margin_bps: u64, ctx: &mut TxContext): FuturesContract {
+        let mc = FuturesContract {
+            id: object::new(ctx),
+            symbol: clone_string(&symbol),
+            underlying: clone_string(&underlying),
+            contract_size,
+            tick_size,
+            expiry_ms,
+            paused: false,
+            is_active: true,
+            is_expired: false,
+            settlement_price: 0,
+            settled_at_ms: 0,
+            init_margin_bps,
+            maint_margin_bps,
+            open_interest: 0,
+            volume_premium: 0,
+            last_trade_premium: 0,
+        };
+        let id = object::id(&mc);
+        table::add(&mut reg.contracts, clone_string(&symbol), id);
+        mc
+    }
+
+    #[test_only]
+    public fun pause_for_testing(reg: &mut FuturesRegistry, paused: bool) { reg.paused = paused }
+
+    #[test_only]
+    public fun pause_contract_for_testing(market: &mut FuturesContract, paused: bool) { market.paused = paused }
+
+    #[test_only]
+    public fun new_queue_for_testing(ctx: &mut TxContext): SettlementQueue { SettlementQueue { id: object::new(ctx), entries: table::new<ID, u64>(ctx) } }
+
+    #[test_only]
+    public fun new_position_for_testing<C>(owner: address, market: &FuturesContract, side: u8, size: u64, avg_price: u64, mut margin_pay: Coin<C>, margin_amount: u64, clock: &Clock, ctx: &mut TxContext): (FuturesPosition<C>, Coin<C>) {
+        let locked_coin = if (margin_amount > 0) { coin::split(&mut margin_pay, margin_amount, ctx) } else { coin::zero<C>(ctx) };
+        let locked = coin::into_balance(locked_coin);
+        let pos = FuturesPosition<C> { id: object::new(ctx), owner, contract_id: object::id(market), side, size, avg_price, margin: locked, accumulated_pnl_abs: 0, accumulated_pnl_is_gain: true, opened_at_ms: sui::clock::timestamp_ms(clock) };
+        (pos, margin_pay)
+    }
+
+    #[test_only]
+    public fun set_trade_fee_config_for_testing(reg: &mut FuturesRegistry, trade_fee_bps: u64, maker_rebate_bps: u64, unxv_discount_bps: u64, trade_bot_reward_bps: u64) {
+        reg.trade_fee_bps = trade_fee_bps;
+        reg.maker_rebate_bps = maker_rebate_bps;
+        reg.unxv_discount_bps = unxv_discount_bps;
+        reg.trade_bot_reward_bps = trade_bot_reward_bps;
+    }
+
+    #[test_only]
+    public fun set_settlement_params_for_testing(reg: &mut FuturesRegistry, settlement_fee_bps: u64, settlement_bot_reward_bps: u64) {
+        reg.settlement_fee_bps = settlement_fee_bps;
+        reg.settlement_bot_reward_bps = settlement_bot_reward_bps;
+    }
+
+    #[test_only]
+    public fun set_limits_for_testing(reg: &mut FuturesRegistry, dispute_window_ms: u64) { reg.dispute_window_ms = dispute_window_ms }
+
+    #[test_only]
+    public struct TradeEventMirror has key, store { id: UID, fee_paid: u64, maker_rebate: u64, discount_applied: bool }
+
+    #[test_only]
+    public fun new_trade_event_mirror_for_testing(ctx: &mut TxContext): TradeEventMirror { TradeEventMirror { id: object::new(ctx), fee_paid: 0, maker_rebate: 0, discount_applied: false } }
+
+    #[test_only]
+    public fun record_fill_with_event_mirror<C>(
+        reg: &FuturesRegistry,
+        market: &mut FuturesContract,
+        price: u64,
+        size: u64,
+        taker_is_buyer: bool,
+        maker: address,
+        unxv_payment: vector<Coin<unxversal::unxv::UNXV>>,
+        unxv_price: &Aggregator,
+        oracle_cfg: &OracleConfig,
+        oracle_reg: &OracleRegistry,
+        clock: &Clock,
+        fee_payment: Coin<C>,
+        treasury: &mut Treasury<C>,
+        bot_treasury: &mut BotRewardsTreasury<C>,
+        points: &BotPointsRegistry,
+        oi_increase: bool,
+        min_price: u64,
+        max_price: u64,
+        mirror: &mut TradeEventMirror,
+        ctx: &mut TxContext
+    ) {
+        let notional_u128: u128 = (size as u128) * (price as u128);
+        let trade_fee_u128: u128 = (notional_u128 * (reg.trade_fee_bps as u128)) / 10_000u128;
+        let discount_collateral_u128: u128 = (trade_fee_u128 * (reg.unxv_discount_bps as u128)) / 10_000u128;
+        let maker_rebate_u128: u128 = (trade_fee_u128 * (reg.maker_rebate_bps as u128)) / 10_000u128;
+        let fee_after_discount_u128: u128 = if (discount_collateral_u128 <= trade_fee_u128) { trade_fee_u128 - discount_collateral_u128 } else { 0 };
+        mirror.fee_paid = clamp_u128_to_u64(fee_after_discount_u128);
+        mirror.maker_rebate = clamp_u128_to_u64(maker_rebate_u128);
+        mirror.discount_applied = discount_collateral_u128 > 0;
+        record_fill<C>(reg, market, price, size, taker_is_buyer, maker, unxv_payment, unxv_price, oracle_cfg, oracle_reg, clock, fee_payment, treasury, bot_treasury, points, oi_increase, min_price, max_price, ctx);
+    }
+
+    // Getters for TradeEventMirror
+    #[test_only] public fun tem_fee_paid(m: &TradeEventMirror): u64 { m.fee_paid }
+    #[test_only] public fun tem_maker_rebate(m: &TradeEventMirror): u64 { m.maker_rebate }
+    #[test_only] public fun tem_discount_applied(m: &TradeEventMirror): bool { m.discount_applied }
 }
 
 

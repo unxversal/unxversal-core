@@ -1,4 +1,4 @@
-#[allow(lint(public_entry))]
+#[allow(unused_use)]
 module unxversal::perpetuals {
     /*******************************
     * Unxversal Perpetuals – orderbook-integrated, funding-based perps

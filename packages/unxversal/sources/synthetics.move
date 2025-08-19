@@ -2236,6 +2236,69 @@ module unxversal::synthetics {
         event::emit(OrderbookOrderCancelled { order_id: object::id(order), owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
+    // Test-only helper to construct an Order for direct matching tests
+    #[test_only]
+    public fun new_order_for_testing(
+        symbol: String,
+        side: u8,
+        price: u64,
+        size: u64,
+        expiry_ms: u64,
+        owner: address,
+        ctx: &mut TxContext
+    ): Order {
+        Order {
+            id: object::new(ctx),
+            owner,
+            vault_id: object::id_from_address(owner),
+            symbol,
+            side,
+            price,
+            size,
+            remaining: size,
+            created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx),
+            expiry_ms,
+        }
+    }
+
+    // Test-only helper to construct GlobalParams for update tests
+    #[test_only]
+    public fun new_global_params_for_testing(
+        min_collateral_ratio: u64,
+        liquidation_threshold: u64,
+        liquidation_penalty: u64,
+        max_synthetics: u64,
+        stability_fee: u64,
+        bot_split: u64,
+        mint_fee: u64,
+        burn_fee: u64,
+        unxv_discount_bps: u64,
+        maker_rebate_bps: u64,
+        keeper_reward_bps: u64,
+        gc_reward_bps: u64,
+        maker_bond_bps: u64
+    ): GlobalParams {
+        GlobalParams {
+            min_collateral_ratio,
+            liquidation_threshold,
+            liquidation_penalty,
+            max_synthetics,
+            stability_fee,
+            bot_split,
+            mint_fee,
+            burn_fee,
+            unxv_discount_bps,
+            maker_rebate_bps,
+            keeper_reward_bps,
+            gc_reward_bps,
+            maker_bond_bps,
+        }
+    }
+
+    // Test-only getter for vault owner
+    #[test_only]
+    public fun vault_owner<C>(v: &CollateralVault<C>): address { v.owner }
+
     public fun match_orders<C>(
         registry: &mut SynthRegistry,
         clock: &Clock,

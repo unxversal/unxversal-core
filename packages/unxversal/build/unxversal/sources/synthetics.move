@@ -229,6 +229,7 @@ module unxversal::synthetics {
     const E_ORACLE_FEED_NOT_SET: u64 = 15;
     const E_ORACLE_MISMATCH: u64 = 16;
     const E_DEPRECATED: u64 = 17;
+    const E_ZERO_AMOUNT: u64 = 18;
 
     /// One‑Time Witness (OTW)
     /// Guarantees `init` executes exactly once when the package is published.
@@ -1304,6 +1305,297 @@ module unxversal::synthetics {
         });
     }
 
+    #[test_only]
+    public fun create_vault_for_testing<C>(
+        cfg: &CollateralConfig<C>,
+        registry: &SynthRegistry,
+        ctx: &mut TxContext
+    ): CollateralVault<C> {
+        assert!(!registry.paused, 1000);
+        assert_cfg_matches(registry, cfg);
+        let coin_zero = balance::zero<C>();
+        let debt_table = table::new<String, u64>(ctx);
+        let debt_syms = vector::empty<String>();
+        let vault = CollateralVault<C> {
+            id: object::new(ctx),
+            owner: ctx.sender(),
+            collateral: coin_zero,
+            synthetic_debt: debt_table,
+            debt_symbols: debt_syms,
+            last_update_ms: sui::tx_context::epoch_timestamp_ms(ctx),
+        };
+        vault
+    }
+
+    #[test_only]
+    public fun set_oracle_feed_binding_for_testing(
+        registry: &mut SynthRegistry,
+        symbol: String,
+        agg: &Aggregator
+    ) {
+        let fh = sb_agg::feed_hash(agg);
+        let key = clone_string(&symbol);
+        if (table::contains(&registry.oracle_feeds, key)) {
+            let _ = table::remove(&mut registry.oracle_feeds, clone_string(&symbol));
+        };
+        table::add(&mut registry.oracle_feeds, symbol, copy_vector_u8(&fh));
+    }
+
+    #[test_only]
+    public fun new_market_for_testing(
+        symbol: String,
+        tick: u64,
+        lot: u64,
+        min: u64,
+        ctx: &mut TxContext
+    ): SynthMarket {
+        let book = Book::empty(tick, lot, min, ctx);
+        let makers = table::new<u128, ID>(ctx);
+        let maker_sides = table::new<u128, u8>(ctx);
+        let claimed_units = table::new<u128, u64>(ctx);
+        SynthMarket { id: object::new(ctx), symbol, tick_size: tick, lot_size: lot, min_size: min, book, makers, maker_sides, claimed_units }
+    }
+
+    #[test_only]
+    public fun new_escrow_for_testing<C>(market: &SynthMarket, ctx: &mut TxContext): SynthEscrow<C> {
+        SynthEscrow<C> { id: object::new(ctx), market_id: object::id(market), pending: table::new<u128, balance::Balance<C>>(ctx), bonds: table::new<u128, balance::Balance<C>>(ctx) }
+    }
+
+    #[test_only]
+    public fun place_with_escrow_return_id<C: store>(
+        registry: &mut SynthRegistry,
+        market: &mut SynthMarket,
+        escrow: &mut SynthEscrow<C>,
+        clock: &Clock,
+        oracle_cfg: &OracleConfig,
+        price_info: &Aggregator,
+        unxv_price: &Aggregator,
+        taker_is_bid: bool,
+        price: u64,
+        size_units: u64,
+        expiry_ms: u64,
+        maker_vault: &mut CollateralVault<C>,
+        mut unxv_payment: vector<Coin<UNXV>>,
+        treasury: &mut Treasury<C>,
+        ctx: &mut TxContext
+    ): Option<u128> {
+        // replicate place_synth_limit_with_escrow but return the created order id
+        assert!(!registry.paused, 1000);
+        assert!(escrow.market_id == object::id(market), E_INVALID_ORDER);
+        let sym = clone_string(&market.symbol);
+        let _asset = table::borrow(&registry.synthetics, clone_string(&sym));
+        assert!(maker_vault.owner == ctx.sender(), E_NOT_OWNER);
+
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        let plan = Book::compute_fill_plan(&market.book, taker_is_bid, price, size_units, 0, expiry_ms, now);
+
+        let mut i = 0u64;
+        let num = Book::fillplan_num_fills(&plan);
+        while (i < num) {
+            let f: Fill = Book::fillplan_get_fill(&plan, i);
+            let maker_id = Book::fill_maker_id(&f);
+            let (_, maker_price, _) = utils::decode_order_id(maker_id);
+            let qty = Book::fill_base_qty(&f);
+            let notional = qty * maker_price;
+
+            if (taker_is_bid) {
+                let bal_to_pay = balance::split(&mut maker_vault.collateral, notional);
+                if (table::contains(&escrow.pending, maker_id)) {
+                    let pending_ref = table::borrow_mut(&mut escrow.pending, maker_id);
+                    balance::join(pending_ref, bal_to_pay);
+                } else {
+                    table::add(&mut escrow.pending, maker_id, bal_to_pay);
+                };
+                mint_synthetic_internal(maker_vault, registry, clock, oracle_cfg, price_info, clone_string(&sym), qty, ctx);
+            } else {
+                burn_synthetic_internal(maker_vault, registry, clock, price_info, clone_string(&sym), qty, ctx);
+            };
+
+            let trade_fee = (notional * registry.global_params.mint_fee) / 10_000;
+            let discount_collateral = (trade_fee * registry.global_params.unxv_discount_bps) / 10_000;
+            let mut discount_applied = false;
+            if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
+                let price_unxv_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &b"UNXV".to_string(), unxv_price);
+                if (price_unxv_u64 > 0) {
+                    let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
+                    let mut merged = coin::zero<UNXV>(ctx);
+                    let mut j = 0; let m = vector::length(&unxv_payment);
+                    while (j < m) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); j = j + 1; };
+                    let have = coin::value(&merged);
+                    if (have >= unxv_needed) {
+                        let exact = coin::split(&mut merged, unxv_needed, ctx);
+                        let mut vecu = vector::empty<Coin<UNXV>>();
+                        vector::push_back(&mut vecu, exact);
+                        TreasuryMod::deposit_unxv(treasury, vecu, b"synth_trade".to_string(), maker_vault.owner, ctx);
+                        transfer::public_transfer(merged, maker_vault.owner);
+                        discount_applied = true;
+                    } else { transfer::public_transfer(merged, maker_vault.owner); }
+                }
+            };
+            let fee_after = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
+            if (fee_after > 0) {
+                let fee_bal = balance::split(&mut maker_vault.collateral, fee_after);
+                let fee_coin = coin::from_balance(fee_bal, ctx);
+                TreasuryMod::deposit_collateral(treasury, fee_coin, b"synth_trade".to_string(), maker_vault.owner, ctx);
+            };
+
+            i = i + 1;
+        };
+
+        let maybe_id = Book::commit_fill_plan(&mut market.book, plan, now, true);
+        if (option::is_some(&maybe_id)) {
+            let oid = *option::borrow(&maybe_id);
+            let side: u8 = if (taker_is_bid) { 0 } else { 1 };
+            table::add(&mut market.makers, oid, object::id(maker_vault));
+            table::add(&mut market.maker_sides, oid, side);
+            table::add(&mut market.claimed_units, oid, 0);
+        };
+
+        if (vector::length(&unxv_payment) > 0) {
+            let mut leftover = coin::zero<UNXV>(ctx);
+            while (vector::length(&unxv_payment) > 0) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut leftover, c); };
+            transfer::public_transfer(leftover, maker_vault.owner);
+        };
+        vector::destroy_empty(unxv_payment);
+        maybe_id
+    }
+
+    #[test_only]
+    public fun escrow_pending_value<C>(escrow: &SynthEscrow<C>, order_id: u128): u64 {
+        if (table::contains(&escrow.pending, order_id)) { balance::value(table::borrow(&escrow.pending, order_id)) } else { 0 }
+    }
+
+    /*******************************
+     * Test-only Event Mirrors
+     *******************************/
+    #[test_only]
+    public struct EventMirror has key, store {
+        id: UID,
+        mint_count: u64,
+        burn_count: u64,
+        last_mint_symbol: String,
+        last_mint_amount: u64,
+        last_mint_vault: ID,
+        last_mint_new_cr: u64,
+        last_burn_symbol: String,
+        last_burn_amount: u64,
+        last_burn_vault: ID,
+        last_burn_new_cr: u64,
+        last_unxv_leftover: u64,
+    }
+
+    #[test_only]
+    public fun new_event_mirror_for_testing(ctx: &mut TxContext): EventMirror {
+        EventMirror {
+            id: object::new(ctx),
+            mint_count: 0,
+            burn_count: 0,
+            last_mint_symbol: b"".to_string(),
+            last_mint_amount: 0,
+            last_mint_vault: object::id_from_address(@0x0),
+            last_mint_new_cr: 0,
+            last_burn_symbol: b"".to_string(),
+            last_burn_amount: 0,
+            last_burn_vault: object::id_from_address(@0x0),
+            last_burn_new_cr: 0,
+            last_unxv_leftover: 0,
+        }
+    }
+
+    #[test_only]
+    public fun mint_synthetic_with_event_mirror<C>(
+        cfg: &CollateralConfig<C>,
+        vault: &mut CollateralVault<C>,
+        registry: &mut SynthRegistry,
+        clock: &Clock,
+        oracle_cfg: &OracleConfig,
+        price: &Aggregator,
+        synthetic_symbol: String,
+        amount: u64,
+        unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &Aggregator,
+        treasury: &mut Treasury<C>,
+        mirror: &mut EventMirror,
+        ctx: &mut TxContext
+    ) {
+        // compute expected leftover before moving coins
+        let mut total_unxv_in: u64 = 0;
+        let mut i0 = 0; let n0 = vector::length(&unxv_payment);
+        while (i0 < n0) { total_unxv_in = total_unxv_in + coin::value(vector::borrow(&unxv_payment, i0)); i0 = i0 + 1; };
+        let px_synth = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
+        let notional_u128: u128 = (amount as u128) * (px_synth as u128);
+        let asset = table::borrow(&registry.synthetics, clone_string(&synthetic_symbol));
+        let mint_bps = if (asset.mint_fee_bps > 0) { asset.mint_fee_bps } else { registry.global_params.mint_fee };
+        let base_fee_u128 = (notional_u128 * (mint_bps as u128)) / 10_000u128;
+        let base_fee = clamp_u128_to_u64(base_fee_u128);
+        let discount_collateral = (base_fee * registry.global_params.unxv_discount_bps) / 10_000;
+        let px_unxv = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &b"UNXV".to_string(), unxv_price);
+        let unxv_needed = if (px_unxv == 0) { 0 } else { (discount_collateral + px_unxv - 1) / px_unxv };
+        mint_synthetic<C>(cfg, vault, registry, clock, oracle_cfg, price, clone_string(&synthetic_symbol), amount, unxv_payment, unxv_price, treasury, ctx);
+        // recompute new ratio
+        let px = get_price_scaled_1e6(clock, oracle_cfg, price);
+        let coll_val = balance::value(&vault.collateral) as u128;
+        let debt_units = (if (table::contains(&vault.synthetic_debt, clone_string(&synthetic_symbol))) { *table::borrow(&vault.synthetic_debt, clone_string(&synthetic_symbol)) } else { 0 }) as u128;
+        let debt_val = debt_units * (px as u128);
+        let new_cr = if (debt_val == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64((coll_val * 10_000u128) / debt_val) };
+        mirror.mint_count = mirror.mint_count + 1;
+        mirror.last_mint_symbol = clone_string(&synthetic_symbol);
+        mirror.last_mint_amount = amount;
+        mirror.last_mint_vault = object::id(vault);
+        mirror.last_mint_new_cr = new_cr;
+        mirror.last_unxv_leftover = if (total_unxv_in > unxv_needed) { total_unxv_in - unxv_needed } else { 0 };
+    }
+
+    #[test_only]
+    public fun burn_synthetic_with_event_mirror<C>(
+        cfg: &CollateralConfig<C>,
+        vault: &mut CollateralVault<C>,
+        registry: &mut SynthRegistry,
+        clock: &Clock,
+        oracle_cfg: &OracleConfig,
+        price: &Aggregator,
+        synthetic_symbol: String,
+        amount: u64,
+        unxv_payment: vector<Coin<UNXV>>,
+        unxv_price: &Aggregator,
+        treasury: &mut Treasury<C>,
+        mirror: &mut EventMirror,
+        ctx: &mut TxContext
+    ) {
+        burn_synthetic<C>(cfg, vault, registry, clock, oracle_cfg, price, clone_string(&synthetic_symbol), amount, unxv_payment, unxv_price, treasury, ctx);
+        let px = get_price_scaled_1e6(clock, oracle_cfg, price);
+        let coll_val = balance::value(&vault.collateral) as u128;
+        let debt_units = (if (table::contains(&vault.synthetic_debt, clone_string(&synthetic_symbol))) { *table::borrow(&vault.synthetic_debt, clone_string(&synthetic_symbol)) } else { 0 }) as u128;
+        let debt_val = debt_units * (px as u128);
+        let new_cr = if (debt_val == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64((coll_val * 10_000u128) / debt_val) };
+        mirror.burn_count = mirror.burn_count + 1;
+        mirror.last_burn_symbol = clone_string(&synthetic_symbol);
+        mirror.last_burn_amount = amount;
+        mirror.last_burn_vault = object::id(vault);
+        mirror.last_burn_new_cr = new_cr;
+    }
+
+    // Test-only accessors for EventMirror (fields are private outside module)
+    #[test_only] public fun em_mint_count(m: &EventMirror): u64 { m.mint_count }
+    #[test_only] public fun em_burn_count(m: &EventMirror): u64 { m.burn_count }
+    #[test_only] public fun em_last_mint_symbol(m: &EventMirror): String { clone_string(&m.last_mint_symbol) }
+    #[test_only] public fun em_last_mint_amount(m: &EventMirror): u64 { m.last_mint_amount }
+    #[test_only] public fun em_last_mint_vault(m: &EventMirror): ID { m.last_mint_vault }
+    #[test_only] public fun em_last_mint_new_cr(m: &EventMirror): u64 { m.last_mint_new_cr }
+    #[test_only] public fun em_last_burn_symbol(m: &EventMirror): String { clone_string(&m.last_burn_symbol) }
+    #[test_only] public fun em_last_burn_amount(m: &EventMirror): u64 { m.last_burn_amount }
+    #[test_only] public fun em_last_burn_vault(m: &EventMirror): ID { m.last_burn_vault }
+    #[test_only] public fun em_last_burn_new_cr(m: &EventMirror): u64 { m.last_burn_new_cr }
+    #[test_only] public fun em_last_unxv_leftover(m: &EventMirror): u64 { m.last_unxv_leftover }
+
+    #[test_only]
+    public fun escrow_bond_value<C>(escrow: &SynthEscrow<C>, order_id: u128): u64 {
+        if (table::contains(&escrow.bonds, order_id)) { balance::value(table::borrow(&escrow.bonds, order_id)) } else { 0 }
+    }
+
+    #[test_only]
+    public fun vault_collateral_value<C>(vault: &CollateralVault<C>): u64 { balance::value(&vault.collateral) }
+
     /// Deposit collateral into caller‑owned vault
     public fun deposit_collateral<C>(
         _cfg: &CollateralConfig<C>,
@@ -1539,6 +1831,7 @@ module unxversal::synthetics {
         ctx: &mut TxContext
     ) {
         assert!(!registry.paused, 1000);
+        assert!(amount > 0, E_ZERO_AMOUNT);
         assert_cfg_matches(registry, cfg);
         // price in USD (with oracle staleness check) – fetch BEFORE mutably borrowing registry
         let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
@@ -1749,6 +2042,7 @@ module unxversal::synthetics {
         ctx: &mut TxContext
     ) {
         assert!(!registry.paused, 1000);
+        assert!(amount > 0, E_ZERO_AMOUNT);
         assert_cfg_matches(registry, cfg);
         // price is fetched later; adjust ordering to avoid freezes when borrowing mut from registry
         let debt_table = &mut vault.synthetic_debt;
@@ -1941,6 +2235,69 @@ module unxversal::synthetics {
         order.remaining = 0;
         event::emit(OrderbookOrderCancelled { order_id: object::id(order), owner: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
+
+    // Test-only helper to construct an Order for direct matching tests
+    #[test_only]
+    public fun new_order_for_testing(
+        symbol: String,
+        side: u8,
+        price: u64,
+        size: u64,
+        expiry_ms: u64,
+        owner: address,
+        ctx: &mut TxContext
+    ): Order {
+        Order {
+            id: object::new(ctx),
+            owner,
+            vault_id: object::id_from_address(owner),
+            symbol,
+            side,
+            price,
+            size,
+            remaining: size,
+            created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx),
+            expiry_ms,
+        }
+    }
+
+    // Test-only helper to construct GlobalParams for update tests
+    #[test_only]
+    public fun new_global_params_for_testing(
+        min_collateral_ratio: u64,
+        liquidation_threshold: u64,
+        liquidation_penalty: u64,
+        max_synthetics: u64,
+        stability_fee: u64,
+        bot_split: u64,
+        mint_fee: u64,
+        burn_fee: u64,
+        unxv_discount_bps: u64,
+        maker_rebate_bps: u64,
+        keeper_reward_bps: u64,
+        gc_reward_bps: u64,
+        maker_bond_bps: u64
+    ): GlobalParams {
+        GlobalParams {
+            min_collateral_ratio,
+            liquidation_threshold,
+            liquidation_penalty,
+            max_synthetics,
+            stability_fee,
+            bot_split,
+            mint_fee,
+            burn_fee,
+            unxv_discount_bps,
+            maker_rebate_bps,
+            keeper_reward_bps,
+            gc_reward_bps,
+            maker_bond_bps,
+        }
+    }
+
+    // Test-only getter for vault owner
+    #[test_only]
+    public fun vault_owner<C>(v: &CollateralVault<C>): address { v.owner }
 
     public fun match_orders<C>(
         registry: &mut SynthRegistry,
@@ -2521,5 +2878,78 @@ module unxversal::synthetics {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
         registry.paused = false;
         event::emit(EmergencyPauseToggled { new_state: false, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    // ------------------------
+    // Test-only constructors/helpers
+    // ------------------------
+    #[test_only]
+    public fun new_registry_for_testing(ctx: &mut TxContext): SynthRegistry {
+        let mut admins = vec_set::empty<address>();
+        vec_set::insert(&mut admins, ctx.sender());
+        SynthRegistry {
+            id: object::new(ctx),
+            synthetics: table::new<String, SyntheticAsset>(ctx),
+            oracle_feeds: table::new<String, vector<u8>>(ctx),
+            listed_symbols: vector::empty<String>(),
+            global_params: GlobalParams {
+                min_collateral_ratio: 1_500,
+                liquidation_threshold: 1_200,
+                liquidation_penalty: 500,
+                max_synthetics: 100,
+                stability_fee: 200,
+                bot_split: 1_000,
+                mint_fee: 50,
+                burn_fee: 30,
+                unxv_discount_bps: 2_000,
+                maker_rebate_bps: 0,
+                keeper_reward_bps: 100,
+                gc_reward_bps: 100,
+                maker_bond_bps: 10,
+            },
+            paused: false,
+            admin_addrs: admins,
+            treasury_id: object::id_from_address(ctx.sender()),
+            num_synthetics: 0,
+            collateral_set: false,
+            collateral_cfg_id: option::none<ID>(),
+        }
+    }
+
+    #[test_only]
+    public fun set_collateral_for_testing<C>(registry: &mut SynthRegistry, ctx: &mut TxContext): CollateralConfig<C> {
+        let cfg = CollateralConfig<C> { id: object::new(ctx) };
+        registry.collateral_set = true;
+        registry.collateral_cfg_id = option::some<ID>(object::id(&cfg));
+        cfg
+    }
+
+    #[test_only]
+    public fun add_synthetic_for_testing(
+        registry: &mut SynthRegistry,
+        asset_name: String,
+        asset_symbol: String,
+        decimals: u8,
+        min_coll_ratio: u64,
+        ctx: &TxContext
+    ) {
+        let asset = SyntheticAsset {
+            name: clone_string(&asset_name),
+            symbol: clone_string(&asset_symbol),
+            decimals,
+            pyth_feed_id: b"".to_string().into_bytes(),
+            min_collateral_ratio: min_coll_ratio,
+            total_supply: 0,
+            is_active: true,
+            created_at: sui::tx_context::epoch_timestamp_ms(ctx),
+            stability_fee_bps: 0,
+            liquidation_threshold_bps: 0,
+            liquidation_penalty_bps: 0,
+            mint_fee_bps: 0,
+            burn_fee_bps: 0,
+        };
+        table::add(&mut registry.synthetics, clone_string(&asset_symbol), asset);
+        vector::push_back(&mut registry.listed_symbols, asset_symbol);
+        registry.num_synthetics = registry.num_synthetics + 1;
     }
 }

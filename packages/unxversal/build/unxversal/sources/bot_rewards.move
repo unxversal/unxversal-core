@@ -4,7 +4,7 @@ module unxversal::bot_rewards {
     use std::string::String;
     use sui::event;
     use sui::balance::{Self as balance};
-    use sui::coin::{Self as coin, Coin};
+    use sui::coin::{Self as coin};
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::unxv::UNXV;
     use unxversal::treasury::{Self as TreasuryMod, BotRewardsTreasury};
@@ -87,6 +87,19 @@ module unxversal::bot_rewards {
             if (table::contains(&reg.total_points_by_epoch, e)) { let _ = table::remove(&mut reg.total_points_by_epoch, e); };
             table::add(&mut reg.total_points_by_epoch, e, new_tot);
         };
+    }
+
+    #[test_only]
+    public fun new_points_registry_for_testing(ctx: &mut TxContext): BotPointsRegistry {
+        BotPointsRegistry {
+            id: object::new(ctx),
+            epoch_zero_ms: 0,
+            epoch_duration_ms: 1_000,
+            weights: table::new<String, u64>(ctx),
+            points: table::new<address, u64>(ctx),
+            points_by_epoch: table::new<u64, Table<address, u64>>(ctx),
+            total_points_by_epoch: table::new<u64, u128>(ctx),
+        }
     }
 
     /// Distribute rewards from BotRewardsTreasury pro-rata to provided recipients based on current points.
