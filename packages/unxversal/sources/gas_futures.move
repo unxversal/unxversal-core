@@ -186,7 +186,7 @@ module unxversal::gas_futures {
             last_trade_premium_micro_usd_per_gas: 0,
         };
         let id = object::id(&c);
-        transfer::public_share_object(c);
+        transfer::share_object(c);
         table::add(&mut reg.contracts, clone_string(&symbol), id);
         event::emit(GasContractListed { symbol: symbol, contract_size_gas_units, tick_size_micro_usd_per_gas, expiry_ms, timestamp: now });
     }
@@ -451,7 +451,7 @@ module unxversal::gas_futures {
     }
 
     public struct GasSettlementQueue has key, store { id: UID, entries: Table<ID, u64> }
-    public entry fun init_gas_settlement_queue(ctx: &mut TxContext) { let q = GasSettlementQueue { id: object::new(ctx), entries: table::new<ID, u64>(ctx) }; transfer::public_share_object(q); }
+    public entry fun init_gas_settlement_queue(ctx: &mut TxContext) { let q = GasSettlementQueue { id: object::new(ctx), entries: table::new<ID, u64>(ctx) }; transfer::share_object(q); }
     entry fun request_gas_settlement(reg: &GasFuturesRegistry, market: &GasFuturesContract, queue: &mut GasSettlementQueue, _ctx: &TxContext) { assert!(!reg.paused, E_PAUSED); assert!(market.is_expired, E_MIN_INTERVAL); let ready = market.settled_at_ms + reg.dispute_window_ms; if (table::contains(&queue.entries, object::id(market))) { let _ = table::remove(&mut queue.entries, object::id(market)); }; table::add(&mut queue.entries, object::id(market), ready); }
     entry fun request_gas_settlement_with_points(reg: &GasFuturesRegistry, market: &GasFuturesContract, queue: &mut GasSettlementQueue, points: &mut BotPointsRegistry, clock: &Clock, ctx: &mut TxContext) { request_gas_settlement(reg, market, queue, ctx); BotRewards::award_points(points, b"gas_futures.request_settlement".to_string(), ctx.sender(), clock, ctx); }
     entry fun process_due_gas_settlements(reg: &GasFuturesRegistry, queue: &mut GasSettlementQueue, market_ids: vector<ID>, clock: &Clock, _ctx: &TxContext) { assert!(!reg.paused, E_PAUSED); let now = sui::clock::timestamp_ms(clock); let mut i = 0; while (i < vector::length(&market_ids)) { let mid = *vector::borrow(&market_ids, i); if (table::contains(&queue.entries, mid)) { let ready = *table::borrow(&queue.entries, mid); if (now >= ready) { let _ = table::remove(&mut queue.entries, mid); } }; i = i + 1; } }

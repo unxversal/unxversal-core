@@ -343,7 +343,7 @@ module unxversal::futures {
                     let mut vec_unxv = vector::empty<Coin<unxversal::unxv::UNXV>>();
                     vector::push_back(&mut vec_unxv, exact);
                     let epoch_id = BotRewards::current_epoch(points, clock);
-                    TreasuryMod::deposit_unxv_with_rewards_for_epoch(treasury, bot_treasury, epoch_id, vec_unxv, b"futures_trade".to_string(), ctx.sender(), ctx);
+                    TreasuryMod::deposit_unxv_discount_to_bot_for_epoch<C>(bot_treasury, epoch_id, vec_unxv, ctx);
                     discount_applied = true;
                 }
             }

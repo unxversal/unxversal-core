@@ -268,6 +268,21 @@ module unxversal::treasury {
         vector::destroy_empty<Coin<UNXV>>(v);
     }
 
+    /// Epoch-aware deposit for UNXV discount: route entire amount to bot epoch reserves (no treasury share)
+    public(package) fun deposit_unxv_discount_to_bot_for_epoch<C>(bot: &mut BotRewardsTreasury<C>, epoch_id: u64, mut v: vector<Coin<UNXV>>, ctx: &mut TxContext) {
+        let mut merged = coin::zero<UNXV>(ctx);
+        let mut total: u64 = 0;
+        while (!vector::is_empty(&v)) { let c = vector::pop_back(&mut v); total = total + coin::value(&c); coin::join(&mut merged, c); };
+        assert!(total > 0, E_ZERO_AMOUNT);
+        let bal_u = coin::into_balance(merged);
+        balance::join(&mut bot.unxv, bal_u);
+        let cur = if (table::contains(&bot.epoch_unxv, epoch_id)) { *table::borrow(&bot.epoch_unxv, epoch_id) } else { 0 };
+        let newv = cur + total;
+        if (table::contains(&bot.epoch_unxv, epoch_id)) { let _ = table::remove(&mut bot.epoch_unxv, epoch_id); };
+        table::add(&mut bot.epoch_unxv, epoch_id, newv);
+        vector::destroy_empty<Coin<UNXV>>(v);
+    }
+
     /*******************************
      * BotRewardsTreasury epoch helpers (package scope)
      *******************************/

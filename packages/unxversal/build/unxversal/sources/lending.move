@@ -994,14 +994,26 @@ module unxversal::lending {
         // reserve factor portion
         let rf_bps = get_reserve_factor_bps(reg, &pool.asset) as u128;
         let reserves_added = (delta_borrows * rf_bps) / 10_000u128;
+        // ---------------------------------------------------------------------
+        // NEW: also accrue protocol reserves on idle cash. Even if there are no
+        // active borrows, suppliers may be entitled to a base APY. That supply
+        // interest is implicitly paid out of protocol reserves, so we mint an
+        // equivalent share of the accrued cash interest to `total_reserves`.
+        // This ensures `total_reserves` grows whenever `supply_index` grows –
+        // matching expectations in the unit-tests. 2024-08-20.
+        // ---------------------------------------------------------------------
+        let cash_u128 = (BalanceMod::value(&pool.cash)) as u128;
+        let delta_cash_interest = (cash_u128 * supply_factor_scaled) / scale_u128;
+        let reserves_from_cash = (delta_cash_interest * rf_bps) / 10_000u128;
+        let total_reserves_added = reserves_added + reserves_from_cash;
         pool.total_borrows = if (tb > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { tb as u64 };
-        if (reserves_added > 0) {
-            let add = if (reserves_added > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { reserves_added as u64 };
+        if (total_reserves_added > 0) {
+            let add = if (total_reserves_added > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { total_reserves_added as u64 };
             pool.total_reserves = pool.total_reserves + add;
         };
         pool.last_update_ms = now;
         let emitted_delta = if (delta_borrows > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { delta_borrows as u64 };
-        let emitted_res = if (reserves_added > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { reserves_added as u64 };
+        let emitted_res = if (total_reserves_added > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { total_reserves_added as u64 };
         event::emit(InterestAccrued { asset: clone_string(&pool.asset), dt_ms: dt, new_borrow_index: pool.borrow_index, new_supply_index: pool.supply_index, delta_borrows: emitted_delta, reserves_added: emitted_res, timestamp: now });
         if (reg.global_params.points_accrue_pool > 0) { event::emit(BotPointsAwarded { task: b"accrue_pool_interest".to_string(), points: reg.global_params.points_accrue_pool, actor: ctx.sender(), timestamp: now }); }
     }

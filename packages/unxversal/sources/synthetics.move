@@ -139,6 +139,21 @@ module unxversal::synthetics {
     }
     fun get_price_scaled_1e6(clock: &Clock, cfg: &OracleConfig, agg: &Aggregator): u64 { OracleMod::get_price_scaled_1e6(cfg, clock, agg) }
 
+    // Scale helpers for decimals-aware notional/debt calculations
+    fun pow10_u128(n: u8): u128 {
+        let mut result: u128 = 1u128;
+        let mut i: u64 = 0;
+        while (i < (n as u64)) { result = result * 10u128; i = i + 1; };
+        result
+    }
+
+    fun debt_value_micro_usd(units: u64, price_micro_usd: u64, decimals: u8): u64 {
+        let scale: u128 = pow10_u128(decimals);
+        let num: u128 = (units as u128) * (price_micro_usd as u128);
+        let val: u128 = if (scale > 0) { num / scale } else { num };
+        clamp_u128_to_u64(val)
+    }
+
     // Vector<u8> equality by bytes (for oracle feed hash binding)
     fun eq_vec_u8(a: &vector<u8>, b: &vector<u8>): bool {
         let la = vector::length(a);
@@ -229,6 +244,7 @@ module unxversal::synthetics {
     const E_BAD_PRICE: u64 = 11;
     const E_COLLATERAL_NOT_SET: u64 = 13;
     const E_WRONG_COLLATERAL_CFG: u64 = 14;
+    #[allow(unused_const)]
     const E_ORACLE_FEED_NOT_SET: u64 = 15;
     const E_ORACLE_MISMATCH: u64 = 16;
     const E_DEPRECATED: u64 = 17;
@@ -1677,8 +1693,9 @@ module unxversal::synthetics {
                 let du = *table::borrow(&vault.synthetic_debt, clone_string(&sym));
                 if (du > 0) {
                     assert!(px > 0, E_BAD_PRICE);
-                    total_debt_value = total_debt_value + (du * px);
                     let a = table::borrow(&registry.synthetics, clone_string(&sym));
+                    // Units × price in micro-USD
+                    total_debt_value = total_debt_value + (du * px);
                     let m = if (a.min_collateral_ratio > 0) { 
                         a.min_collateral_ratio 
                     } else { 
@@ -1728,8 +1745,10 @@ module unxversal::synthetics {
         let old_debt = if (table::contains(debt_table, clone_string(&synthetic_symbol))) { *table::borrow(debt_table, k1) } else { 0 };
         let new_debt = old_debt + amount;
         let collateral_units = balance::value(&vault.collateral);
-        let debt_usd_u128: u128 = (new_debt as u128) * (price_u64 as u128); // micro‑USD
-        let coll_u128: u128 = collateral_units as u128; // TestBaseUSD units are micro‑USD
+        // Scale debt units using asset.decimals to micro‑USD
+        let debt_usd_u64: u64 = debt_value_micro_usd(new_debt, price_u64, asset.decimals);
+        let debt_usd_u128: u128 = debt_usd_u64 as u128; // micro‑USD
+        let coll_u128: u128 = collateral_units as u128; // Collateral units are micro‑USD in tests
         let new_ratio = if (debt_usd_u128 == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64((coll_u128 * 10_000u128) / debt_usd_u128) };
         let min_req = if (asset.min_collateral_ratio > registry.global_params.min_collateral_ratio) { asset.min_collateral_ratio } else { registry.global_params.min_collateral_ratio };
         assert!(new_ratio >= min_req, E_RATIO_TOO_LOW);
@@ -1850,7 +1869,9 @@ module unxversal::synthetics {
         } else { 0 };
         let new_debt = old_debt + amount;
         let collateral_units = balance::value(&vault.collateral);
-        let debt_usd_u128: u128 = (new_debt as u128) * (price_u64 as u128);
+        // Convert debt units (with decimals) into micro-USD value
+        let debt_usd_u64: u64 = debt_value_micro_usd(new_debt, price_u64, asset.decimals);
+        let debt_usd_u128: u128 = debt_usd_u64 as u128;
         let new_ratio = if (debt_usd_u128 == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64(((collateral_units as u128) * 10_000u128) / debt_usd_u128) };
 
         // enforce ratio ≥ per‑asset min & global min
@@ -1965,8 +1986,8 @@ module unxversal::synthetics {
                 let du = *table::borrow(&vault.synthetic_debt, clone_string(&sym));
                 if (du > 0) {
                     assert!(px > 0, E_BAD_PRICE);
-                    total_debt_value = total_debt_value + (du * px);
                     let a = table::borrow(&registry.synthetics, clone_string(&sym));
+                    total_debt_value = total_debt_value + (du * px);
                     let m = if (a.min_collateral_ratio > 0) { a.min_collateral_ratio } else { registry.global_params.min_collateral_ratio };
                     if (m > max_min_ccr) { max_min_ccr = m; };
                 };
@@ -2522,9 +2543,10 @@ module unxversal::synthetics {
         if (!table::contains(&vault.synthetic_debt, clone_string(symbol))) { return (collateral_value, 0, U64_MAX_LITERAL) };
         let debt_units = *table::borrow(&vault.synthetic_debt, clone_string(symbol));
         let px = assert_and_get_price_for_symbol(clock, oracle_cfg, _registry, symbol, price);
-        let debt_value_u128: u128 = (debt_units as u128) * (px as u128);
-        let debt_value = clamp_u128_to_u64(debt_value_u128);
-        let ratio = if (debt_value_u128 == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64(((collateral_value as u128) * 10_000u128) / debt_value_u128) };
+        // Read decimals to convert units×price correctly
+        let a = table::borrow(&_registry.synthetics, clone_string(symbol));
+        let debt_value: u64 = debt_value_micro_usd(debt_units, px, a.decimals);
+        let ratio = if (debt_value == 0) { U64_MAX_LITERAL } else { ((collateral_value / 1) * 10_000) / debt_value };
         (collateral_value, debt_value, ratio)
     }
 
@@ -2572,11 +2594,13 @@ module unxversal::synthetics {
         table::add(&mut vault.synthetic_debt, clone_string(&synthetic_symbol), new_debt);
 
         // Seize collateral and split bot reward
+        let available = balance::value(&vault.collateral);
+        let seize_capped = if (seize <= available) { seize } else { available };
         let mut seized_coin = {
-            let seized_bal = balance::split(&mut vault.collateral, seize);
+            let seized_bal = balance::split(&mut vault.collateral, seize_capped);
             coin::from_balance(seized_bal, ctx)
         };
-        let bot_cut = (seize * registry.global_params.bot_split) / 10_000;
+        let bot_cut = (seize_capped * registry.global_params.bot_split) / 10_000;
         let to_bot = coin::split(&mut seized_coin, bot_cut, ctx);
         transfer::public_transfer(to_bot, liquidator);
         // Remainder to treasury
@@ -2587,7 +2611,7 @@ module unxversal::synthetics {
             vault_id: object::id(vault),
             liquidator,
             liquidated_amount: repay,
-            collateral_seized: seize,
+            collateral_seized: seize_capped,
             liquidation_penalty: penalty,
             synthetic_type: synthetic_symbol,
             timestamp: sui::tx_context::epoch_timestamp_ms(ctx),
@@ -2618,8 +2642,9 @@ module unxversal::synthetics {
                 let du = *table::borrow(&vault.synthetic_debt, clone_string(&sym));
                 if (du > 0) {
                     assert!(px > 0, E_BAD_PRICE);
-                    total_debt_value = total_debt_value + (du * px);
                     let a = table::borrow(&_registry.synthetics, clone_string(&sym));
+                    let dv3 = debt_value_micro_usd(du, px, a.decimals);
+                    total_debt_value = total_debt_value + dv3;
                     let th = if (a.liquidation_threshold_bps > 0) { a.liquidation_threshold_bps } else { _registry.global_params.liquidation_threshold };
                     if (th > max_th) { max_th = th; };
                 };
@@ -2643,8 +2668,8 @@ module unxversal::synthetics {
         assert!(repay > 0, E_INVALID_ORDER);
         let px_target = get_symbol_price_from_set(prices, &target_symbol);
         assert!(px_target > 0, E_BAD_PRICE);
-        let notional = repay * px_target;
         let asset_for_liq = table::borrow(&_registry.synthetics, clone_string(&target_symbol));
+        let notional = debt_value_micro_usd(repay, px_target, asset_for_liq.decimals);
         let liq_pen_bps = if (asset_for_liq.liquidation_penalty_bps > 0) { asset_for_liq.liquidation_penalty_bps } else { _registry.global_params.liquidation_penalty };
         let penalty = (notional * liq_pen_bps) / 10_000;
         let seize = notional + penalty;

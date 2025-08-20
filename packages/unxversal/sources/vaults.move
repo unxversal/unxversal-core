@@ -129,7 +129,7 @@ module unxversal::vaults {
             max_aum_base: 0, perf_fee_bps: 1000, hwm_nav_per_share_1e6: 1_000_000,
             frozen: false, created_at_ms: clock::timestamp_ms(clock_obj)
         };
-        inc_active(rs, ctx.sender()); event::emit(VaultCreated { vault_id: object::id(&v), manager: v.manager, min_cash_bps, created_at: v.created_at_ms }); transfer::public_share_object(v)
+        inc_active(rs, ctx.sender()); event::emit(VaultCreated { vault_id: object::id(&v), manager: v.manager, min_cash_bps, created_at: v.created_at_ms }); transfer::share_object(v)
     }
     public fun set_vault_frozen<BaseUSD: store>(rs: &ManagerStakeRegistry, v: &mut Vault<BaseUSD>, frozen: bool, clock_obj: &Clock, ctx: &TxContext) { assert!(v.manager == ctx.sender(), E_NOT_MANAGER); assert_manager_active(rs, v.manager); v.frozen = frozen; event::emit(VaultFrozen { vault_id: object::id(v), frozen, timestamp: clock::timestamp_ms(clock_obj) }) }
     public fun close_vault<BaseUSD: store>(rs: &mut ManagerStakeRegistry, v: Vault<BaseUSD>, ctx: &TxContext) {
