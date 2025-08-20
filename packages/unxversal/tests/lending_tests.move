@@ -292,9 +292,13 @@ module unxversal::lending_more_tests {
         let mut bidxs: vector<u64> = vector::empty<u64>(); vector::push_back(&mut bidxs, bidx_d); vector::push_back(&mut bidxs, bidx_c);
         // Borrow some debt to be undercollateralized later by manual price changes
         Lend::borrow<TestBaseUSD>(&reg, &mut debt_pool, &mut acct, 10_000, &oreg, &ocfg, &clk, &agg_debt, syms, &ps, sidxs, bidxs, ctx);
-        // Increase penalty split to treasury
+        // Increase penalty split to treasury; then simulate undercollateralization by dropping collateral price
         let admin_reg = unxversal::admin::new_admin_registry_for_testing(ctx);
         Lend::set_points_and_splits_for_testing(&mut reg, &admin_reg, 0, 0, 0, 2_000, ctx);
+        // Manually change collateral price to reduce account ratio below threshold
+        switchboard::aggregator::set_current_value(&mut agg_coll, switchboard::decimal::new(100_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
+        // Update bound price set with new collateral price
+        Lend::record_symbol_price(&oreg, &ocfg, &clk, string::utf8(b"COLL"), &agg_coll, &mut ps);
         // Bot infra
         let mut tre: Treasury<TestBaseUSD> = Tre::new_treasury_for_testing<TestBaseUSD>(ctx);
         let mut bot: BotRewardsTreasury<TestBaseUSD> = Tre::new_bot_rewards_treasury_for_testing<TestBaseUSD>(ctx);

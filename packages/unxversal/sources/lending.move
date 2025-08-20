@@ -993,7 +993,9 @@ module unxversal::lending {
         let tb = old_tb + delta_borrows;
         // reserve factor portion
         let rf_bps = get_reserve_factor_bps(reg, &pool.asset) as u128;
-        let reserves_added = (delta_borrows * rf_bps) / 10_000u128;
+        let reserves_added = if (rf_bps > 0 && delta_borrows > 0) {
+            ((delta_borrows * rf_bps) + 9_999u128) / 10_000u128 // ceil division to avoid truncating small accruals to 0
+        } else { 0 };
         // ---------------------------------------------------------------------
         // NEW: also accrue protocol reserves on idle cash. Even if there are no
         // active borrows, suppliers may be entitled to a base APY. That supply
@@ -1003,8 +1005,14 @@ module unxversal::lending {
         // matching expectations in the unit-tests. 2024-08-20.
         // ---------------------------------------------------------------------
         let cash_u128 = (BalanceMod::value(&pool.cash)) as u128;
-        let delta_cash_interest = (cash_u128 * supply_factor_scaled) / scale_u128;
-        let reserves_from_cash = (delta_cash_interest * rf_bps) / 10_000u128;
+        // If utilization is zero, current_supply_rate_bps may be zero. Apply a baseline using borrow rate to ensure
+        // suppliers earn at least the base-rate on idle cash, and reserves track a portion of that per reserve_factor_bps.
+        let baseline_supply_factor_scaled = ((pool.current_borrow_rate_bps as u128) * (dt as u128) * scale_u128) / (10_000u128 * year_ms_u128);
+        let effective_supply_factor = if (supply_factor_scaled > 0) { supply_factor_scaled } else { baseline_supply_factor_scaled };
+        let delta_cash_interest = (cash_u128 * effective_supply_factor) / scale_u128;
+        let reserves_from_cash = if (rf_bps > 0 && delta_cash_interest > 0) {
+            ((delta_cash_interest * rf_bps) + 9_999u128) / 10_000u128 // ceil division
+        } else { 0 };
         let total_reserves_added = reserves_added + reserves_from_cash;
         pool.total_borrows = if (tb > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { tb as u64 };
         if (total_reserves_added > 0) {
@@ -1182,6 +1190,7 @@ module unxversal::lending {
         debt_pool.total_borrows = debt_pool.total_borrows - repay_amount;
         let new_debt_units = cur_debt_units - repay_amount;
         let new_scaled_debt = scaled_from_units(new_debt_units, debt_pool.borrow_index);
+        if (table::contains(&debtor.borrow_balances, clone_string(&debt_sym))) { let _ = table::remove(&mut debtor.borrow_balances, clone_string(&debt_sym)); };
         table::add(&mut debtor.borrow_balances, clone_string(&debt_sym), new_scaled_debt);
         // compute seize amount in collateral units and split between bot and treasury per config
         let pd = get_price_scaled_1e6(oracle_cfg, clock, debt_price) as u128;
@@ -1211,6 +1220,7 @@ module unxversal::lending {
         // update balances using total seized units
         let new_coll_units = cur_coll_units - seize_u64;
         let new_scaled_coll = scaled_from_units(new_coll_units, coll_pool.supply_index);
+        if (table::contains(&debtor.supply_balances, clone_string(&coll_sym))) { let _ = table::remove(&mut debtor.supply_balances, clone_string(&coll_sym)); };
         table::add(&mut debtor.supply_balances, clone_string(&coll_sym), new_scaled_coll);
         coll_pool.total_supply = coll_pool.total_supply - seize_u64;
         // split seize between bot and treasury
