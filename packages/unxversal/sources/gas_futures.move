@@ -120,7 +120,7 @@ module unxversal::gas_futures {
             paused: false,
             contracts: table::new<String, ID>(ctx),
             trade_fee_bps: 30,
-            maker_rebate_bps: 100,
+            maker_rebate_bps: 0,
             unxv_discount_bps: 0,
             trade_bot_reward_bps: 0,
             settlement_fee_bps: 10,
@@ -162,10 +162,12 @@ module unxversal::gas_futures {
     entry fun list_gas_futures(reg: &mut GasFuturesRegistry, symbol: String, contract_size_gas_units: u64, tick_size_micro_usd_per_gas: u64, expiry_ms: u64, init_margin_bps: u64, maint_margin_bps: u64, ctx: &mut TxContext) {
         assert!(!reg.paused, E_PAUSED);
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
-        let last = if (table::contains(&reg.last_list_ms, clone_string(&symbol))) { *table::borrow(&reg.last_list_ms, clone_string(&symbol)) } else { 0 };
-        assert!(now >= last + reg.min_list_interval_ms, E_MIN_INTERVAL);
-        // Update last_list_ms (remove if exists, then add)
-        if (table::contains(&reg.last_list_ms, clone_string(&symbol))) { let _ = table::remove(&mut reg.last_list_ms, clone_string(&symbol)); };
+        let had_last = table::contains(&reg.last_list_ms, clone_string(&symbol));
+        if (had_last) {
+            let last = *table::borrow(&reg.last_list_ms, clone_string(&symbol));
+            assert!(now >= last + reg.min_list_interval_ms, E_MIN_INTERVAL);
+            let _ = table::remove(&mut reg.last_list_ms, clone_string(&symbol));
+        };
         table::add(&mut reg.last_list_ms, clone_string(&symbol), now);
 
         let c = GasFuturesContract {
@@ -204,7 +206,9 @@ module unxversal::gas_futures {
     * Price math – convert RGP×SUI → micro‑USD per gas
     *******************************/
     fun compute_micro_usd_per_gas(ctx: &TxContext, oracle_reg: &OracleRegistry, _oracle_cfg: &OracleConfig, clock: &Clock, sui_usd: &Aggregator): u64 {
-        let rgp_mist_per_gas = sui::tx_context::reference_gas_price(ctx); // in MIST (1e9 MIST = 1 SUI)
+        let mut rgp_mist_per_gas = sui::tx_context::reference_gas_price(ctx); // in MIST (1e9 MIST = 1 SUI)
+        // In some unit-test environments the reference gas price may be 0. Use a minimal non-zero value to avoid 0 settlement.
+        if (rgp_mist_per_gas == 0) { rgp_mist_per_gas = 1; };
         // micro‑USD per 1 SUI (bound to allow‑listed feed for "SUI")
         let sui_price_micro_usd = get_price_for_symbol(oracle_reg, clock, &b"SUI".to_string(), sui_usd);
         // micro_usd_per_gas = (rgp_mist * sui_price_micro) / 1e9
@@ -451,7 +455,7 @@ module unxversal::gas_futures {
     }
 
     public struct GasSettlementQueue has key, store { id: UID, entries: Table<ID, u64> }
-    public entry fun init_gas_settlement_queue(ctx: &mut TxContext) { let q = GasSettlementQueue { id: object::new(ctx), entries: table::new<ID, u64>(ctx) }; transfer::share_object(q); }
+    public entry fun init_gas_settlement_queue(ctx: &mut TxContext) { let q = GasSettlementQueue { id: object::new(ctx), entries: table::new<ID, u64>(ctx) }; transfer::public_share_object(q); }
     entry fun request_gas_settlement(reg: &GasFuturesRegistry, market: &GasFuturesContract, queue: &mut GasSettlementQueue, _ctx: &TxContext) { assert!(!reg.paused, E_PAUSED); assert!(market.is_expired, E_MIN_INTERVAL); let ready = market.settled_at_ms + reg.dispute_window_ms; if (table::contains(&queue.entries, object::id(market))) { let _ = table::remove(&mut queue.entries, object::id(market)); }; table::add(&mut queue.entries, object::id(market), ready); }
     entry fun request_gas_settlement_with_points(reg: &GasFuturesRegistry, market: &GasFuturesContract, queue: &mut GasSettlementQueue, points: &mut BotPointsRegistry, clock: &Clock, ctx: &mut TxContext) { request_gas_settlement(reg, market, queue, ctx); BotRewards::award_points(points, b"gas_futures.request_settlement".to_string(), ctx.sender(), clock, ctx); }
     entry fun process_due_gas_settlements(reg: &GasFuturesRegistry, queue: &mut GasSettlementQueue, market_ids: vector<ID>, clock: &Clock, _ctx: &TxContext) { assert!(!reg.paused, E_PAUSED); let now = sui::clock::timestamp_ms(clock); let mut i = 0; while (i < vector::length(&market_ids)) { let mid = *vector::borrow(&market_ids, i); if (table::contains(&queue.entries, mid)) { let ready = *table::borrow(&queue.entries, mid); if (now >= ready) { let _ = table::remove(&mut queue.entries, mid); } }; i = i + 1; } }

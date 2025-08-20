@@ -13,7 +13,6 @@ module unxversal::gas_futures_tests {
     use unxversal::synthetics::{Self as Synth};
     use unxversal::test_coins::TestBaseUSD;
 
-
     #[test]
     fun gas_record_fill_fee_routing_and_metrics() {
         let user = @0xF1; let mut scen = test_scenario::begin(user);
@@ -23,17 +22,24 @@ module unxversal::gas_futures_tests {
         let synth_reg = Synth::new_registry_for_testing(scen.ctx());
         // Init registry (gated by Synth admin)
         Gas::init_gas_registry(&synth_reg, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: GasFuturesRegistry = test_scenario::take_shared<GasFuturesRegistry>(&scen);
         // Price feeds
         let mut px_sui = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"SUI_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         aggregator::set_current_value(&mut px_sui, switchboard::decimal::new(2_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
         let mut px_unxv = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"UNXV_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         aggregator::set_current_value(&mut px_unxv, switchboard::decimal::new(1_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
+        // Share aggregators and move to next tx so they can be re-taken as shared
+        aggregator::share_for_testing(px_sui);
+        aggregator::share_for_testing(px_unxv);
+        test_scenario::next_tx(&mut scen, user);
+        let px_sui = test_scenario::take_shared<switchboard::aggregator::Aggregator>(&scen);
+        let px_unxv = test_scenario::take_shared<switchboard::aggregator::Aggregator>(&scen);
         let reg_admin = unxversal::admin::new_admin_registry_for_testing(scen.ctx());
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"SUI"), &px_sui, scen.ctx());
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"UNXV"), &px_unxv, scen.ctx());
-        // List market: contract_size=1, tick=1, expiry soon
         Gas::list_gas_futures(&mut reg, string::utf8(b"GAS-DEC24"), 1, 1, 1, 1_000, 600, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let gid = Gas::gas_contract_id(&reg, &string::utf8(b"GAS-DEC24"));
         let mut market: GasFuturesContract = test_scenario::take_shared_by_id<GasFuturesContract>(&scen, gid);
         let mut tre: Treasury<TestBaseUSD> = Tre::new_treasury_for_testing<TestBaseUSD>(scen.ctx());
@@ -49,8 +55,8 @@ module unxversal::gas_futures_tests {
         let (oi, vol, lastp) = Gas::gas_market_metrics(&market);
         assert!(oi == 10 && lastp == 1_000_000 && vol >= 10);
         // cleanup
-        aggregator::share_for_testing(px_sui);
-        aggregator::share_for_testing(px_unxv);
+        test_scenario::return_shared(px_sui);
+        test_scenario::return_shared(px_unxv);
         sui::transfer::public_share_object(reg);
         sui::transfer::public_share_object(orx);
         sui::transfer::public_share_object(reg_admin);
@@ -72,6 +78,7 @@ module unxversal::gas_futures_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let synth_reg = Synth::new_registry_for_testing(scen.ctx());
         Gas::init_gas_registry(&synth_reg, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: GasFuturesRegistry = test_scenario::take_shared<GasFuturesRegistry>(&scen);
         // enable 1% fee, 50% rebate, 50% UNXV discount
         Gas::set_trade_fee_config_for_testing(&mut reg, 100, 5000, 5000, 0);
@@ -80,11 +87,17 @@ module unxversal::gas_futures_tests {
         aggregator::set_current_value(&mut px_sui, switchboard::decimal::new(1_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
         let mut px_unxv = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"UNXV_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         aggregator::set_current_value(&mut px_unxv, switchboard::decimal::new(1_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
+        aggregator::share_for_testing(px_sui);
+        aggregator::share_for_testing(px_unxv);
+        test_scenario::next_tx(&mut scen, user);
+        let px_sui = test_scenario::take_shared<switchboard::aggregator::Aggregator>(&scen);
+        let px_unxv = test_scenario::take_shared<switchboard::aggregator::Aggregator>(&scen);
         let admin = unxversal::admin::new_admin_registry_for_testing(scen.ctx());
         Oracle::set_feed(&admin, &mut orx, string::utf8(b"SUI"), &px_sui, scen.ctx());
         Oracle::set_feed(&admin, &mut orx, string::utf8(b"UNXV"), &px_unxv, scen.ctx());
         // list
         Gas::list_gas_futures(&mut reg, string::utf8(b"GAS-DISC"), 1, 1, 1, 1_000, 600, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let gid = Gas::gas_contract_id(&reg, &string::utf8(b"GAS-DISC"));
         let mut market: GasFuturesContract = test_scenario::take_shared_by_id<GasFuturesContract>(&scen, gid);
         let mut tre: Treasury<TestBaseUSD> = Tre::new_treasury_for_testing<TestBaseUSD>(scen.ctx());
@@ -103,8 +116,8 @@ module unxversal::gas_futures_tests {
         let (epc, epu) = Tre::epoch_reserves_for_testing(&bot, BR::current_epoch(&pts, &clk));
         assert!(epc - pre_ec == 0 && epu - pre_eu >= 1);
         // cleanup
-        aggregator::share_for_testing(px_sui);
-        aggregator::share_for_testing(px_unxv);
+        test_scenario::return_shared(px_sui);
+        test_scenario::return_shared(px_unxv);
         sui::transfer::public_share_object(reg);
         sui::transfer::public_share_object(orx);
         sui::transfer::public_share_object(admin);
@@ -126,12 +139,14 @@ module unxversal::gas_futures_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let synth_reg = Synth::new_registry_for_testing(scen.ctx());
         Gas::init_gas_registry(&synth_reg, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: GasFuturesRegistry = test_scenario::take_shared<GasFuturesRegistry>(&scen);
         let px_ok = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"SUI_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         let px_bad = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"WRONG"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         let admin = unxversal::admin::new_admin_registry_for_testing(scen.ctx());
         Oracle::set_feed(&admin, &mut orx, string::utf8(b"SUI"), &px_ok, scen.ctx());
         Gas::list_gas_futures(&mut reg, string::utf8(b"GAS-X"), 1, 1, 1, 1_000, 600, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let gid = Gas::gas_contract_id(&reg, &string::utf8(b"GAS-X"));
         let mut market: GasFuturesContract = test_scenario::take_shared_by_id<GasFuturesContract>(&scen, gid);
         let mut clk2 = clk; clock::set_for_testing(&mut clk2, 2);
@@ -147,11 +162,17 @@ module unxversal::gas_futures_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let synth_reg = Synth::new_registry_for_testing(scen.ctx());
         Gas::init_gas_registry(&synth_reg, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: GasFuturesRegistry = test_scenario::take_shared<GasFuturesRegistry>(&scen);
-        let px = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"SUI_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
+        let mut px = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"SUI_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
+        aggregator::set_current_value(&mut px, switchboard::decimal::new(2_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
+        test_scenario::return_shared(px);
+        test_scenario::next_tx(&mut scen, user);
+        let mut px = test_scenario::take_shared<switchboard::aggregator::Aggregator>(&scen);
         let admin = unxversal::admin::new_admin_registry_for_testing(scen.ctx());
         Oracle::set_feed(&admin, &mut orx, string::utf8(b"SUI"), &px, scen.ctx());
         Gas::list_gas_futures(&mut reg, string::utf8(b"GAS-P"), 1, 1, 1, 1_000, 600, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let gid = Gas::gas_contract_id(&reg, &string::utf8(b"GAS-P"));
         let mut market: GasFuturesContract = test_scenario::take_shared_by_id<GasFuturesContract>(&scen, gid);
         Gas::pause_for_testing(&mut reg, true);
@@ -168,11 +189,17 @@ module unxversal::gas_futures_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let synth_reg = Synth::new_registry_for_testing(scen.ctx());
         Gas::init_gas_registry(&synth_reg, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: GasFuturesRegistry = test_scenario::take_shared<GasFuturesRegistry>(&scen);
-        let px = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"SUI_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
+        let mut px = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"SUI_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
+        aggregator::set_current_value(&mut px, switchboard::decimal::new(1_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
+        test_scenario::return_shared(px);
+        test_scenario::next_tx(&mut scen, user);
+        let mut px = test_scenario::take_shared<switchboard::aggregator::Aggregator>(&scen);
         let admin = unxversal::admin::new_admin_registry_for_testing(scen.ctx());
         Oracle::set_feed(&admin, &mut orx, string::utf8(b"SUI"), &px, scen.ctx());
         Gas::list_gas_futures(&mut reg, string::utf8(b"GAS-P2"), 1, 1, 1, 1_000, 600, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let gid = Gas::gas_contract_id(&reg, &string::utf8(b"GAS-P2"));
         let mut market: GasFuturesContract = test_scenario::take_shared_by_id<GasFuturesContract>(&scen, gid);
         Gas::pause_contract_for_testing(&mut market, true);
@@ -189,12 +216,14 @@ module unxversal::gas_futures_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let synth_reg = Synth::new_registry_for_testing(scen.ctx());
         Gas::init_gas_registry(&synth_reg, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: GasFuturesRegistry = test_scenario::take_shared<GasFuturesRegistry>(&scen);
         let mut px_sui = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"SUI_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         aggregator::set_current_value(&mut px_sui, switchboard::decimal::new(1_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
         let admin = unxversal::admin::new_admin_registry_for_testing(scen.ctx());
         Oracle::set_feed(&admin, &mut orx, string::utf8(b"SUI"), &px_sui, scen.ctx());
         Gas::list_gas_futures(&mut reg, string::utf8(b"GAS-TICK"), 1, 10, 1, 1_000, 600, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let gid = Gas::gas_contract_id(&reg, &string::utf8(b"GAS-TICK"));
         let mut market: GasFuturesContract = test_scenario::take_shared_by_id<GasFuturesContract>(&scen, gid);
         let fee_pay = coin::mint_for_testing<TestBaseUSD>(1, scen.ctx());
@@ -209,12 +238,17 @@ module unxversal::gas_futures_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let synth_reg = Synth::new_registry_for_testing(scen.ctx());
         Gas::init_gas_registry(&synth_reg, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: GasFuturesRegistry = test_scenario::take_shared<GasFuturesRegistry>(&scen);
         let mut px_sui = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"SUI_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         aggregator::set_current_value(&mut px_sui, switchboard::decimal::new(2_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
+        test_scenario::return_shared(px_sui);
+        test_scenario::next_tx(&mut scen, user);
+        let mut px_sui = test_scenario::take_shared<switchboard::aggregator::Aggregator>(&scen);
         let reg_admin = unxversal::admin::new_admin_registry_for_testing(scen.ctx());
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"SUI"), &px_sui, scen.ctx());
         Gas::list_gas_futures(&mut reg, string::utf8(b"GAS-JAN25"), 1, 1, 1, 1_000, 600, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let gid = Gas::gas_contract_id(&reg, &string::utf8(b"GAS-JAN25"));
         let mut market: GasFuturesContract = test_scenario::take_shared_by_id<GasFuturesContract>(&scen, gid);
         // advance time to expiry and settle
@@ -222,6 +256,7 @@ module unxversal::gas_futures_tests {
         Gas::settle_gas_futures(&reg, &mut market, &orx, &ocfg, &clk2, &px_sui, scen.ctx());
         // queue + points
         Gas::init_gas_settlement_queue(scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut q: Gas::GasSettlementQueue = test_scenario::take_shared<Gas::GasSettlementQueue>(&scen);
         let mut pts = BR::new_points_registry_for_testing(scen.ctx());
         Gas::request_gas_settlement_with_points(&reg, &market, &mut q, &mut pts, &clk2, scen.ctx());
@@ -232,7 +267,7 @@ module unxversal::gas_futures_tests {
         let tot = BR::total_points_for_epoch_for_testing(&pts, ep);
         assert!(tot > 0);
         // cleanup
-        aggregator::share_for_testing(px_sui);
+        test_scenario::return_shared(px_sui);
         sui::transfer::public_share_object(reg);
         sui::transfer::public_share_object(orx);
         sui::transfer::public_share_object(market);
@@ -253,12 +288,14 @@ module unxversal::gas_futures_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let synth_reg = Synth::new_registry_for_testing(scen.ctx());
         Gas::init_gas_registry(&synth_reg, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: GasFuturesRegistry = test_scenario::take_shared<GasFuturesRegistry>(&scen);
         let mut px_sui = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"SUI_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         aggregator::set_current_value(&mut px_sui, switchboard::decimal::new(1_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
         let reg_admin = unxversal::admin::new_admin_registry_for_testing(scen.ctx());
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"SUI"), &px_sui, scen.ctx());
         Gas::list_gas_futures(&mut reg, string::utf8(b"GAS-MAR25"), 1, 1, 1, 1_000, 600, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let gid = Gas::gas_contract_id(&reg, &string::utf8(b"GAS-MAR25"));
         let mut market: GasFuturesContract = test_scenario::take_shared_by_id<GasFuturesContract>(&scen, gid);
         let mut tre: Treasury<TestBaseUSD> = Tre::new_treasury_for_testing<TestBaseUSD>(scen.ctx());
@@ -309,16 +346,18 @@ module unxversal::gas_futures_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let synth_reg = Synth::new_registry_for_testing(scen.ctx());
         Gas::init_gas_registry(&synth_reg, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: GasFuturesRegistry = test_scenario::take_shared<GasFuturesRegistry>(&scen);
         // Configure settlement fee = 1% and bot cut = 10%
         Gas::set_settlement_params_for_testing(&mut reg, 100, 1000);
-        // Oracle for SUI (not used in close)
+        // Oracles
         let mut px_sui = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"SUI_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         aggregator::set_current_value(&mut px_sui, switchboard::decimal::new(1_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
         let admin = unxversal::admin::new_admin_registry_for_testing(scen.ctx());
         Oracle::set_feed(&admin, &mut orx, string::utf8(b"SUI"), &px_sui, scen.ctx());
         // List market
         Gas::list_gas_futures(&mut reg, string::utf8(b"GAS-BOT"), 1, 1, 1, 1_000, 600, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let gid = Gas::gas_contract_id(&reg, &string::utf8(b"GAS-BOT"));
         let mut market: GasFuturesContract = test_scenario::take_shared_by_id<GasFuturesContract>(&scen, gid);
         let mut tre: Treasury<TestBaseUSD> = Tre::new_treasury_for_testing<TestBaseUSD>(scen.ctx());

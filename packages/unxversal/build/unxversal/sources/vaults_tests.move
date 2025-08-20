@@ -15,6 +15,7 @@ module unxversal::vaults_tests {
         let clk = clock::create_for_testing(scen.ctx());
         let reg_admin: AdminRegistry = Admin::new_admin_registry_for_testing(scen.ctx());
         V::init_manager_stake_registry_admin(&reg_admin, 10, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut rs: ManagerStakeRegistry = test_scenario::take_shared<ManagerStakeRegistry>(&scen);
         // stake UNXV to reach min
         let mut v_unxv = vector::empty<sui::coin::Coin<UNXV>>();
@@ -22,6 +23,7 @@ module unxversal::vaults_tests {
         V::stake_unxv(&mut rs, v_unxv, &clk, scen.ctx());
         // create vault, deposit, withdraw, set frozen
         V::create_vault<TestBaseUSD>(&mut rs, 1000, &clk, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut v: Vault<TestBaseUSD> = test_scenario::take_shared<Vault<TestBaseUSD>>(&scen);
         V::set_vault_frozen(&rs, &mut v, false, &clk, scen.ctx());
         let pay = coin::mint_for_testing<TestBaseUSD>(1_000_000, scen.ctx());
@@ -36,10 +38,11 @@ module unxversal::vaults_tests {
         // slash stake
         let mut tre_unxv: Treasury<UNXV> = Tre::new_treasury_for_testing<UNXV>(scen.ctx());
         V::slash_stake_admin(&reg_admin, &mut rs, &mut tre_unxv, user, 5, &clk, scen.ctx());
-        // cleanup
-        sui::transfer::public_share_object(rs);
-        sui::transfer::public_share_object(v);
-        sui::transfer::public_share_object(store);
+        // cleanup: return shared objects to the global inventory
+        test_scenario::return_shared(rs);
+        test_scenario::return_shared(v);
+        test_scenario::return_shared(store);
+        // treasury and admin registry are owned here; sharing or leaving them is fine
         sui::transfer::public_share_object(tre_unxv);
         sui::transfer::public_share_object(reg_admin);
         clock::destroy_for_testing(clk);

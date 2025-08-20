@@ -226,9 +226,13 @@ module unxversal::perpetuals {
     public entry fun list_market(reg: &mut PerpsRegistry, underlying: String, symbol: String, tick_size_micro_usd: u64, init_margin_bps: u64, maint_margin_bps: u64, clock: &Clock, ctx: &mut TxContext) {
         assert!(!reg.paused, E_PAUSED);
         let now = sui::clock::timestamp_ms(clock);
-        let last = if (table::contains(&reg.last_list_ms, clone_string(&symbol))) { *table::borrow(&reg.last_list_ms, clone_string(&symbol)) } else { 0 };
-        assert!(now >= last + reg.min_list_interval_ms, E_MIN_INTERVAL);
-        table::add(&mut reg.last_list_ms, clone_string(&symbol), now);
+        let key = clone_string(&underlying);
+        if (table::contains(&reg.last_list_ms, clone_string(&key))) {
+            let last = *table::borrow(&reg.last_list_ms, clone_string(&key));
+            assert!(now >= last + reg.min_list_interval_ms, E_MIN_INTERVAL);
+            let _ = table::remove(&mut reg.last_list_ms, clone_string(&key));
+        };
+        table::add(&mut reg.last_list_ms, key, now);
 
         let sym_for_market = clone_string(&symbol);
         let underlying_for_event = clone_string(&underlying);

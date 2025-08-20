@@ -324,9 +324,11 @@ public fun remove_expired_collect(self: &mut Book, now_ts: u64, max_removals: u6
         let ord = slice_borrow(self.asks.borrow_slice(ar), ao);
         if (ord.expire_timestamp > now_ts) { break };
         let oid = ord.order_id;
+        // Compute next slice BEFORE removal to avoid borrowing a removed child slice
+        let (next_ar, next_ao) = self.asks.next_slice(ar, ao);
         self.asks.remove(oid);
         removed.push_back(oid);
-        (ar, ao) = self.asks.next_slice(ar, ao);
+        (ar, ao) = (next_ar, next_ao);
         count = count + 1;
     };
     // Scan bids from best
@@ -335,9 +337,11 @@ public fun remove_expired_collect(self: &mut Book, now_ts: u64, max_removals: u6
         let ord2 = slice_borrow(self.bids.borrow_slice(br), bo);
         if (ord2.expire_timestamp > now_ts) { break };
         let oid2 = ord2.order_id;
+        // Compute previous slice BEFORE removal (since iteration goes from best bid downwards)
+        let (prev_br, prev_bo) = self.bids.prev_slice(br, bo);
         self.bids.remove(oid2);
         removed.push_back(oid2);
-        (br, bo) = self.bids.prev_slice(br, bo);
+        (br, bo) = (prev_br, prev_bo);
         count = count + 1;
     };
     removed

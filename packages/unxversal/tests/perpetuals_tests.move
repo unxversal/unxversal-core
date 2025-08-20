@@ -13,7 +13,6 @@ module unxversal::perpetuals_tests {
     use unxversal::admin::{Self as Admin, AdminRegistry};
     use unxversal::test_coins::TestBaseUSD;
 
-
     #[test]
     fun perps_record_fill_discount_and_metrics() {
         let user = @0xA1; let mut scen = test_scenario::begin(user);
@@ -23,6 +22,7 @@ module unxversal::perpetuals_tests {
         let reg_admin: AdminRegistry = Admin::new_admin_registry_for_testing(scen.ctx());
         // init registry via AdminRegistry path
         Perp::init_perps_registry_admin(&reg_admin, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: PerpsRegistry = test_scenario::take_shared<PerpsRegistry>(&scen);
         // bind UNXV for discount and underlying feed
         let mut px_unxv = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"UNXV_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
@@ -34,6 +34,7 @@ module unxversal::perpetuals_tests {
         Perp::whitelist_underlying_feed_admin(&reg_admin, &mut reg, string::utf8(b"IDX"), &idx, scen.ctx());
         // list market
         Perp::list_market(&mut reg, string::utf8(b"IDX"), string::utf8(b"IDX-PERP"), 1, 1_000, 600, &clk, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mid = Perp::market_id(&reg, &string::utf8(b"IDX-PERP"));
         let mut market: PerpMarket = test_scenario::take_shared_by_id<PerpMarket>(&scen, mid);
         // set fee config: 1% fee, 50% rebate, 50% discount
@@ -77,11 +78,13 @@ module unxversal::perpetuals_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let reg_admin: AdminRegistry = Admin::new_admin_registry_for_testing(scen.ctx());
         Perp::init_perps_registry_admin(&reg_admin, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: PerpsRegistry = test_scenario::take_shared<PerpsRegistry>(&scen);
         let idx = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"IDX_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"IDX"), &idx, scen.ctx());
         Perp::whitelist_underlying_feed_admin(&reg_admin, &mut reg, string::utf8(b"IDX"), &idx, scen.ctx());
         Perp::list_market(&mut reg, string::utf8(b"IDX"), string::utf8(b"IDX-G"), 10, 1_000, 600, &clk, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mid = Perp::market_id(&reg, &string::utf8(b"IDX-G"));
         let mut market: PerpMarket = test_scenario::take_shared_by_id<PerpMarket>(&scen, mid);
         let fee_pay = coin::mint_for_testing<TestBaseUSD>(1, scen.ctx());
@@ -97,12 +100,14 @@ module unxversal::perpetuals_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let reg_admin: AdminRegistry = Admin::new_admin_registry_for_testing(scen.ctx());
         Perp::init_perps_registry_admin(&reg_admin, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: PerpsRegistry = test_scenario::take_shared<PerpsRegistry>(&scen);
         let ok = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"IDX_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         let bad = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"WRONG"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"IDX"), &ok, scen.ctx());
         Perp::whitelist_underlying_feed_admin(&reg_admin, &mut reg, string::utf8(b"IDX"), &ok, scen.ctx());
         Perp::list_market(&mut reg, string::utf8(b"IDX"), string::utf8(b"IDX-W"), 1, 1_000, 600, &clk, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mid = Perp::market_id(&reg, &string::utf8(b"IDX-W"));
         let mut market: PerpMarket = test_scenario::take_shared_by_id<PerpMarket>(&scen, mid);
         Perp::refresh_market_funding(&reg, &mut market, &orx, &bad, &clk);
@@ -116,11 +121,13 @@ module unxversal::perpetuals_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let reg_admin: AdminRegistry = Admin::new_admin_registry_for_testing(scen.ctx());
         Perp::init_perps_registry_admin(&reg_admin, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: PerpsRegistry = test_scenario::take_shared<PerpsRegistry>(&scen);
         let idx = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"IDX_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"IDX"), &idx, scen.ctx());
         Perp::whitelist_underlying_feed_admin(&reg_admin, &mut reg, string::utf8(b"IDX"), &idx, scen.ctx());
         Perp::list_market(&mut reg, string::utf8(b"IDX"), string::utf8(b"IDX-PZ"), 1, 1_000, 600, &clk, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mid = Perp::market_id(&reg, &string::utf8(b"IDX-PZ"));
         let mut market: PerpMarket = test_scenario::take_shared_by_id<PerpMarket>(&scen, mid);
         Perp::pause_market_for_testing(&mut market, true);
@@ -137,11 +144,13 @@ module unxversal::perpetuals_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let reg_admin: AdminRegistry = Admin::new_admin_registry_for_testing(scen.ctx());
         Perp::init_perps_registry_admin(&reg_admin, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: PerpsRegistry = test_scenario::take_shared<PerpsRegistry>(&scen);
         let px = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"IDX_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"IDX"), &px, scen.ctx());
         Perp::pause_registry_admin(&reg_admin, &mut reg, scen.ctx());
         Perp::list_market(&mut reg, string::utf8(b"IDX"), string::utf8(b"IDX-X"), 1, 1_000, 600, &clk, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         abort 0
     }
 
@@ -153,6 +162,7 @@ module unxversal::perpetuals_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let reg_admin: AdminRegistry = Admin::new_admin_registry_for_testing(scen.ctx());
         Perp::init_perps_registry_admin(&reg_admin, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: PerpsRegistry = test_scenario::take_shared<PerpsRegistry>(&scen);
         // list and set last trade price via a fill
         let mut idx = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"IDX_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
@@ -160,6 +170,7 @@ module unxversal::perpetuals_tests {
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"IDX"), &idx, scen.ctx());
         Perp::whitelist_underlying_feed_admin(&reg_admin, &mut reg, string::utf8(b"IDX"), &idx, scen.ctx());
         Perp::list_market(&mut reg, string::utf8(b"IDX"), string::utf8(b"IDX-P"), 1, 1_000, 600, &clk, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mid = Perp::market_id(&reg, &string::utf8(b"IDX-P"));
         let mut market: PerpMarket = test_scenario::take_shared_by_id<PerpMarket>(&scen, mid);
         // simulate a trade to set last_trade_price
@@ -199,6 +210,7 @@ module unxversal::perpetuals_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let reg_admin: AdminRegistry = Admin::new_admin_registry_for_testing(scen.ctx());
         Perp::init_perps_registry_admin(&reg_admin, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: PerpsRegistry = test_scenario::take_shared<PerpsRegistry>(&scen);
         // oracle and market
         let mut idx = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"IDX_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
@@ -206,6 +218,7 @@ module unxversal::perpetuals_tests {
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"IDX"), &idx, scen.ctx());
         Perp::whitelist_underlying_feed_admin(&reg_admin, &mut reg, string::utf8(b"IDX"), &idx, scen.ctx());
         Perp::list_market(&mut reg, string::utf8(b"IDX"), string::utf8(b"IDX-Q"), 1, 1_000, 600, &clk, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mid = Perp::market_id(&reg, &string::utf8(b"IDX-Q"));
         let mut market: PerpMarket = test_scenario::take_shared_by_id<PerpMarket>(&scen, mid);
         // open owned position via helper
@@ -253,6 +266,7 @@ module unxversal::perpetuals_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let reg_admin: AdminRegistry = Admin::new_admin_registry_for_testing(scen.ctx());
         Perp::init_perps_registry_admin(&reg_admin, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: PerpsRegistry = test_scenario::take_shared<PerpsRegistry>(&scen);
         // Set trade fee 1%, maker rebate 50%, UNXV discount 50%, and trade bot split 10%
         Perp::set_trade_fee_config_admin(&reg_admin, &mut reg, 100, 5000, 5000, 1000, scen.ctx());
@@ -265,6 +279,7 @@ module unxversal::perpetuals_tests {
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"UNXV"), &px_unxv, scen.ctx());
         Perp::whitelist_underlying_feed_admin(&reg_admin, &mut reg, string::utf8(b"IDX"), &idx, scen.ctx());
         Perp::list_market(&mut reg, string::utf8(b"IDX"), string::utf8(b"IDX-FEE"), 1, 1_000, 600, &clk, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mid = Perp::market_id(&reg, &string::utf8(b"IDX-FEE"));
         let mut market: PerpMarket = test_scenario::take_shared_by_id<PerpMarket>(&scen, mid);
         let mut tre: Treasury<TestBaseUSD> = Tre::new_treasury_for_testing<TestBaseUSD>(scen.ctx());
@@ -303,6 +318,7 @@ module unxversal::perpetuals_tests {
         let mut orx = Oracle::new_registry_for_testing(scen.ctx());
         let reg_admin: AdminRegistry = Admin::new_admin_registry_for_testing(scen.ctx());
         Perp::init_perps_registry_admin(&reg_admin, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mut reg: PerpsRegistry = test_scenario::take_shared<PerpsRegistry>(&scen);
         // Set 10% bot split for liquidation (uses trade_bot_reward_bps)
         Perp::set_trade_fee_config_admin(&reg_admin, &mut reg, 0, 0, 0, 1000, scen.ctx());
@@ -310,6 +326,7 @@ module unxversal::perpetuals_tests {
         Oracle::set_feed(&reg_admin, &mut orx, string::utf8(b"IDX"), &idx, scen.ctx());
         Perp::whitelist_underlying_feed_admin(&reg_admin, &mut reg, string::utf8(b"IDX"), &idx, scen.ctx());
         Perp::list_market(&mut reg, string::utf8(b"IDX"), string::utf8(b"IDX-LIQ"), 1, 1_000, 600, &clk, scen.ctx());
+        test_scenario::next_tx(&mut scen, user);
         let mid = Perp::market_id(&reg, &string::utf8(b"IDX-LIQ"));
         let mut market: PerpMarket = test_scenario::take_shared_by_id<PerpMarket>(&scen, mid);
         let mut tre: Treasury<TestBaseUSD> = Tre::new_treasury_for_testing<TestBaseUSD>(scen.ctx());

@@ -231,7 +231,8 @@ module unxversal::synthetics_tests {
         Syn::add_synthetic_for_testing(&mut reg, string::utf8(b"Synthetix"), string::utf8(b"sUSD"), 6, 1500, ctx);
 
         // Set params: low min_collateral_ratio so mint passes; higher liquidation_threshold so vault is liquidatable
-        let params = Syn::new_global_params_for_testing(100, 150, 500, 100, 200, 1_000, 50, 30, 2_000, 0, 100, 100, 10);
+        // Raise liquidation_threshold so liquidation is allowed even with higher collateral to cover seize
+        let params = Syn::new_global_params_for_testing(100, 30_000, 500, 100, 200, 1_000, 50, 30, 2_000, 0, 100, 100, 10);
         Syn::update_global_params(&mut reg, params, ctx);
 
         // Bind price and create vault
@@ -240,7 +241,8 @@ module unxversal::synthetics_tests {
         aggregator::set_current_value(&mut agg, decimal::new(1_000_000, false), 1, 1, 1, decimal::new(0, false), decimal::new(0, false), decimal::new(0, false), decimal::new(0, false), decimal::new(0, false));
         Syn::set_oracle_feed_binding_for_testing(&mut reg, string::utf8(b"sUSD"), &agg);
         let mut vault: CollateralVault<TestBaseUSD> = Syn::create_vault_for_testing<TestBaseUSD>(&cfg, &reg, ctx);
-        let coll = sui::coin::mint_for_testing<TestBaseUSD>(10_000, ctx);
+        // Fund enough collateral to cover notional + penalty so seizure is not capped
+        let coll = sui::coin::mint_for_testing<TestBaseUSD>(2_000_000, ctx);
         Syn::deposit_collateral<TestBaseUSD>(&cfg, &mut vault, coll, ctx);
 
         // Mint minimal amount to be just at min_collateral_ratio = 100 bps
@@ -372,7 +374,8 @@ module unxversal::synthetics_tests {
         Syn::set_oracle_feed_binding_for_testing(&mut reg, string::utf8(b"sUSD"), &agg);
         let mut tre: Treasury<TestBaseUSD> = Tre::new_treasury_for_testing<TestBaseUSD>(ctx);
         let mut vault: CollateralVault<TestBaseUSD> = Syn::create_vault_for_testing<TestBaseUSD>(&cfg, &reg, ctx);
-        Syn::deposit_collateral<TestBaseUSD>(&cfg, &mut vault, sui::coin::mint_for_testing<TestBaseUSD>(1_000_000, ctx), ctx);
+        // Reduce collateral so CCR falls below liquidation_threshold (ratio ≈ 100 bps < 150 bps)
+        Syn::deposit_collateral<TestBaseUSD>(&cfg, &mut vault, sui::coin::mint_for_testing<TestBaseUSD>(100_000, ctx), ctx);
         let ocfg = Oracle::new_config_for_testing(ctx);
         Syn::mint_synthetic<TestBaseUSD>(&cfg, &mut vault, &mut reg, &clk, &ocfg, &agg, string::utf8(b"sUSD"), 1_000, vector::empty<Coin<UNXV>>(), &agg, &mut tre, ctx);
         // Advance time by ~1 day and accrue
@@ -470,7 +473,8 @@ module unxversal::synthetics_tests {
         aggregator::set_current_value(&mut agg, decimal::new(1_000_000, false), 1, 1, 1, decimal::new(0, false), decimal::new(0, false), decimal::new(0, false), decimal::new(0, false), decimal::new(0, false));
         Syn::set_oracle_feed_binding_for_testing(&mut reg, string::utf8(b"sUSD"), &agg);
         // Params to allow liquidation path
-        let params = Syn::new_global_params_for_testing(100, 150, 500, 100, 200, 1000, 50, 30, 2000, 0, 100, 100, 10);
+        // Set liquidation_threshold high to ensure liquidation guard passes given provided balances
+        let params = Syn::new_global_params_for_testing(100, 30_000, 500, 100, 200, 1000, 50, 30, 2000, 0, 100, 100, 10);
         Syn::update_global_params(&mut reg, params, ctx);
         let mut vault: CollateralVault<TestBaseUSD> = Syn::create_vault_for_testing<TestBaseUSD>(&cfg, &reg, ctx);
         Syn::deposit_collateral<TestBaseUSD>(&cfg, &mut vault, sui::coin::mint_for_testing<TestBaseUSD>(1_000_000, ctx), ctx);
