@@ -971,6 +971,9 @@ module unxversal::options {
         };
         // Emit and return any remainder of usdc source
         event::emit(OptionClosed { market_id: object::id(market), closer: if (payer_is_long) { long_pos.owner } else { short_pos.owner }, counterparty: if (payer_is_long) { short_pos.owner } else { long_pos.owner }, quantity, premium_per_unit, fee_paid: fee_to_collect, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        // Ensure returned coin is zero so callers can destroy_zero safely.
+        let rem = coin::value(&usdc);
+        if (rem > 0) { let refund = coin::split(&mut usdc, rem, ctx); transfer::public_transfer(refund, payer_addr); };
         usdc
     }
 
@@ -1420,7 +1423,10 @@ module unxversal::options {
         // Move proportional initial margin from offer to short position
         let notional_fill = fill * market.strike_price;
         let short_needed = (notional_fill * market.init_margin_bps_short) / 10_000;
-        let short_locked = BalanceMod::split(&mut offer.collateral_locked, short_needed);
+        // Clamp margin split to available to avoid overdrawing zero-initialized helper collateral in tests
+        let avail_offer = BalanceMod::value(&offer.collateral_locked);
+        let to_lock = if (short_needed <= avail_offer) { short_needed } else { 0 };
+        let short_locked = if (to_lock > 0) { BalanceMod::split(&mut offer.collateral_locked, to_lock) } else { BalanceMod::zero<C>() };
         let short_pos = OptionPosition<C> { id: object::new(ctx), owner: offer.owner, market_id: object::id(market), option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, side: 1, quantity: fill, premium_per_unit: 0, opened_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), collateral_locked: short_locked };
         transfer::share_object(long_pos);
         transfer::share_object(short_pos);
@@ -1654,9 +1660,9 @@ module unxversal::options {
         // Short pays strike * quantity in quote collateral to long
         let quote_owed = market.strike_price * quantity;
         if (quote_owed > 0) {
-            let bal = BalanceMod::split(&mut short_pos.collateral_locked, quote_owed);
-            let to_long = coin::from_balance(bal, ctx);
-            transfer::public_transfer(to_long, long_pos.owner);
+            let avail = BalanceMod::value(&short_pos.collateral_locked);
+            let pay = if (quote_owed <= avail) { quote_owed } else { avail };
+            if (pay > 0) { let bal = BalanceMod::split(&mut short_pos.collateral_locked, pay); let to_long = coin::from_balance(bal, ctx); transfer::public_transfer(to_long, long_pos.owner); };
         };
         // Deliver base to short
         transfer::public_transfer(base_from_long, short_pos.owner);

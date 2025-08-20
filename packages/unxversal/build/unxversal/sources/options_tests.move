@@ -138,7 +138,7 @@ module unxversal::options_tests {
         // Fetch created market key not needed; we operate with a fresh market object for matching tests
         let mut market = Opt::new_market_for_testing(string::utf8(b"BASE"), string::utf8(b"CALL"), 1_000_000, 86_400_000, string::utf8(b"CASH"), ctx);
         let mut offer = Opt::new_short_offer_for_testing<TestBaseUSD>(&market, 10, 1000, 0, ctx);
-        let mut esc   = Opt::new_premium_escrow_for_testing<TestBaseUSD>(&market, 10, 1000, 10_000, 86_400_000, ctx);
+        let mut esc   = Opt::new_premium_escrow_for_testing<TestBaseUSD>(&market, 10, 1000, 10_000, 0, ctx);
         // Perform match: expect premium 10*1000=10_000; taker fee = 100 bps = 100; maker rebate = 50
         Opt::match_offer_and_escrow<TestBaseUSD>(&mut reg, &mut market, &mut offer, &mut esc, 10, vector::empty<sui::coin::Coin<unxversal::unxv::UNXV>>(), &mut tre, &ocfg, &clk, &agg, ctx);
         let (toi, tvp, ltp) = Opt::market_totals_for_testing(&market);
@@ -179,7 +179,7 @@ module unxversal::options_tests {
         // Market and offer/escrow
         let mut market = Opt::new_market_for_testing(string::utf8(b"BASE"), string::utf8(b"CALL"), 1_000_000, 1_000_000, string::utf8(b"CASH"), ctx);
         let mut offer = Opt::new_short_offer_for_testing<TestBaseUSD>(&market, 10, 1000, 0, ctx);
-        let mut esc   = Opt::new_premium_escrow_for_testing<TestBaseUSD>(&market, 10, 1000, 10_000, 1_000_000, ctx);
+        let mut esc   = Opt::new_premium_escrow_for_testing<TestBaseUSD>(&market, 10, 1000, 10_000, 0, ctx);
         // Provide UNXV for discount: fee = 10_000*1% = 100; discount 50% => 50 microUSD; px 1e6 => need ceil(50/1e6)=1 UNXV.
         let mut unxv_payment: vector<sui::coin::Coin<unxversal::unxv::UNXV>> = vector::empty<sui::coin::Coin<unxversal::unxv::UNXV>>();
         let unxv_coin = sui::coin::mint_for_testing<unxversal::unxv::UNXV>(2, ctx);
