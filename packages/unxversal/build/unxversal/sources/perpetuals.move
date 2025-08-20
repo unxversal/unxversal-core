@@ -1,4 +1,4 @@
-#[allow(unused_use)]
+#[allow(lint(public_entry))]
 module unxversal::perpetuals {
     /*******************************
     * Unxversal Perpetuals – orderbook-integrated, funding-based perps
@@ -493,6 +493,196 @@ module unxversal::perpetuals {
         rdisp.add(b"description".to_string(), b"Registry for perpetual markets and parameters".to_string());
         rdisp.update_version();
         transfer::public_transfer(rdisp, ctx.sender());
+    }
+
+    /*******************************
+    * Test-only helpers
+    *******************************/
+    #[test_only]
+    public fun new_position_for_testing<C>(
+        owner: address,
+        market: &PerpMarket,
+        side: u8,
+        size: u64,
+        avg_entry_price_micro_usd: u64,
+        mut margin: Coin<C>,
+        required_margin: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): (PerpPosition<C>, Coin<C>) {
+        let exact = coin::split(&mut margin, required_margin, ctx);
+        let locked = coin::into_balance(exact);
+        let pos = PerpPosition<C> {
+            id: object::new(ctx),
+            owner,
+            market_id: object::id(market),
+            side,
+            size,
+            avg_entry_price_micro_usd,
+            margin: locked,
+            accumulated_pnl: signed_zero(),
+            last_funding_ms: market.last_funding_ms
+        };
+        event::emit(PerpPositionOpened { symbol: clone_string(&market.symbol), account: owner, side, size, price: avg_entry_price_micro_usd, margin_locked: balance::value(&pos.margin), sponsor: owner, timestamp: sui::clock::timestamp_ms(clock) });
+        (pos, margin)
+    }
+
+    #[test_only]
+    public fun pause_market_for_testing(market: &mut PerpMarket, flag: bool) { market.paused = flag; }
+
+    #[test_only]
+    public struct PerpEventMirror has key, store {
+        id: UID,
+        fill_count: u64,
+        last_fill_fee_paid: u64,
+        last_fill_maker_rebate: u64,
+        last_fill_discount_applied: bool,
+        last_fill_bot_reward: u64,
+        vm_count: u64,
+        last_vm_qty: u64,
+        last_vm_from: u64,
+        last_vm_to: u64,
+        last_margin_refund: u64,
+        funding_count: u64,
+        last_funding_delta_abs: u64,
+        last_new_pnl_abs: u64,
+        liq_count: u64,
+        last_liq_price: u64,
+        last_liq_seized: u64,
+        last_liq_bot_reward: u64
+    }
+
+    #[test_only]
+    public fun new_perp_event_mirror_for_testing(ctx: &mut TxContext): PerpEventMirror {
+        PerpEventMirror { id: object::new(ctx), fill_count: 0, last_fill_fee_paid: 0, last_fill_maker_rebate: 0, last_fill_discount_applied: false, last_fill_bot_reward: 0, vm_count: 0, last_vm_qty: 0, last_vm_from: 0, last_vm_to: 0, last_margin_refund: 0, funding_count: 0, last_funding_delta_abs: 0, last_new_pnl_abs: 0, liq_count: 0, last_liq_price: 0, last_liq_seized: 0, last_liq_bot_reward: 0 }
+    }
+
+    #[test_only] public fun pem_fill_count(m: &PerpEventMirror): u64 { m.fill_count }
+    #[test_only] public fun pem_last_fill_fee(m: &PerpEventMirror): u64 { m.last_fill_fee_paid }
+    #[test_only] public fun pem_last_fill_rebate(m: &PerpEventMirror): u64 { m.last_fill_maker_rebate }
+    #[test_only] public fun pem_last_fill_discount(m: &PerpEventMirror): bool { m.last_fill_discount_applied }
+    #[test_only] public fun pem_last_fill_bot_reward(m: &PerpEventMirror): u64 { m.last_fill_bot_reward }
+    #[test_only] public fun pem_vm_count(m: &PerpEventMirror): u64 { m.vm_count }
+    #[test_only] public fun pem_last_vm_qty(m: &PerpEventMirror): u64 { m.last_vm_qty }
+    #[test_only] public fun pem_last_vm_from(m: &PerpEventMirror): u64 { m.last_vm_from }
+    #[test_only] public fun pem_last_vm_to(m: &PerpEventMirror): u64 { m.last_vm_to }
+    #[test_only] public fun pem_last_margin_refund(m: &PerpEventMirror): u64 { m.last_margin_refund }
+    #[test_only] public fun pem_funding_count(m: &PerpEventMirror): u64 { m.funding_count }
+    #[test_only] public fun pem_last_funding_abs(m: &PerpEventMirror): u64 { m.last_funding_delta_abs }
+    #[test_only] public fun pem_last_new_pnl_abs(m: &PerpEventMirror): u64 { m.last_new_pnl_abs }
+    #[test_only] public fun pem_liq_count(m: &PerpEventMirror): u64 { m.liq_count }
+    #[test_only] public fun pem_last_liq_price(m: &PerpEventMirror): u64 { m.last_liq_price }
+    #[test_only] public fun pem_last_liq_seized(m: &PerpEventMirror): u64 { m.last_liq_seized }
+    #[test_only] public fun pem_last_liq_bot_reward(m: &PerpEventMirror): u64 { m.last_liq_bot_reward }
+
+    #[test_only]
+    public fun record_fill_with_event_mirror<C>(
+        reg: &mut PerpsRegistry,
+        market: &mut PerpMarket,
+        price_micro_usd: u64,
+        size: u64,
+        taker_is_buyer: bool,
+        maker: address,
+        mut unxv_payment: vector<Coin<unxversal::unxv::UNXV>>,
+        unxv_usd_price: &Aggregator,
+        oracle_reg: &OracleRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        fee_payment: Coin<C>,
+        treasury: &mut Treasury<C>,
+        bot_treasury: &mut BotRewardsTreasury<C>,
+        points: &BotPointsRegistry,
+        oi_increase: bool,
+        min_price: u64,
+        max_price: u64,
+        mirror: &mut PerpEventMirror,
+        ctx: &mut TxContext
+    ) {
+        // expected math replicate
+        let notional_u128: u128 = (size as u128) * (price_micro_usd as u128);
+        let trade_fee_u128: u128 = (notional_u128 * (reg.trade_fee_bps as u128)) / 10_000u128;
+        let discount_usdc_u128: u128 = (trade_fee_u128 * (reg.unxv_discount_bps as u128)) / 10_000u128;
+        let mut discount_applied = false;
+        if (discount_usdc_u128 > 0 && vector::length(&unxv_payment) > 0) {
+            let unxv_px_u64 = get_price_for_symbol(oracle_reg, clock, &b"UNXV".to_string(), unxv_usd_price);
+            if (unxv_px_u64 > 0) { discount_applied = true; };
+        };
+        let collateral_fee_after_discount_u128: u128 = if (discount_applied) { if (discount_usdc_u128 <= trade_fee_u128) { trade_fee_u128 - discount_usdc_u128 } else { 0 } } else { trade_fee_u128 };
+        let maker_rebate_u128: u128 = (trade_fee_u128 * (reg.maker_rebate_bps as u128)) / 10_000u128;
+        let fee_paid = if (collateral_fee_after_discount_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { collateral_fee_after_discount_u128 as u64 };
+        let maker_rebate = if (maker_rebate_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { maker_rebate_u128 as u64 };
+        let bot_reward = if (reg.trade_bot_reward_bps > 0) { (fee_paid * reg.trade_bot_reward_bps) / 10_000 } else { 0 };
+        record_fill<C>(reg, market, price_micro_usd, size, taker_is_buyer, maker, vector::empty<Coin<unxversal::unxv::UNXV>>(), unxv_usd_price, oracle_reg, oracle_cfg, clock, fee_payment, treasury, bot_treasury, points, oi_increase, min_price, max_price, ctx);
+        mirror.fill_count = mirror.fill_count + 1;
+        mirror.last_fill_fee_paid = fee_paid;
+        mirror.last_fill_maker_rebate = maker_rebate;
+        mirror.last_fill_discount_applied = discount_applied;
+        mirror.last_fill_bot_reward = bot_reward;
+        // ensure unxv_payment is consumed
+        while (!vector::is_empty(&unxv_payment)) {
+            let c = vector::pop_back(&mut unxv_payment);
+            transfer::public_transfer(c, ctx.sender());
+        };
+        vector::destroy_empty(unxv_payment);
+    }
+
+    #[test_only]
+    public fun close_with_event_mirror<C>(
+        reg: &PerpsRegistry,
+        market: &mut PerpMarket,
+        pos: &mut PerpPosition<C>,
+        close_price_micro_usd: u64,
+        quantity: u64,
+        treasury: &mut Treasury<C>,
+        clock: &Clock,
+        mirror: &mut PerpEventMirror,
+        ctx: &mut TxContext
+    ) {
+        let total_margin = balance::value(&pos.margin);
+        let margin_refund = (total_margin * quantity) / pos.size;
+        close_position<C>(reg, market, pos, close_price_micro_usd, quantity, treasury, clock, ctx);
+        mirror.vm_count = mirror.vm_count + 1;
+        mirror.last_vm_qty = quantity;
+        mirror.last_vm_from = pos.avg_entry_price_micro_usd;
+        mirror.last_vm_to = close_price_micro_usd;
+        mirror.last_margin_refund = margin_refund;
+    }
+
+    #[test_only]
+    public fun apply_funding_with_event_mirror<C>(
+        reg: &PerpsRegistry,
+        market: &PerpMarket,
+        pos: &mut PerpPosition<C>,
+        oracle_reg: &OracleRegistry,
+        index_price: &Aggregator,
+        clock: &Clock,
+        mirror: &mut PerpEventMirror
+    ) {
+        let before_abs = pos.accumulated_pnl.magnitude;
+        apply_funding_for_position<C>(reg, market, pos, oracle_reg, index_price, clock);
+        let after_abs = pos.accumulated_pnl.magnitude;
+        mirror.funding_count = mirror.funding_count + 1;
+        if (after_abs >= before_abs) { mirror.last_funding_delta_abs = after_abs - before_abs; } else { mirror.last_funding_delta_abs = before_abs - after_abs; };
+        mirror.last_new_pnl_abs = after_abs;
+    }
+
+    #[test_only]
+    public fun liquidate_with_event_mirror<C>(
+        reg: &PerpsRegistry,
+        market: &mut PerpMarket,
+        pos: &mut PerpPosition<C>,
+        mark_price_micro_usd: u64,
+        treasury: &mut Treasury<C>,
+        clock: &Clock,
+        mirror: &mut PerpEventMirror,
+        ctx: &mut TxContext
+    ) {
+        let seized_total = balance::value(&pos.margin);
+        liquidate_position<C>(reg, market, pos, mark_price_micro_usd, treasury, clock, ctx);
+        mirror.liq_count = mirror.liq_count + 1;
+        mirror.last_liq_price = mark_price_micro_usd;
+        mirror.last_liq_seized = seized_total;
+        mirror.last_liq_bot_reward = (seized_total * reg.trade_bot_reward_bps) / 10_000;
     }
 }
 

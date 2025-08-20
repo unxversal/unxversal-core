@@ -38,10 +38,10 @@ module unxversal::vaults {
     public struct StakeSlashed has copy, drop { manager: address, amount: u64, total_after: u64, timestamp: u64 }
     public struct ManagerFrozen has copy, drop { manager: address, frozen: bool, timestamp: u64 }
 
-    public fun init_manager_stake_registry_admin(reg_admin: &AdminRegistry, min_stake_unxv: u64, ctx: &mut TxContext) {
+    public entry fun init_manager_stake_registry_admin(reg_admin: &AdminRegistry, min_stake_unxv: u64, ctx: &mut TxContext) {
         assert_is_admin(reg_admin, ctx.sender());
         let rs = ManagerStakeRegistry { id: object::new(ctx), paused: false, min_stake_unxv, stakes: table::new<address, Balance<UNXV>>(ctx), active_vaults: table::new<address, u64>(ctx), frozen: table::new<address, bool>(ctx) };
-        transfer::share_object(rs);
+        transfer::public_share_object(rs);
     }
     public fun set_min_stake_admin(reg_admin: &AdminRegistry, rs: &mut ManagerStakeRegistry, min_stake_unxv: u64, ctx: &TxContext) { assert_is_admin(reg_admin, ctx.sender()); rs.min_stake_unxv = min_stake_unxv }
     public fun pause_stake_registry_admin(reg_admin: &AdminRegistry, rs: &mut ManagerStakeRegistry, ctx: &TxContext) { assert_is_admin(reg_admin, ctx.sender()); rs.paused = true }
@@ -121,7 +121,7 @@ module unxversal::vaults {
     public struct VaultDeposit has copy, drop { vault_id: ID, depositor: address, amount: u64, shares_issued: u64, total_shares_after: u64, timestamp: u64 }
     public struct VaultWithdrawal has copy, drop { vault_id: ID, owner: address, shares: u64, amount_paid: u64, timestamp: u64 }
 
-    public fun create_vault<BaseUSD: store>(rs: &mut ManagerStakeRegistry, min_cash_bps: u64, clock_obj: &Clock, ctx: &mut TxContext) {
+    public entry fun create_vault<BaseUSD: store>(rs: &mut ManagerStakeRegistry, min_cash_bps: u64, clock_obj: &Clock, ctx: &mut TxContext) {
         assert_manager_active(rs, ctx.sender());
         let v = Vault<BaseUSD> {
             id: object::new(ctx), manager: ctx.sender(), base: coin::zero<BaseUSD>(ctx), total_shares: 0,
@@ -129,7 +129,7 @@ module unxversal::vaults {
             max_aum_base: 0, perf_fee_bps: 1000, hwm_nav_per_share_1e6: 1_000_000,
             frozen: false, created_at_ms: clock::timestamp_ms(clock_obj)
         };
-        inc_active(rs, ctx.sender()); event::emit(VaultCreated { vault_id: object::id(&v), manager: v.manager, min_cash_bps, created_at: v.created_at_ms }); transfer::share_object(v)
+        inc_active(rs, ctx.sender()); event::emit(VaultCreated { vault_id: object::id(&v), manager: v.manager, min_cash_bps, created_at: v.created_at_ms }); transfer::public_share_object(v)
     }
     public fun set_vault_frozen<BaseUSD: store>(rs: &ManagerStakeRegistry, v: &mut Vault<BaseUSD>, frozen: bool, clock_obj: &Clock, ctx: &TxContext) { assert!(v.manager == ctx.sender(), E_NOT_MANAGER); assert_manager_active(rs, v.manager); v.frozen = frozen; event::emit(VaultFrozen { vault_id: object::id(v), frozen, timestamp: clock::timestamp_ms(clock_obj) }) }
     public fun close_vault<BaseUSD: store>(rs: &mut ManagerStakeRegistry, v: Vault<BaseUSD>, ctx: &TxContext) {

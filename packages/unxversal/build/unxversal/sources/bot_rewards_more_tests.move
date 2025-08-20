@@ -7,8 +7,6 @@ module unxversal::bot_rewards_tests {
     use unxversal::treasury::{Self as Tre};
     use unxversal::test_coins::TestBaseUSD;
 
-    
-
     #[test]
     fun award_points_accumulates_and_updates_epoch() {
         let owner = @0x11;
@@ -30,7 +28,7 @@ module unxversal::bot_rewards_tests {
         BR::award_points(&mut reg, string::utf8(b"task"), owner, &clk, ctx);
 
         // no direct getters; rely on claim path with zero treasury to ensure totals present but nothing to pay
-        let tre = Tre::new_treasury_for_testing<TestBaseUSD>(ctx);
+        let mut tre = Tre::new_treasury_for_testing<TestBaseUSD>(ctx);
         let mut bot = Tre::new_bot_rewards_treasury_for_testing<TestBaseUSD>(ctx);
 
         // No funds → claim should emit 0 paid and zero points for actor
@@ -121,10 +119,18 @@ module unxversal::bot_rewards_more_tests {
         assert!(unxv_after_a2 == 200);
 
         // Switch caller to B (simulated by new scenario with B as owner)
+        // Share objects so they can be taken in a new scenario context
+        sui::transfer::public_share_object(admin_reg);
+        sui::transfer::public_share_object(reg);
+        sui::transfer::public_share_object(tre);
+        sui::transfer::public_share_object(bot);
+        sui::transfer::public_share_object(cap);
         test_scenario::end(scen);
         let mut scen2 = test_scenario::begin(actor_b);
+        // Re-take shared objects into the new scenario before borrowing ctx
+        let mut reg: BotPointsRegistry = test_scenario::take_shared<BotPointsRegistry>(&scen2);
+        let mut bot: unxversal::treasury::BotRewardsTreasury<TestBaseUSD> = test_scenario::take_shared<unxversal::treasury::BotRewardsTreasury<TestBaseUSD>>(&scen2);
         let ctx2 = scen2.ctx();
-        // Reuse objects directly without moving them yet
         let clk2 = clock::create_for_testing(ctx2);
         // B claims remaining: 200 (since B has 2/3 share)
         BR::claim_rewards_for_epoch<TestBaseUSD>(&mut reg, &mut bot, epoch, ctx2);
@@ -133,11 +139,8 @@ module unxversal::bot_rewards_more_tests {
         clock::destroy_for_testing(clk);
         clock::destroy_for_testing(clk2);
         // consume linear resources
-        sui::transfer::public_share_object(admin_reg);
         sui::transfer::public_share_object(reg);
-        sui::transfer::public_share_object(tre);
         sui::transfer::public_share_object(bot);
-        sui::transfer::public_share_object(cap);
         test_scenario::end(scen2);
     }
 }

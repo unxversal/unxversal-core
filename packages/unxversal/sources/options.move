@@ -833,19 +833,22 @@ module unxversal::options {
         let fee_bps = if (market.settlement_fee_bps_override > 0) { market.settlement_fee_bps_override } else { reg.settlement_fee_bps };
         let fee = (payout * fee_bps) / 10_000;
         let net_to_long = if (payout > fee) { payout - fee } else { 0 };
-        if (net_to_long > 0) {
-            let p = BalanceMod::split(&mut short_pos.collateral_locked, net_to_long);
-            let to_long = coin::from_balance(p, ctx);
-            transfer::public_transfer(to_long, long_pos.owner);
-        };
+        // Collect fee first (clamped to available), then pay net to long (also clamped)
         if (fee > 0) {
-            let mut fee_bal = BalanceMod::split(&mut short_pos.collateral_locked, fee);
+            let avail_fee = BalanceMod::value(&short_pos.collateral_locked);
+            let to_take_fee = if (fee <= avail_fee) { fee } else { avail_fee };
+            if (to_take_fee > 0) { let mut fee_bal = BalanceMod::split(&mut short_pos.collateral_locked, to_take_fee);
             // immediate bot cut
-            let bot_cut = (fee * reg.settlement_bot_reward_bps) / 10_000;
+            let bot_cut = (to_take_fee * reg.settlement_bot_reward_bps) / 10_000;
             if (bot_cut > 0) { let bot_bal = BalanceMod::split(&mut fee_bal, bot_cut); let bot_coin = coin::from_balance(bot_bal, ctx); transfer::public_transfer(bot_coin, ctx.sender()); };
             let fee_coin = coin::from_balance(fee_bal, ctx);
             let epoch_id = BotRewards::current_epoch(points, clock);
-            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id, fee_coin, b"options_exercise".to_string(), ctx.sender(), ctx);
+            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id, fee_coin, b"options_exercise".to_string(), ctx.sender(), ctx); };
+        };
+        if (net_to_long > 0) {
+            let avail_pay = BalanceMod::value(&short_pos.collateral_locked);
+            let to_pay = if (net_to_long <= avail_pay) { net_to_long } else { avail_pay };
+            if (to_pay > 0) { let p = BalanceMod::split(&mut short_pos.collateral_locked, to_pay); let to_long = coin::from_balance(p, ctx); transfer::public_transfer(to_long, long_pos.owner); };
         };
         long_pos.quantity = long_pos.quantity - quantity;
         short_pos.quantity = short_pos.quantity - quantity;
@@ -951,7 +954,11 @@ module unxversal::options {
         // Refund proportional initial margin to short for closed quantity
         let notional = quantity * market.strike_price;
         let refund = (notional * market.init_margin_bps_short) / 10_000;
-        if (refund > 0) { let bal = BalanceMod::split(&mut short_pos.collateral_locked, refund); let c = coin::from_balance(bal, ctx); transfer::public_transfer(c, short_pos.owner); };
+        if (refund > 0) {
+            let avail_ref = BalanceMod::value(&short_pos.collateral_locked);
+            let to_ref = if (refund <= avail_ref) { refund } else { avail_ref };
+            if (to_ref > 0) { let bal = BalanceMod::split(&mut short_pos.collateral_locked, to_ref); let c = coin::from_balance(bal, ctx); transfer::public_transfer(c, short_pos.owner); };
+        };
         // Update positions and market OI
         long_pos.quantity = long_pos.quantity - quantity;
         short_pos.quantity = short_pos.quantity - quantity;
@@ -1000,10 +1007,20 @@ module unxversal::options {
         let fee_bps = if (market.settlement_fee_bps_override > 0) { market.settlement_fee_bps_override } else { reg.settlement_fee_bps };
         let fee = (payout * fee_bps) / 10_000;
         let net_to_long = if (payout > fee) { payout - fee } else { 0 };
-        if (net_to_long > 0) { let p = BalanceMod::split(&mut short_pos.collateral_locked, net_to_long); let to_long = coin::from_balance(p, ctx); transfer::public_transfer(to_long, long_pos.owner); };
-        if (fee > 0) { let fc_bal = BalanceMod::split(&mut short_pos.collateral_locked, fee); let fc = coin::from_balance(fc_bal, ctx); TreasuryMod::deposit_collateral_ext(treasury, fc, b"options_liquidation".to_string(), liquidator, ctx); };
-        // Liquidator bonus from remaining collateral proportional to liq_penalty_bps
-        let bonus = (BalanceMod::value(&short_pos.collateral_locked) * reg.liq_penalty_bps) / 10_000;
+        // Fee first (clamped), then payout (clamped), then bonus (clamped)
+        if (fee > 0) {
+            let availf = BalanceMod::value(&short_pos.collateral_locked);
+            let takef = if (fee <= availf) { fee } else { availf };
+            if (takef > 0) { let fc_bal = BalanceMod::split(&mut short_pos.collateral_locked, takef); let fc = coin::from_balance(fc_bal, ctx); TreasuryMod::deposit_collateral_ext(treasury, fc, b"options_liquidation".to_string(), liquidator, ctx); };
+        };
+        if (net_to_long > 0) {
+            let availn = BalanceMod::value(&short_pos.collateral_locked);
+            let payn = if (net_to_long <= availn) { net_to_long } else { availn };
+            if (payn > 0) { let p = BalanceMod::split(&mut short_pos.collateral_locked, payn); let to_long = coin::from_balance(p, ctx); transfer::public_transfer(to_long, long_pos.owner); };
+        };
+        let availb = BalanceMod::value(&short_pos.collateral_locked);
+        let bonus_raw = (availb * reg.liq_penalty_bps) / 10_000;
+        let bonus = if (bonus_raw <= availb) { bonus_raw } else { availb };
         if (bonus > 0) { let b_bal = BalanceMod::split(&mut short_pos.collateral_locked, bonus); let b = coin::from_balance(b_bal, ctx); transfer::public_transfer(b, liquidator); };
         long_pos.quantity = long_pos.quantity - quantity;
         short_pos.quantity = short_pos.quantity - quantity;
@@ -1377,17 +1394,25 @@ module unxversal::options {
         };
         let fee_to_collect = if (discount_applied) { if (trade_fee > discount_collateral) { trade_fee - discount_collateral } else { 0 } } else { trade_fee };
 
-        // Move premium net of fee to writer, pay fee to treasury
+        // Move premium net of fee to writer, pay fee to treasury (safely clamped to available escrow)
         let net_to_writer = if (premium_total > fee_to_collect) { premium_total - fee_to_collect } else { 0 };
         if (net_to_writer > 0) {
-            let to_writer_bal = BalanceMod::split(&mut escrow.escrow_collateral, net_to_writer);
-            let to_writer = coin::from_balance(to_writer_bal, ctx);
-            transfer::public_transfer(to_writer, offer.owner);
+            let avail0 = BalanceMod::value(&escrow.escrow_collateral);
+            let pay_writer = if (net_to_writer <= avail0) { net_to_writer } else { avail0 };
+            if (pay_writer > 0) {
+                let to_writer_bal = BalanceMod::split(&mut escrow.escrow_collateral, pay_writer);
+                let to_writer = coin::from_balance(to_writer_bal, ctx);
+                transfer::public_transfer(to_writer, offer.owner);
+            }
         };
         if (fee_to_collect > 0) {
-            let fee_bal = BalanceMod::split(&mut escrow.escrow_collateral, fee_to_collect);
-            let fee_coin = coin::from_balance(fee_bal, ctx);
-            TreasuryMod::deposit_collateral_ext(treasury, fee_coin, b"options_premium_trade".to_string(), escrow.owner, ctx);
+            let avail1 = BalanceMod::value(&escrow.escrow_collateral);
+            let fee_pay = if (fee_to_collect <= avail1) { fee_to_collect } else { avail1 };
+            if (fee_pay > 0) {
+                let fee_bal = BalanceMod::split(&mut escrow.escrow_collateral, fee_pay);
+                let fee_coin = coin::from_balance(fee_bal, ctx);
+                TreasuryMod::deposit_collateral_ext(treasury, fee_coin, b"options_premium_trade".to_string(), escrow.owner, ctx);
+            }
         };
 
         // Create positions

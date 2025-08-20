@@ -91,7 +91,7 @@ module unxversal::bot_rewards {
 
     #[test_only]
     public fun new_points_registry_for_testing(ctx: &mut TxContext): BotPointsRegistry {
-        BotPointsRegistry {
+        let mut reg = BotPointsRegistry {
             id: object::new(ctx),
             epoch_zero_ms: 0,
             epoch_duration_ms: 1_000,
@@ -99,7 +99,19 @@ module unxversal::bot_rewards {
             points: table::new<address, u64>(ctx),
             points_by_epoch: table::new<u64, Table<address, u64>>(ctx),
             total_points_by_epoch: table::new<u64, u128>(ctx),
-        }
+        };
+        // Seed a few canonical task keys with minimal non-zero weights for tests
+        // These do not impact production and make points tests deterministic.
+        table::add(&mut reg.weights, b"futures.request_settlement".to_string(), 1);
+        table::add(&mut reg.weights, b"futures.process_due_settlements".to_string(), 1);
+        table::add(&mut reg.weights, b"gas_futures.request_settlement".to_string(), 1);
+        table::add(&mut reg.weights, b"gas_futures.process_due_settlements".to_string(), 1);
+        table::add(&mut reg.weights, b"lending.update_pool_rates".to_string(), 1);
+        table::add(&mut reg.weights, b"lending.accrue_pool_interest".to_string(), 1);
+        table::add(&mut reg.weights, b"lending.accrue_synth_market".to_string(), 1);
+        // Perpetuals/fallbacks (ignored if unused)
+        table::add(&mut reg.weights, b"perpetuals.refresh_funding".to_string(), 1);
+        reg
     }
 
     #[test_only]
@@ -132,8 +144,15 @@ module unxversal::bot_rewards {
         if (p == 0) { return };
         // Compute shares from epoch reserves via treasury helpers
         let (epoch_coll, epoch_unxv) = TreasuryMod::epoch_reserves(bot, epoch);
-        let share_coll = ((epoch_coll as u128) * (p as u128) / total) as u64;
-        let share_unxv = ((epoch_unxv as u128) * (p as u128) / total) as u64;
+        // Decrement total points for the epoch; if claimant is last, drain remaining reserves
+        let new_total_u128 = if (total > (p as u128)) { total - (p as u128) } else { 0 };
+        if (table::contains(&reg.total_points_by_epoch, epoch)) { let _ = table::remove(&mut reg.total_points_by_epoch, epoch); };
+        table::add(&mut reg.total_points_by_epoch, epoch, new_total_u128);
+        let (share_coll, share_unxv) = if (new_total_u128 == 0) {
+            (epoch_coll, epoch_unxv)
+        } else {
+            ((((epoch_coll as u128) * (p as u128) / total) as u64), (((epoch_unxv as u128) * (p as u128) / total) as u64))
+        };
         TreasuryMod::payout_epoch_shares(bot, epoch, share_coll, share_unxv, claimant, ctx);
         // zero claimant epoch points
         if (table::contains(sub, claimant)) { let _ = table::remove(sub, claimant); };

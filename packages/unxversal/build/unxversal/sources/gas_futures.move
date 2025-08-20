@@ -113,7 +113,7 @@ module unxversal::gas_futures {
     /*******************************
     * Init & display
     *******************************/
-    entry fun init_gas_registry(synth_reg: &SynthRegistry, ctx: &mut TxContext) {
+    public entry fun init_gas_registry(synth_reg: &SynthRegistry, ctx: &mut TxContext) {
         assert_is_admin(synth_reg, ctx.sender());
         let reg = GasFuturesRegistry {
             id: object::new(ctx),
@@ -133,7 +133,7 @@ module unxversal::gas_futures {
             // Treasury linkage is configured later via set_gas_treasury<C>
             treasury_id: object::id(synth_reg),
         };
-        transfer::share_object(reg)
+        transfer::public_share_object(reg)
     }
 
     entry fun set_gas_trade_fee_config(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut GasFuturesRegistry, trade_fee_bps: u64, maker_rebate_bps: u64, unxv_discount_bps: u64, trade_bot_reward_bps: u64, ctx: &TxContext) {
@@ -186,7 +186,7 @@ module unxversal::gas_futures {
             last_trade_premium_micro_usd_per_gas: 0,
         };
         let id = object::id(&c);
-        transfer::share_object(c);
+        transfer::public_share_object(c);
         table::add(&mut reg.contracts, clone_string(&symbol), id);
         event::emit(GasContractListed { symbol: symbol, contract_size_gas_units, tick_size_micro_usd_per_gas, expiry_ms, timestamp: now });
     }
@@ -451,7 +451,7 @@ module unxversal::gas_futures {
     }
 
     public struct GasSettlementQueue has key, store { id: UID, entries: Table<ID, u64> }
-    entry fun init_gas_settlement_queue(ctx: &mut TxContext) { let q = GasSettlementQueue { id: object::new(ctx), entries: table::new<ID, u64>(ctx) }; transfer::share_object(q); }
+    public entry fun init_gas_settlement_queue(ctx: &mut TxContext) { let q = GasSettlementQueue { id: object::new(ctx), entries: table::new<ID, u64>(ctx) }; transfer::public_share_object(q); }
     entry fun request_gas_settlement(reg: &GasFuturesRegistry, market: &GasFuturesContract, queue: &mut GasSettlementQueue, _ctx: &TxContext) { assert!(!reg.paused, E_PAUSED); assert!(market.is_expired, E_MIN_INTERVAL); let ready = market.settled_at_ms + reg.dispute_window_ms; if (table::contains(&queue.entries, object::id(market))) { let _ = table::remove(&mut queue.entries, object::id(market)); }; table::add(&mut queue.entries, object::id(market), ready); }
     entry fun request_gas_settlement_with_points(reg: &GasFuturesRegistry, market: &GasFuturesContract, queue: &mut GasSettlementQueue, points: &mut BotPointsRegistry, clock: &Clock, ctx: &mut TxContext) { request_gas_settlement(reg, market, queue, ctx); BotRewards::award_points(points, b"gas_futures.request_settlement".to_string(), ctx.sender(), clock, ctx); }
     entry fun process_due_gas_settlements(reg: &GasFuturesRegistry, queue: &mut GasSettlementQueue, market_ids: vector<ID>, clock: &Clock, _ctx: &TxContext) { assert!(!reg.paused, E_PAUSED); let now = sui::clock::timestamp_ms(clock); let mut i = 0; while (i < vector::length(&market_ids)) { let mid = *vector::borrow(&market_ids, i); if (table::contains(&queue.entries, mid)) { let ready = *table::borrow(&queue.entries, mid); if (now >= ready) { let _ = table::remove(&mut queue.entries, mid); } }; i = i + 1; } }
@@ -523,6 +523,243 @@ module unxversal::gas_futures {
         rdisp.add(b"description".to_string(), b"Registry for listing gas futures and global fee params".to_string());
         rdisp.update_version();
         transfer::public_transfer(rdisp, ctx.sender());
+    }
+
+    /*******************************
+    * Test-only helpers
+    *******************************/
+    #[test_only]
+    public fun set_trade_fee_config_for_testing(
+        reg: &mut GasFuturesRegistry,
+        trade_fee_bps: u64,
+        maker_rebate_bps: u64,
+        unxv_discount_bps: u64,
+        trade_bot_reward_bps: u64,
+    ) {
+        reg.trade_fee_bps = trade_fee_bps;
+        reg.maker_rebate_bps = maker_rebate_bps;
+        reg.unxv_discount_bps = unxv_discount_bps;
+        reg.trade_bot_reward_bps = trade_bot_reward_bps;
+    }
+
+    #[test_only]
+    public fun pause_for_testing(reg: &mut GasFuturesRegistry, flag: bool) { reg.paused = flag; }
+
+    #[test_only]
+    public fun pause_contract_for_testing(market: &mut GasFuturesContract, flag: bool) { market.paused = flag; }
+
+    #[test_only]
+    public fun new_position_for_testing<C>(
+        owner: address,
+        market: &GasFuturesContract,
+        side: u8,
+        size: u64,
+        avg_price_micro_usd_per_gas: u64,
+        mut margin_in: Coin<C>,
+        required_margin: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): (GasPosition<C>, Coin<C>) {
+        let locked = coin::split(&mut margin_in, required_margin, ctx);
+        let pos = GasPosition<C> {
+            id: object::new(ctx),
+            owner,
+            contract_id: object::id(market),
+            side,
+            size,
+            avg_price_micro_usd_per_gas,
+            margin: coin::into_balance(locked),
+            accumulated_pnl_abs: 0,
+            accumulated_pnl_is_gain: true,
+            opened_at_ms: sui::clock::timestamp_ms(clock)
+        };
+        (pos, margin_in)
+    }
+
+    #[test_only]
+    public fun set_settlement_params_for_testing(
+        reg: &mut GasFuturesRegistry,
+        settlement_fee_bps: u64,
+        settlement_bot_reward_bps: u64
+    ) {
+        reg.settlement_fee_bps = settlement_fee_bps;
+        reg.settlement_bot_reward_bps = settlement_bot_reward_bps;
+    }
+
+    // Mirrors for event-field assertions
+    #[test_only]
+    public struct FillEventMirror has key, store { id: UID, count: u64, last_fee_paid: u64, last_maker_rebate: u64, last_discount_applied: bool, last_bot_reward: u64 }
+
+    #[test_only]
+    public fun new_fill_event_mirror_for_testing(ctx: &mut TxContext): FillEventMirror { FillEventMirror { id: object::new(ctx), count: 0, last_fee_paid: 0, last_maker_rebate: 0, last_discount_applied: false, last_bot_reward: 0 } }
+
+    #[test_only]
+    public fun fem_count(m: &FillEventMirror): u64 { m.count }
+    #[test_only]
+    public fun fem_fee_paid(m: &FillEventMirror): u64 { m.last_fee_paid }
+    #[test_only]
+    public fun fem_maker_rebate(m: &FillEventMirror): u64 { m.last_maker_rebate }
+    #[test_only]
+    public fun fem_discount_applied(m: &FillEventMirror): bool { m.last_discount_applied }
+    #[test_only]
+    public fun fem_bot_reward(m: &FillEventMirror): u64 { m.last_bot_reward }
+
+    #[test_only]
+    public fun record_gas_fill_with_event_mirror<C>(
+        reg: &GasFuturesRegistry,
+        market: &mut GasFuturesContract,
+        price_micro_usd_per_gas: u64,
+        size: u64,
+        taker_is_buyer: bool,
+        maker: address,
+        mut unxv_payment: vector<Coin<unxversal::unxv::UNXV>>,
+        _sui_usd_price: &Aggregator,
+        unxv_usd_price: &Aggregator,
+        oracle_reg: &OracleRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        fee_payment: Coin<C>,
+        treasury: &mut Treasury<C>,
+        bot_treasury: &mut BotRewardsTreasury<C>,
+        points: &BotPointsRegistry,
+        oi_increase: bool,
+        min_price_micro_usd_per_gas: u64,
+        max_price_micro_usd_per_gas: u64,
+        mirror: &mut FillEventMirror,
+        ctx: &mut TxContext
+    ) {
+        // Precompute expected values using same logic
+        let notional_u128: u128 = (size as u128) * (market.contract_size_gas_units as u128) * (price_micro_usd_per_gas as u128);
+        let trade_fee_u128: u128 = (notional_u128 * (reg.trade_fee_bps as u128)) / 10_000u128;
+        let discount_usdc_u128: u128 = (trade_fee_u128 * (reg.unxv_discount_bps as u128)) / 10_000u128;
+        let mut discount_applied = false;
+        if (discount_usdc_u128 > 0 && vector::length(&unxv_payment) > 0) {
+            let unxv_price_u64 = get_price_for_symbol(oracle_reg, clock, &b"UNXV".to_string(), unxv_usd_price);
+            if (unxv_price_u64 > 0) {
+                let px: u128 = unxv_price_u64 as u128;
+                let unxv_needed_u128 = (discount_usdc_u128 + px - 1) / px;
+                let unxv_needed = clamp_u128_to_u64(unxv_needed_u128);
+                let mut merged = coin::zero<unxversal::unxv::UNXV>(ctx);
+                let mut i = 0; while (i < vector::length(&unxv_payment)) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); i = i + 1; };
+                let have = coin::value(&merged);
+                if (have >= unxv_needed) { discount_applied = true; };
+                transfer::public_transfer(merged, ctx.sender());
+            }
+        };
+        let collateral_fee_after_discount_u128: u128 = if (discount_applied) { if (discount_usdc_u128 <= trade_fee_u128) { trade_fee_u128 - discount_usdc_u128 } else { 0 } } else { trade_fee_u128 };
+        let maker_rebate_u128: u128 = (trade_fee_u128 * (reg.maker_rebate_bps as u128)) / 10_000u128;
+        let collateral_fee_after_discount = clamp_u128_to_u64(collateral_fee_after_discount_u128);
+        let maker_rebate = clamp_u128_to_u64(maker_rebate_u128);
+        let bot_reward = if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 };
+        // Call core
+        record_gas_fill<C>(reg, market, price_micro_usd_per_gas, size, taker_is_buyer, maker, vector::empty<Coin<unxversal::unxv::UNXV>>(), _sui_usd_price, unxv_usd_price, oracle_reg, oracle_cfg, clock, fee_payment, treasury, bot_treasury, points, oi_increase, min_price_micro_usd_per_gas, max_price_micro_usd_per_gas, ctx);
+        // Update mirror
+        mirror.count = mirror.count + 1;
+        mirror.last_fee_paid = collateral_fee_after_discount;
+        mirror.last_maker_rebate = maker_rebate;
+        mirror.last_discount_applied = discount_applied;
+        mirror.last_bot_reward = bot_reward;
+        // Ensure UNXV payment vector is fully consumed
+        while (vector::length(&unxv_payment) > 0) {
+            let c = vector::pop_back(&mut unxv_payment);
+            transfer::public_transfer(c, ctx.sender());
+        };
+        vector::destroy_empty(unxv_payment);
+    }
+
+    #[test_only]
+    public struct GasEventMirror has key, store {
+        id: UID,
+        vm_count: u64,
+        last_vm_qty: u64,
+        last_vm_from: u64,
+        last_vm_to: u64,
+        pc_count: u64,
+        last_pc_price: u64,
+        last_pc_refund: u64,
+        liq_count: u64,
+        last_liq_price: u64,
+        last_liq_seized: u64,
+        settle_count: u64,
+        last_settle_price: u64
+    }
+
+    #[test_only]
+    public fun new_gas_event_mirror_for_testing(ctx: &mut TxContext): GasEventMirror {
+        GasEventMirror { id: object::new(ctx), vm_count: 0, last_vm_qty: 0, last_vm_from: 0, last_vm_to: 0, pc_count: 0, last_pc_price: 0, last_pc_refund: 0, liq_count: 0, last_liq_price: 0, last_liq_seized: 0, settle_count: 0, last_settle_price: 0 }
+    }
+
+    #[test_only] public fun gem_vm_count(m: &GasEventMirror): u64 { m.vm_count }
+    #[test_only] public fun gem_last_vm_qty(m: &GasEventMirror): u64 { m.last_vm_qty }
+    #[test_only] public fun gem_last_vm_from(m: &GasEventMirror): u64 { m.last_vm_from }
+    #[test_only] public fun gem_last_vm_to(m: &GasEventMirror): u64 { m.last_vm_to }
+    #[test_only] public fun gem_pc_count(m: &GasEventMirror): u64 { m.pc_count }
+    #[test_only] public fun gem_last_pc_price(m: &GasEventMirror): u64 { m.last_pc_price }
+    #[test_only] public fun gem_last_pc_refund(m: &GasEventMirror): u64 { m.last_pc_refund }
+    #[test_only] public fun gem_liq_count(m: &GasEventMirror): u64 { m.liq_count }
+    #[test_only] public fun gem_last_liq_price(m: &GasEventMirror): u64 { m.last_liq_price }
+    #[test_only] public fun gem_last_liq_seized(m: &GasEventMirror): u64 { m.last_liq_seized }
+    #[test_only] public fun gem_settle_count(m: &GasEventMirror): u64 { m.settle_count }
+    #[test_only] public fun gem_last_settle_price(m: &GasEventMirror): u64 { m.last_settle_price }
+
+    #[test_only]
+    public fun close_gas_position_with_event_mirror<C>(
+        reg: &GasFuturesRegistry,
+        market: &mut GasFuturesContract,
+        pos: &mut GasPosition<C>,
+        clock: &Clock,
+        close_price_micro_usd_per_gas: u64,
+        quantity: u64,
+        treasury: &mut Treasury<C>,
+        bot_treasury: &mut BotRewardsTreasury<C>,
+        points: &BotPointsRegistry,
+        mirror: &mut GasEventMirror,
+        ctx: &mut TxContext
+    ) {
+        let total_margin = balance::value(&pos.margin);
+        let margin_refund = (total_margin * quantity) / pos.size;
+        close_gas_position<C>(reg, market, pos, clock, close_price_micro_usd_per_gas, quantity, treasury, bot_treasury, points, ctx);
+        mirror.vm_count = mirror.vm_count + 1;
+        mirror.last_vm_qty = quantity;
+        mirror.last_vm_from = pos.avg_price_micro_usd_per_gas;
+        mirror.last_vm_to = close_price_micro_usd_per_gas;
+        mirror.pc_count = mirror.pc_count + 1;
+        mirror.last_pc_price = close_price_micro_usd_per_gas;
+        mirror.last_pc_refund = margin_refund;
+    }
+
+    #[test_only]
+    public fun liquidate_gas_position_with_event_mirror<C>(
+        reg: &GasFuturesRegistry,
+        market: &mut GasFuturesContract,
+        pos: &mut GasPosition<C>,
+        clock: &Clock,
+        mark_price_micro_usd_per_gas: u64,
+        treasury: &mut Treasury<C>,
+        mirror: &mut GasEventMirror,
+        ctx: &mut TxContext
+    ) {
+        let seized_total = balance::value(&pos.margin);
+        liquidate_gas_position<C>(reg, market, pos, clock, mark_price_micro_usd_per_gas, treasury, ctx);
+        mirror.liq_count = mirror.liq_count + 1;
+        mirror.last_liq_price = mark_price_micro_usd_per_gas;
+        mirror.last_liq_seized = seized_total;
+    }
+
+    #[test_only]
+    public fun settle_gas_futures_with_event_mirror(
+        reg: &GasFuturesRegistry,
+        market: &mut GasFuturesContract,
+        oracle_reg: &OracleRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        sui_usd: &Aggregator,
+        mirror: &mut GasEventMirror,
+        ctx: &TxContext
+    ) {
+        settle_gas_futures(reg, market, oracle_reg, oracle_cfg, clock, sui_usd, ctx);
+        mirror.settle_count = mirror.settle_count + 1;
+        mirror.last_settle_price = market.settlement_price_micro_usd_per_gas;
     }
 }
 

@@ -126,6 +126,199 @@ module unxversal::options {
     }
 
     /*******************************
+     * Test-only constructors and helpers
+     *******************************/
+    #[test_only]
+    public fun new_registry_for_testing(ctx: &mut TxContext): OptionsRegistry {
+        OptionsRegistry {
+            id: object::new(ctx),
+            supported_underlyings: table::new<String, UnderlyingAsset>(ctx),
+            option_markets: table::new<vector<u8>, ID>(ctx),
+            underlying_symbols: vector::empty<String>(),
+            market_key_list: vector::empty<vector<u8>>(),
+            paused: false,
+            treasury_id: object::id_from_address(ctx.sender()),
+            trade_fee_bps: 30,
+            unxv_discount_bps: 0,
+            settlement_fee_bps: 10,
+            liq_penalty_bps: 500,
+            liq_bot_reward_bps: 0,
+            close_bot_reward_bps: 0,
+            settlement_bot_reward_bps: 0,
+            maker_rebate_bps_close: 0,
+            owner_positions: table::new<address, vector<ID>>(ctx),
+            market_positions: table::new<ID, vector<ID>>(ctx),
+            default_exercise_style: b"EUROPEAN".to_string(),
+            default_contract_size: 1,
+            default_tick_size: 1,
+            default_init_margin_bps_short: 10_000,
+            default_maint_margin_bps_short: 8_000,
+            default_max_oi_per_user: 0,
+            default_max_open_contracts_market: 0,
+        }
+    }
+
+    #[test_only]
+    public fun add_underlying_for_testing(
+        reg: &mut OptionsRegistry,
+        symbol: String,
+        asset_name: String,
+        asset_type: String,
+        oracle_feed: vector<u8>,
+        default_settlement_type: String,
+        min_strike_price: u64,
+        max_strike_price: u64,
+        strike_increment: u64,
+        min_expiry_duration_ms: u64,
+        max_expiry_duration_ms: u64,
+        is_active: bool,
+        _ctx: &TxContext,
+    ) {
+        let asset = UnderlyingAsset { asset_name, asset_type, oracle_feed, default_settlement_type, min_strike_price, max_strike_price, strike_increment, min_expiry_duration_ms, max_expiry_duration_ms, is_active };
+        table::add(&mut reg.supported_underlyings, clone_string(&symbol), asset);
+        vector::push_back(&mut reg.underlying_symbols, symbol);
+    }
+
+    #[test_only]
+    public fun set_market_exercise_style_for_testing(m: &mut OptionMarket, style: String) { m.exercise_style = style; }
+
+    #[test_only]
+    public fun set_paused_for_testing(reg: &mut OptionsRegistry, paused: bool) { reg.paused = paused; }
+
+    #[test_only]
+    public fun set_market_controls_for_testing(m: &mut OptionMarket, tick_size: u64, contract_size: u64, max_oi_user: u64, max_oi_market: u64) {
+        m.tick_size = tick_size;
+        m.contract_size = contract_size;
+        m.max_oi_per_user = max_oi_user;
+        m.max_open_contracts_market = max_oi_market;
+    }
+
+    #[test_only]
+    public fun market_totals_for_testing(m: &OptionMarket): (u64, u64, u64) {
+        (m.total_open_interest, m.total_volume_premium, m.last_trade_premium)
+    }
+
+    #[test_only]
+    public fun user_open_interest_for_testing(m: &OptionMarket, who: address): u64 {
+        if (table::contains(&m.user_open_interest, who)) { *table::borrow(&m.user_open_interest, who) } else { 0 }
+    }
+
+    #[test_only]
+    public fun registry_fee_params_for_testing(reg: &OptionsRegistry): (u64, u64, u64, u64, u64, u64, u64) {
+        (
+            reg.trade_fee_bps,
+            reg.unxv_discount_bps,
+            reg.settlement_fee_bps,
+            reg.close_bot_reward_bps,
+            reg.maker_rebate_bps_close,
+            reg.settlement_bot_reward_bps,
+            reg.liq_bot_reward_bps,
+        )
+    }
+
+    #[test_only]
+    public fun new_market_for_testing(
+        underlying: String,
+        option_type: String,
+        strike_price: u64,
+        expiry_ms: u64,
+        settlement_type: String,
+        ctx: &mut TxContext
+    ): OptionMarket {
+        OptionMarket {
+            id: object::new(ctx),
+            underlying,
+            option_type,
+            strike_price,
+            expiry_ms,
+            settlement_type,
+            paused: false,
+            is_active: true,
+            is_expired: false,
+            exercise_style: b"EUROPEAN".to_string(),
+            contract_size: 1,
+            tick_size: 1,
+            trade_fee_bps_override: 0,
+            settlement_fee_bps_override: 0,
+            init_margin_bps_short: 10_000,
+            maint_margin_bps_short: 8_000,
+            max_oi_per_user: 0,
+            max_open_contracts_market: 0,
+            creator: ctx.sender(),
+            created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx),
+            settlement_price: 0,
+            settled_at_ms: 0,
+            total_open_interest: 0,
+            total_volume_premium: 0,
+            last_trade_premium: 0,
+            user_open_interest: table::new<address, u64>(ctx),
+        }
+    }
+
+    #[test_only]
+    public fun new_short_offer_for_testing<C: store>(market: &OptionMarket, qty: u64, min_pu: u64, _locked_amount: u64, ctx: &mut TxContext): ShortOffer<C> {
+        let locked = BalanceMod::zero<C>();
+        let offer = ShortOffer<C> { id: object::new(ctx), owner: ctx.sender(), market_id: object::id(market), option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, remaining_qty: qty, min_premium_per_unit: min_pu, collateral_locked: locked, created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx) };
+        offer
+    }
+
+    #[test_only]
+    public fun new_premium_escrow_for_testing<C: store>(market: &OptionMarket, qty: u64, pu: u64, _escrow_amount: u64, expiry_cancel_ms: u64, ctx: &mut TxContext): PremiumEscrow<C> {
+        let esc = PremiumEscrow<C> { id: object::new(ctx), owner: ctx.sender(), market_id: object::id(market), option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, remaining_qty: qty, premium_per_unit: pu, escrow_collateral: BalanceMod::zero<C>(), created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), expiry_cancel_ms };
+        esc
+    }
+
+    #[test_only]
+    public fun new_coin_short_offer_for_testing<Base: store>(market: &OptionMarket, qty: u64, min_pu: u64, _escrow_amount: u64, ctx: &mut TxContext): CoinShortOffer<Base> {
+        CoinShortOffer<Base> { id: object::new(ctx), owner: ctx.sender(), market_id: object::id(market), option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, remaining_qty: qty, min_premium_per_unit: min_pu, escrow_base: BalanceMod::zero<Base>(), created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx) }
+    }
+
+    #[test_only]
+    public fun new_long_pos_for_testing<C: store>(market: &OptionMarket, qty: u64, premium_per_unit: u64, ctx: &mut TxContext): OptionPosition<C> {
+        OptionPosition<C> { id: object::new(ctx), owner: ctx.sender(), market_id: object::id(market), option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, side: 0, quantity: qty, premium_per_unit, opened_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), collateral_locked: BalanceMod::zero<C>() }
+    }
+
+    #[test_only]
+    public fun new_short_pos_for_testing<C: store>(market: &OptionMarket, qty: u64, _locked_amount: u64, ctx: &mut TxContext): OptionPosition<C> {
+        OptionPosition<C> { id: object::new(ctx), owner: ctx.sender(), market_id: object::id(market), option_type: clone_string(&market.option_type), strike_price: market.strike_price, expiry_ms: market.expiry_ms, side: 1, quantity: qty, premium_per_unit: 0, opened_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), collateral_locked: BalanceMod::zero<C>() }
+    }
+
+    #[test_only]
+    public fun new_short_underlying_escrow_for_testing<Base: store, C: store>(short_pos: &OptionPosition<C>, _amount: u64, ctx: &mut TxContext): ShortUnderlyingEscrow<Base> {
+        let bal = BalanceMod::zero<Base>();
+        ShortUnderlyingEscrow<Base> { id: object::new(ctx), position_id: object::id(short_pos), escrow_base: bal }
+    }
+
+    #[test_only]
+    public fun new_long_underlying_escrow_for_testing<Base: store>(owner: address, pos_id: ID, _amount: u64, ctx: &mut TxContext): LongUnderlyingEscrow<Base> {
+        LongUnderlyingEscrow<Base> { id: object::new(ctx), owner, position_id: pos_id, escrow_base: BalanceMod::zero<Base>() }
+    }
+
+    #[test_only]
+    public fun new_short_underlying_escrow_with_amount_for_testing<Base: store, C: store>(short_pos: &OptionPosition<C>, amount: u64, ctx: &mut TxContext): ShortUnderlyingEscrow<Base> {
+        let coin_in = coin::mint_for_testing<Base>(amount, ctx);
+        let bal = coin::into_balance(coin_in);
+        ShortUnderlyingEscrow<Base> { id: object::new(ctx), position_id: object::id(short_pos), escrow_base: bal }
+    }
+
+    #[test_only]
+    public fun new_long_underlying_escrow_with_amount_for_testing<Base: store>(owner: address, pos_id: ID, amount: u64, ctx: &mut TxContext): LongUnderlyingEscrow<Base> {
+        let coin_in = coin::mint_for_testing<Base>(amount, ctx);
+        let bal = coin::into_balance(coin_in);
+        LongUnderlyingEscrow<Base> { id: object::new(ctx), owner, position_id: pos_id, escrow_base: bal }
+    }
+
+    #[test_only]
+    public fun new_queue_for_testing(dispute_window_ms: u64, ctx: &mut TxContext): SettlementQueue {
+        SettlementQueue { id: object::new(ctx), dispute_window_ms, pending: vector::empty<ID>(), requested_at_ms: table::new<ID, u64>(ctx) }
+    }
+
+    #[test_only]
+    public fun set_registry_trade_and_rebate_for_testing(reg: &mut OptionsRegistry, trade_fee_bps: u64, unxv_discount_bps: u64, maker_rebate_bps_close: u64) {
+        reg.trade_fee_bps = trade_fee_bps; reg.unxv_discount_bps = unxv_discount_bps; reg.maker_rebate_bps_close = maker_rebate_bps_close;
+    }
+
+    /*******************************
     * Events
     *******************************/
     public struct UnderlyingAdded has copy, drop { symbol: String, by: address, timestamp: u64 }
@@ -575,7 +768,7 @@ module unxversal::options {
         // Return leftover creation fee coin and any remaining UNXV back to caller for composability
         (_creation_fee_coin, _unxv_payment)
     }
-
+    
     public fun init_settlement_queue(dispute_window_ms: u64, ctx: &mut TxContext) {
         let q = SettlementQueue { id: object::new(ctx), dispute_window_ms, pending: vector::empty<ID>(), requested_at_ms: table::new<ID, u64>(ctx) };
         transfer::share_object(q);
@@ -640,19 +833,22 @@ module unxversal::options {
         let fee_bps = if (market.settlement_fee_bps_override > 0) { market.settlement_fee_bps_override } else { reg.settlement_fee_bps };
         let fee = (payout * fee_bps) / 10_000;
         let net_to_long = if (payout > fee) { payout - fee } else { 0 };
-        if (net_to_long > 0) {
-            let p = BalanceMod::split(&mut short_pos.collateral_locked, net_to_long);
-            let to_long = coin::from_balance(p, ctx);
-            transfer::public_transfer(to_long, long_pos.owner);
-        };
+        // Collect fee first (clamped to available), then pay net to long (also clamped)
         if (fee > 0) {
-            let mut fee_bal = BalanceMod::split(&mut short_pos.collateral_locked, fee);
+            let avail_fee = BalanceMod::value(&short_pos.collateral_locked);
+            let to_take_fee = if (fee <= avail_fee) { fee } else { avail_fee };
+            if (to_take_fee > 0) { let mut fee_bal = BalanceMod::split(&mut short_pos.collateral_locked, to_take_fee);
             // immediate bot cut
-            let bot_cut = (fee * reg.settlement_bot_reward_bps) / 10_000;
+            let bot_cut = (to_take_fee * reg.settlement_bot_reward_bps) / 10_000;
             if (bot_cut > 0) { let bot_bal = BalanceMod::split(&mut fee_bal, bot_cut); let bot_coin = coin::from_balance(bot_bal, ctx); transfer::public_transfer(bot_coin, ctx.sender()); };
             let fee_coin = coin::from_balance(fee_bal, ctx);
             let epoch_id = BotRewards::current_epoch(points, clock);
-            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id, fee_coin, b"options_exercise".to_string(), ctx.sender(), ctx);
+            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id, fee_coin, b"options_exercise".to_string(), ctx.sender(), ctx); };
+        };
+        if (net_to_long > 0) {
+            let avail_pay = BalanceMod::value(&short_pos.collateral_locked);
+            let to_pay = if (net_to_long <= avail_pay) { net_to_long } else { avail_pay };
+            if (to_pay > 0) { let p = BalanceMod::split(&mut short_pos.collateral_locked, to_pay); let to_long = coin::from_balance(p, ctx); transfer::public_transfer(to_long, long_pos.owner); };
         };
         long_pos.quantity = long_pos.quantity - quantity;
         short_pos.quantity = short_pos.quantity - quantity;
@@ -758,7 +954,11 @@ module unxversal::options {
         // Refund proportional initial margin to short for closed quantity
         let notional = quantity * market.strike_price;
         let refund = (notional * market.init_margin_bps_short) / 10_000;
-        if (refund > 0) { let bal = BalanceMod::split(&mut short_pos.collateral_locked, refund); let c = coin::from_balance(bal, ctx); transfer::public_transfer(c, short_pos.owner); };
+        if (refund > 0) {
+            let avail_ref = BalanceMod::value(&short_pos.collateral_locked);
+            let to_ref = if (refund <= avail_ref) { refund } else { avail_ref };
+            if (to_ref > 0) { let bal = BalanceMod::split(&mut short_pos.collateral_locked, to_ref); let c = coin::from_balance(bal, ctx); transfer::public_transfer(c, short_pos.owner); };
+        };
         // Update positions and market OI
         long_pos.quantity = long_pos.quantity - quantity;
         short_pos.quantity = short_pos.quantity - quantity;
@@ -807,10 +1007,20 @@ module unxversal::options {
         let fee_bps = if (market.settlement_fee_bps_override > 0) { market.settlement_fee_bps_override } else { reg.settlement_fee_bps };
         let fee = (payout * fee_bps) / 10_000;
         let net_to_long = if (payout > fee) { payout - fee } else { 0 };
-        if (net_to_long > 0) { let p = BalanceMod::split(&mut short_pos.collateral_locked, net_to_long); let to_long = coin::from_balance(p, ctx); transfer::public_transfer(to_long, long_pos.owner); };
-        if (fee > 0) { let fc_bal = BalanceMod::split(&mut short_pos.collateral_locked, fee); let fc = coin::from_balance(fc_bal, ctx); TreasuryMod::deposit_collateral_ext(treasury, fc, b"options_liquidation".to_string(), liquidator, ctx); };
-        // Liquidator bonus from remaining collateral proportional to liq_penalty_bps
-        let bonus = (BalanceMod::value(&short_pos.collateral_locked) * reg.liq_penalty_bps) / 10_000;
+        // Fee first (clamped), then payout (clamped), then bonus (clamped)
+        if (fee > 0) {
+            let availf = BalanceMod::value(&short_pos.collateral_locked);
+            let takef = if (fee <= availf) { fee } else { availf };
+            if (takef > 0) { let fc_bal = BalanceMod::split(&mut short_pos.collateral_locked, takef); let fc = coin::from_balance(fc_bal, ctx); TreasuryMod::deposit_collateral_ext(treasury, fc, b"options_liquidation".to_string(), liquidator, ctx); };
+        };
+        if (net_to_long > 0) {
+            let availn = BalanceMod::value(&short_pos.collateral_locked);
+            let payn = if (net_to_long <= availn) { net_to_long } else { availn };
+            if (payn > 0) { let p = BalanceMod::split(&mut short_pos.collateral_locked, payn); let to_long = coin::from_balance(p, ctx); transfer::public_transfer(to_long, long_pos.owner); };
+        };
+        let availb = BalanceMod::value(&short_pos.collateral_locked);
+        let bonus_raw = (availb * reg.liq_penalty_bps) / 10_000;
+        let bonus = if (bonus_raw <= availb) { bonus_raw } else { availb };
         if (bonus > 0) { let b_bal = BalanceMod::split(&mut short_pos.collateral_locked, bonus); let b = coin::from_balance(b_bal, ctx); transfer::public_transfer(b, liquidator); };
         long_pos.quantity = long_pos.quantity - quantity;
         short_pos.quantity = short_pos.quantity - quantity;
@@ -1184,17 +1394,25 @@ module unxversal::options {
         };
         let fee_to_collect = if (discount_applied) { if (trade_fee > discount_collateral) { trade_fee - discount_collateral } else { 0 } } else { trade_fee };
 
-        // Move premium net of fee to writer, pay fee to treasury
+        // Move premium net of fee to writer, pay fee to treasury (safely clamped to available escrow)
         let net_to_writer = if (premium_total > fee_to_collect) { premium_total - fee_to_collect } else { 0 };
         if (net_to_writer > 0) {
-            let to_writer_bal = BalanceMod::split(&mut escrow.escrow_collateral, net_to_writer);
-            let to_writer = coin::from_balance(to_writer_bal, ctx);
-            transfer::public_transfer(to_writer, offer.owner);
+            let avail0 = BalanceMod::value(&escrow.escrow_collateral);
+            let pay_writer = if (net_to_writer <= avail0) { net_to_writer } else { avail0 };
+            if (pay_writer > 0) {
+                let to_writer_bal = BalanceMod::split(&mut escrow.escrow_collateral, pay_writer);
+                let to_writer = coin::from_balance(to_writer_bal, ctx);
+                transfer::public_transfer(to_writer, offer.owner);
+            }
         };
         if (fee_to_collect > 0) {
-            let fee_bal = BalanceMod::split(&mut escrow.escrow_collateral, fee_to_collect);
-            let fee_coin = coin::from_balance(fee_bal, ctx);
-            TreasuryMod::deposit_collateral_ext(treasury, fee_coin, b"options_premium_trade".to_string(), escrow.owner, ctx);
+            let avail1 = BalanceMod::value(&escrow.escrow_collateral);
+            let fee_pay = if (fee_to_collect <= avail1) { fee_to_collect } else { avail1 };
+            if (fee_pay > 0) {
+                let fee_bal = BalanceMod::split(&mut escrow.escrow_collateral, fee_pay);
+                let fee_coin = coin::from_balance(fee_bal, ctx);
+                TreasuryMod::deposit_collateral_ext(treasury, fee_coin, b"options_premium_trade".to_string(), escrow.owner, ctx);
+            }
         };
 
         // Create positions

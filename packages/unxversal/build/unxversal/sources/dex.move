@@ -115,7 +115,6 @@ module unxversal::dex {
         gc_reward_bps: u64,
         maker_bond_bps: u64,
     }
-    
 
     entry fun init_dex<C>(_admin: &AdminCap, registry: &SynthRegistry, treasury: &Treasury<C>, ctx: &mut TxContext) {
         assert_is_admin(registry, ctx.sender());
@@ -188,6 +187,90 @@ module unxversal::dex {
     entry fun set_maker_bond_bps_admin(reg_admin: &AdminRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); cfg.maker_bond_bps = bps; }
     entry fun pause_admin(reg_admin: &AdminRegistry, cfg: &mut DexConfig, ctx: &TxContext) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); cfg.paused = true; }
     entry fun resume_admin(reg_admin: &AdminRegistry, cfg: &mut DexConfig, ctx: &TxContext) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); cfg.paused = false; }
+
+    // ------------------------
+    // Test-only helpers
+    // ------------------------
+    #[test_only]
+    public fun new_dex_config_for_testing<C>(treasury: &Treasury<C>, ctx: &mut TxContext): DexConfig {
+        DexConfig {
+            id: object::new(ctx),
+            treasury_id: object::id(treasury),
+            trade_fee_bps: 30,
+            unxv_discount_bps: 2000,
+            maker_rebate_bps: 0,
+            paused: false,
+            keeper_reward_bps: 100,
+            gc_reward_bps: 100,
+            maker_bond_bps: 10,
+        }
+    }
+
+    #[test_only]
+    public fun is_paused_for_testing(cfg: &DexConfig): bool { cfg.paused }
+
+    // Create a test-only DexMarket without admin gating
+    #[test_only]
+    public fun new_dex_market_for_testing<Base: store, C: store>(
+        base_symbol: String,
+        quote_symbol: String,
+        tick_size: u64,
+        lot_size: u64,
+        min_size: u64,
+        ctx: &mut TxContext
+    ): DexMarket<Base, C> {
+        let book = Book::empty(tick_size, lot_size, min_size, ctx);
+        let makers = table::new<u128, address>(ctx);
+        let maker_sides = table::new<u128, u8>(ctx);
+        let claimed = table::new<u128, u64>(ctx);
+        let bonds = table::new<u128, balance::Balance<C>>(ctx);
+        DexMarket<Base, C> { id: object::new(ctx), symbol_base: base_symbol, symbol_quote: quote_symbol, book, makers, maker_sides, claimed, bonds }
+    }
+
+    // Create a test-only DexEscrow for a given market
+    #[test_only]
+    public fun new_dex_escrow_for_testing<Base: store, C: store>(market: &DexMarket<Base, C>, ctx: &mut TxContext): DexEscrow<Base, C> {
+        DexEscrow<Base, C> {
+            id: object::new(ctx),
+            market_id: object::id(market),
+            pending_base: table::new<u128, balance::Balance<Base>>(ctx),
+            pending_collateral: table::new<u128, balance::Balance<C>>(ctx),
+            accrual_base: table::new<u128, balance::Balance<Base>>(ctx),
+            accrual_collateral: table::new<u128, balance::Balance<C>>(ctx),
+            bonds: table::new<u128, balance::Balance<C>>(ctx),
+        }
+    }
+
+    // Construct a vault-mode sell order from a base store without sharing it
+    #[test_only]
+    public fun new_vault_sell_order_for_testing<Base: store>(
+        price: u64,
+        size_base: u64,
+        base_store: &mut Coin<Base>,
+        expiry_ms: u64,
+        ctx: &mut TxContext
+    ): VaultOrderSell<Base> {
+        let have = coin::value(base_store);
+        assert!(have >= size_base, E_INSUFFICIENT_PAYMENT);
+        let escrow = coin::split(base_store, size_base, ctx);
+        VaultOrderSell<Base> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), expiry_ms, escrow_base: escrow }
+    }
+
+    // Construct a vault-mode buy order from a collateral store without sharing it
+    #[test_only]
+    public fun new_vault_buy_order_for_testing<Base: store, C: store>(
+        price: u64,
+        size_base: u64,
+        collateral_store: &mut Coin<C>,
+        expiry_ms: u64,
+        ctx: &mut TxContext
+    ): VaultOrderBuy<Base, C> {
+        let need_collateral = price * size_base;
+        let have = coin::value(collateral_store);
+        assert!(have >= need_collateral, E_INSUFFICIENT_PAYMENT);
+        let escrow = coin::split(collateral_store, need_collateral, ctx);
+        VaultOrderBuy<Base, C> { id: object::new(ctx), owner: ctx.sender(), price, remaining_base: size_base, created_at_ms: sui::tx_context::epoch_timestamp_ms(ctx), expiry_ms, escrow_collateral: escrow }
+    }
 
     /*******************************
     * Vault-safe order variants (escrow remains under vault control)
@@ -583,6 +666,8 @@ module unxversal::dex {
     }
 
     entry fun cancel_vault_sell_if_expired<Base: store>(order: VaultOrderSell<Base>, to_store: &mut Coin<Base>, ctx: &TxContext) {
+        // Legacy entry retained; delegate to clock-based variant using a synthetic timestamp via Clock from ctx if needed.
+        // For tests, prefer the clock variant below to avoid ctx time semantics.
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
         assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
         let order_id = object::id(&order);
@@ -592,8 +677,31 @@ module unxversal::dex {
         object::delete(id);
     }
 
+    #[test_only]
+    public entry fun cancel_vault_sell_if_expired_with_clock<Base: store>(order: VaultOrderSell<Base>, to_store: &mut Coin<Base>, clock: &Clock, ctx: &TxContext) {
+        let now = sui::clock::timestamp_ms(clock);
+        assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
+        let order_id = object::id(&order);
+        let VaultOrderSell<Base> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_base } = order;
+        coin::join(to_store, escrow_base);
+        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: now });
+        object::delete(id);
+    }
+
     entry fun cancel_vault_buy_if_expired<Base: store, C: store>(order: VaultOrderBuy<Base, C>, to_store: &mut Coin<C>, ctx: &TxContext) {
+        // Legacy entry retained; delegate to clock-based variant using ctx timestamp.
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
+        let order_id = object::id(&order);
+        let VaultOrderBuy<Base, C> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_collateral } = order;
+        coin::join(to_store, escrow_collateral);
+        event::emit(CoinOrderCancelled { order_id, owner: ctx.sender(), timestamp: now });
+        object::delete(id);
+    }
+
+    #[test_only]
+    public entry fun cancel_vault_buy_if_expired_with_clock<Base: store, C: store>(order: VaultOrderBuy<Base, C>, to_store: &mut Coin<C>, clock: &Clock, ctx: &TxContext) {
+        let now = sui::clock::timestamp_ms(clock);
         assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
         let order_id = object::id(&order);
         let VaultOrderBuy<Base, C> { id, owner: _, price: _, remaining_base: _, created_at_ms: _, expiry_ms: _, escrow_collateral } = order;

@@ -355,25 +355,28 @@ module unxversal::futures {
         let collateral_fee_after_discount = clamp_u128_to_u64(collateral_fee_after_discount_u128);
         let maker_rebate = clamp_u128_to_u64(maker_rebate_u128);
         if (collateral_fee_after_discount > 0) {
-            let have = coin::value(&fee_payment);
-            assert!(have >= collateral_fee_after_discount, E_MIN_INTERVAL);
-            // maker rebate first
-            if (maker_rebate > 0 && maker_rebate < collateral_fee_after_discount) {
+            let mut required = collateral_fee_after_discount;
+            let bot_cut = if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 };
+            required = required + bot_cut;
+            if (maker_rebate > 0) { required = required + maker_rebate; };
+            assert!(coin::value(&fee_payment) >= required, E_MIN_INTERVAL);
+            // pay maker rebate from fee coin (does not reduce treasury share)
+            if (maker_rebate > 0) {
                 let to_maker = coin::split(&mut fee_payment, maker_rebate, ctx);
                 transfer::public_transfer(to_maker, maker);
             };
-            // bot reward split on trade fee (optional)
-            if (reg.trade_bot_reward_bps > 0) {
-                let bot_cut = (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000;
-                if (bot_cut > 0) {
-                    let to_bot = coin::split(&mut fee_payment, bot_cut, ctx);
-                    transfer::public_transfer(to_bot, ctx.sender());
-                };
+            // split bot cut from fee coin
+            if (bot_cut > 0) {
+                let to_bot = coin::split(&mut fee_payment, bot_cut, ctx);
+                transfer::public_transfer(to_bot, ctx.sender());
             };
+            // split and deposit the full collateral fee after discount
+            let fee_for_treasury = coin::split(&mut fee_payment, collateral_fee_after_discount, ctx);
             let epoch_id2 = BotRewards::current_epoch(points, clock);
-            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id2, fee_payment, b"futures_trade".to_string(), ctx.sender(), ctx);
+            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id2, fee_for_treasury, b"futures_trade".to_string(), ctx.sender(), ctx);
+            // refund any remainder
+            transfer::public_transfer(fee_payment, ctx.sender());
         } else {
-            // No fee due: refund any provided fee payment
             transfer::public_transfer(fee_payment, ctx.sender());
         };
         // Metrics

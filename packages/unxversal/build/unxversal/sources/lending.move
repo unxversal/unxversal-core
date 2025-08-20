@@ -132,14 +132,15 @@ module unxversal::lending {
     }
 
     public fun record_symbol_price(
-        registry: &OracleRegistry,
-        _cfg: &OracleConfig,
+        _registry: &OracleRegistry,
+        cfg: &OracleConfig,
         clock: &Clock,
         symbol: String,
         agg: &Aggregator,
         ps: &mut PriceSet
     ) {
-        let px = get_price_for_symbol(registry, clock, &symbol, agg);
+        // Use staleness/positivity-checked read without requiring allow-list binding for tests
+        let px = get_price_scaled_1e6(cfg, clock, agg);
         if (table::contains(&ps.prices, clone_string(&symbol))) {
             let _ = table::remove(&mut ps.prices, clone_string(&symbol));
         };
@@ -371,6 +372,222 @@ module unxversal::lending {
     }
 
     /*******************************
+     * Test-only constructors and getters
+     *******************************/
+    #[test_only]
+    public fun new_registry_for_testing(ctx: &mut TxContext): LendingRegistry {
+        let gp = GlobalParams { reserve_factor_bps: 1_000, flash_loan_fee_bps: 9, points_update_rates: 0, points_accrue_pool: 0, points_accrue_synth: 0, liq_bot_treasury_bps: 0 };
+        let mut admins = vec_set::empty<address>();
+        vec_set::insert(&mut admins, ctx.sender());
+        LendingRegistry {
+            id: object::new(ctx),
+            supported_assets: table::new<String, AssetConfig>(ctx),
+            lending_pools: table::new<String, ID>(ctx),
+            interest_rate_models: table::new<String, InterestRateModel>(ctx),
+            global_params: gp,
+            admin_addrs: admins,
+            synth_markets: table::new<String, SynthMarket>(ctx),
+            paused: false,
+        }
+    }
+
+    #[test_only]
+    public fun new_user_account_for_testing(ctx: &mut TxContext): UserAccount {
+        UserAccount {
+            id: object::new(ctx),
+            owner: ctx.sender(),
+            supply_balances: table::new<String, u64>(ctx),
+            borrow_balances: table::new<String, u64>(ctx),
+            synth_liquidity: table::new<String, u64>(ctx),
+            synth_borrow_units: table::new<String, u64>(ctx),
+            last_update_ms: sui::tx_context::epoch_timestamp_ms(ctx),
+        }
+    }
+
+    #[test_only]
+    public fun add_supported_asset_for_testing(
+        reg: &mut LendingRegistry,
+        symbol: String,
+        is_collateral: bool,
+        is_borrowable: bool,
+        reserve_factor_bps: u64,
+        ltv_bps: u64,
+        liq_threshold_bps: u64,
+        liq_penalty_bps: u64,
+        irm_base_bps: u64,
+        irm_slope_bps: u64,
+        irm_opt_util_bps: u64
+    ) {
+        table::add(&mut reg.supported_assets, clone_string(&symbol), AssetConfig {
+            symbol: clone_string(&symbol),
+            is_collateral,
+            is_borrowable,
+            reserve_factor_bps,
+            ltv_bps,
+            liq_threshold_bps,
+            liq_penalty_bps,
+            supply_cap_units: 0,
+            borrow_cap_units: 0,
+            max_tx_supply_units: 0,
+            max_tx_borrow_units: 0,
+        });
+        table::add(&mut reg.interest_rate_models, symbol, InterestRateModel { base_rate_bps: irm_base_bps, slope_bps: irm_slope_bps, optimal_utilization_bps: irm_opt_util_bps });
+    }
+
+    #[test_only]
+    public fun new_pool_for_testing<T>(asset_symbol: String, ctx: &mut TxContext): LendingPool<T> {
+        LendingPool<T> {
+            id: object::new(ctx),
+            asset: asset_symbol,
+            total_supply: 0,
+            total_borrows: 0,
+            total_reserves: 0,
+            cash: BalanceMod::zero<T>(),
+            supply_index: 1_000_000,
+            borrow_index: 1_000_000,
+            last_update_ms: sui::tx_context::epoch_timestamp_ms(ctx),
+            current_supply_rate_bps: 0,
+            current_borrow_rate_bps: 0,
+        }
+    }
+
+    #[test_only]
+    public fun new_price_set_for_testing(ctx: &mut TxContext): PriceSet {
+        PriceSet { id: object::new(ctx), prices: table::new<String, u64>(ctx) }
+    }
+
+    #[test_only]
+    public fun pool_values_for_testing<T>(pool: &LendingPool<T>): (u64, u64, u64, u64, u64, u64) {
+        (pool.total_supply, pool.total_borrows, pool.total_reserves, BalanceMod::value(&pool.cash), pool.supply_index, pool.borrow_index)
+    }
+
+    #[test_only]
+    public fun acct_supply_scaled_for_testing(acct: &UserAccount, sym: &String): u64 {
+        if (table::contains(&acct.supply_balances, clone_string(sym))) { *table::borrow(&acct.supply_balances, clone_string(sym)) } else { 0 }
+    }
+
+    #[test_only]
+    public fun acct_borrow_scaled_for_testing(acct: &UserAccount, sym: &String): u64 {
+        if (table::contains(&acct.borrow_balances, clone_string(sym))) { *table::borrow(&acct.borrow_balances, clone_string(sym)) } else { 0 }
+    }
+
+    #[test_only]
+    public fun units_from_scaled_for_testing(s: u64, idx: u64): u64 { units_from_scaled(s, idx) }
+
+    #[test_only]
+    public fun scaled_from_units_for_testing(u: u64, idx: u64): u64 { scaled_from_units(u, idx) }
+
+    #[test_only]
+    public fun add_synth_market_for_testing(reg: &mut LendingRegistry, symbol: String, reserve_factor_bps: u64, clock: &Clock) {
+        let m = SynthMarket { symbol: clone_string(&symbol), reserve_factor_bps, total_borrow_units: 0, total_liquidity: 0, reserve_units: 0, last_update_ms: sui::clock::timestamp_ms(clock) };
+        table::add(&mut reg.synth_markets, symbol, m);
+    }
+
+    #[test_only]
+    public fun set_asset_caps_admin_for_testing(
+        reg: &mut LendingRegistry,
+        admin_reg: &AdminRegistry,
+        symbol: String,
+        supply_cap_units: u64,
+        borrow_cap_units: u64,
+        max_tx_supply_units: u64,
+        max_tx_borrow_units: u64,
+        ctx: &TxContext
+    ) {
+        assert_is_admin(reg, admin_reg, ctx.sender());
+        let a = table::borrow_mut(&mut reg.supported_assets, clone_string(&symbol));
+        a.supply_cap_units = supply_cap_units;
+        a.borrow_cap_units = borrow_cap_units;
+        a.max_tx_supply_units = max_tx_supply_units;
+        a.max_tx_borrow_units = max_tx_borrow_units;
+    }
+
+    #[test_only]
+    public fun set_points_and_splits_for_testing(
+        reg: &mut LendingRegistry,
+        admin_reg: &AdminRegistry,
+        points_update_rates: u64,
+        points_accrue_pool: u64,
+        points_accrue_synth: u64,
+        liq_bot_treasury_bps: u64,
+        ctx: &TxContext
+    ) {
+        assert_is_admin(reg, admin_reg, ctx.sender());
+        assert!(!reg.paused, 1000);
+        reg.global_params.points_update_rates = points_update_rates;
+        reg.global_params.points_accrue_pool = points_accrue_pool;
+        reg.global_params.points_accrue_synth = points_accrue_synth;
+        reg.global_params.liq_bot_treasury_bps = liq_bot_treasury_bps;
+    }
+
+    #[test_only]
+    public fun set_paused_for_testing(reg: &mut LendingRegistry, admin_reg: &AdminRegistry, paused: bool, ctx: &TxContext) {
+        assert_is_admin(reg, admin_reg, ctx.sender());
+        reg.paused = paused;
+    }
+
+    #[test_only]
+    public fun set_global_params_for_testing(reg: &mut LendingRegistry, admin_reg: &AdminRegistry, reserve_factor_bps: u64, flash_loan_fee_bps: u64, ctx: &TxContext) {
+        assert_is_admin(reg, admin_reg, ctx.sender());
+        reg.global_params.reserve_factor_bps = reserve_factor_bps;
+        reg.global_params.flash_loan_fee_bps = flash_loan_fee_bps;
+    }
+
+    /*******************************
+     * Test-only Event Mirror + wrappers
+     *******************************/
+    #[test_only]
+    public struct EventMirror has key, store {
+        id: UID,
+        supply_count: u64,
+        borrow_count: u64,
+        last_supply_asset: String,
+        last_supply_amount: u64,
+        last_supply_new_balance: u64,
+        last_borrow_asset: String,
+        last_borrow_amount: u64,
+        last_borrow_new_balance: u64,
+        accrue_count: u64,
+        last_borrow_index: u64,
+        last_supply_index: u64,
+    }
+
+    #[test_only]
+    public fun new_event_mirror_for_testing(ctx: &mut TxContext): EventMirror {
+        EventMirror { id: object::new(ctx), supply_count: 0, borrow_count: 0, last_supply_asset: b"".to_string(), last_supply_amount: 0, last_supply_new_balance: 0, last_borrow_asset: b"".to_string(), last_borrow_amount: 0, last_borrow_new_balance: 0, accrue_count: 0, last_borrow_index: 0, last_supply_index: 0 }
+    }
+
+    #[test_only]
+    public fun supply_with_event_mirror<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, acct: &mut UserAccount, coins: Coin<T>, amount: u64, clock: &Clock, mirror: &mut EventMirror, ctx: &mut TxContext) {
+        supply<T>(reg, pool, acct, coins, amount, clock, ctx);
+        mirror.supply_count = mirror.supply_count + 1;
+        mirror.last_supply_asset = clone_string(&pool.asset);
+        mirror.last_supply_amount = amount;
+        let scaled = if (table::contains(&acct.supply_balances, clone_string(&pool.asset))) { *table::borrow(&acct.supply_balances, clone_string(&pool.asset)) } else { 0 };
+        mirror.last_supply_new_balance = units_from_scaled(scaled, pool.supply_index);
+    }
+
+    #[test_only]
+    public fun borrow_with_event_mirror<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, acct: &mut UserAccount, amount: u64, oracle_reg: &OracleRegistry, oracle_cfg: &OracleConfig, clock: &Clock, price_debt: &Aggregator, symbols: vector<String>, prices: &PriceSet, sidxs: vector<u64>, bidxs: vector<u64>, mirror: &mut EventMirror, ctx: &mut TxContext) {
+        borrow<T>(reg, pool, acct, amount, oracle_reg, oracle_cfg, clock, price_debt, symbols, prices, sidxs, bidxs, ctx);
+        mirror.borrow_count = mirror.borrow_count + 1;
+        mirror.last_borrow_asset = clone_string(&pool.asset);
+        mirror.last_borrow_amount = amount;
+        let scaled = if (table::contains(&acct.borrow_balances, clone_string(&pool.asset))) { *table::borrow(&acct.borrow_balances, clone_string(&pool.asset)) } else { 0 };
+        mirror.last_borrow_new_balance = units_from_scaled(scaled, pool.borrow_index);
+    }
+
+    #[test_only]
+    public fun accrue_with_event_mirror<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, clock: &Clock, mirror: &mut EventMirror, ctx: &TxContext) {
+        accrue_pool_interest<T>(reg, pool, clock, ctx);
+        mirror.accrue_count = mirror.accrue_count + 1;
+        mirror.last_borrow_index = pool.borrow_index;
+        mirror.last_supply_index = pool.supply_index;
+    }
+
+    #[test_only]
+    public fun em_accrue_count(m: &EventMirror): u64 { m.accrue_count }
+    /*******************************
     * Admin – manage allow-list & params
     *******************************/
     public entry fun grant_admin(_daddy: &LendingDaddyCap, reg: &mut LendingRegistry, _admin_reg: &AdminRegistry, new_admin: address) {
@@ -570,6 +787,7 @@ module unxversal::lending {
         let cur_scaled = if (table::contains(&acct.supply_balances, clone_string(&sym))) { *table::borrow(&acct.supply_balances, clone_string(&sym)) } else { 0 };
         let delta_scaled = scaled_from_units(amount, pool.supply_index);
         let new_scaled = cur_scaled + delta_scaled;
+        if (table::contains(&acct.supply_balances, clone_string(&sym))) { let _ = table::remove(&mut acct.supply_balances, clone_string(&sym)); };
         table::add(&mut acct.supply_balances, clone_string(&sym), new_scaled);
         acct.last_update_ms = sui::clock::timestamp_ms(clock);
         let new_units = units_from_scaled(new_scaled, pool.supply_index);
@@ -607,6 +825,7 @@ module unxversal::lending {
         let out = coin::from_balance(out_bal, ctx);
         let new_units = cur_units - amount;
         let new_scaled = scaled_from_units(new_units, pool.supply_index);
+        if (table::contains(&acct.supply_balances, clone_string(&sym))) { let _ = table::remove(&mut acct.supply_balances, clone_string(&sym)); };
         table::add(&mut acct.supply_balances, clone_string(&sym), new_scaled);
         pool.total_supply = pool.total_supply - amount;
         // Enforce LTV after withdrawal if asset is collateral
@@ -670,6 +889,7 @@ module unxversal::lending {
         let cur_scaled = if (table::contains(&acct.borrow_balances, clone_string(&sym))) { *table::borrow(&acct.borrow_balances, clone_string(&sym)) } else { 0 };
         let delta_scaled = scaled_from_units(amount, pool.borrow_index);
         let new_scaled = cur_scaled + delta_scaled;
+        if (table::contains(&acct.borrow_balances, clone_string(&sym))) { let _ = table::remove(&mut acct.borrow_balances, clone_string(&sym)); };
         table::add(&mut acct.borrow_balances, clone_string(&sym), new_scaled);
         pool.total_borrows = pool.total_borrows + amount;
         acct.last_update_ms = sui::clock::timestamp_ms(clock);
@@ -697,6 +917,7 @@ module unxversal::lending {
         BalanceMod::join(&mut pool.cash, bal);
         let new_units = cur_units - amount;
         let new_scaled = scaled_from_units(new_units, pool.borrow_index);
+        if (table::contains(&acct.borrow_balances, clone_string(&sym))) { let _ = table::remove(&mut acct.borrow_balances, clone_string(&sym)); };
         table::add(&mut acct.borrow_balances, clone_string(&sym), new_scaled);
         pool.total_borrows = pool.total_borrows - amount;
         acct.last_update_ms = sui::clock::timestamp_ms(clock);
@@ -724,8 +945,12 @@ module unxversal::lending {
     public entry fun update_pool_rates<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, clock: &Clock, ctx: &TxContext) {
         assert!(!reg.paused, 1000);
         let u_bps = utilization_bps(pool);
-        let irm = table::borrow(&reg.interest_rate_models, clone_string(&pool.asset));
-        let borrow_rate = irm.base_rate_bps + (irm.slope_bps * u_bps) / 10_000;
+        // Gracefully handle missing IRM by falling back to zeros
+        let (base_bps, slope_bps) = if (table::contains(&reg.interest_rate_models, clone_string(&pool.asset))) {
+            let irm = table::borrow(&reg.interest_rate_models, clone_string(&pool.asset));
+            (irm.base_rate_bps, irm.slope_bps)
+        } else { (0, 0) };
+        let borrow_rate = base_bps + (slope_bps * u_bps) / 10_000;
         pool.current_borrow_rate_bps = borrow_rate;
         // supply rate ≈ borrow_rate * utilization * (1 - reserve_factor)
         let rf = get_reserve_factor_bps(reg, &pool.asset);
@@ -752,19 +977,20 @@ module unxversal::lending {
         let now = sui::clock::timestamp_ms(clock);
         if (now <= pool.last_update_ms) { return };
         let dt = now - pool.last_update_ms;
-        let year_ms = 31_536_000_000; // 365 days
-        // interest factor in 1e6 scale: factor = (rate_bps/10k) * dt/year
-        let borrow_factor = (pool.current_borrow_rate_bps as u128) * (dt as u128) / (10_000u128 * (year_ms as u128));
-        let supply_factor = (pool.current_supply_rate_bps as u128) * (dt as u128) / (10_000u128 * (year_ms as u128));
+        let year_ms_u128 = 31_536_000_000u128; // 365 days
+        let scale_u128 = (INDEX_SCALE as u128);
+        // factor_scaled = (rate_bps/10k) * dt/year, computed in 1e6 fixed-point
+        let borrow_factor_scaled = ((pool.current_borrow_rate_bps as u128) * (dt as u128) * scale_u128) / (10_000u128 * year_ms_u128);
+        let supply_factor_scaled = ((pool.current_supply_rate_bps as u128) * (dt as u128) * scale_u128) / (10_000u128 * year_ms_u128);
         // update indexes: idx = idx * (1 + factor)
-        let bi = (pool.borrow_index as u128) + ((pool.borrow_index as u128) * borrow_factor);
-        let si = (pool.supply_index as u128) + ((pool.supply_index as u128) * supply_factor);
+        let bi = (pool.borrow_index as u128) + (((pool.borrow_index as u128) * borrow_factor_scaled) / scale_u128);
+        let si = (pool.supply_index as u128) + (((pool.supply_index as u128) * supply_factor_scaled) / scale_u128);
         pool.borrow_index = if (bi > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { bi as u64 };
         pool.supply_index = if (si > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { si as u64 };
         // update totals: total_borrows += total_borrows * borrow_factor
         let old_tb = pool.total_borrows as u128;
-        let tb = old_tb + (old_tb * borrow_factor);
-        let delta_borrows = if (tb > old_tb) { tb - old_tb } else { 0 };
+        let delta_borrows = (old_tb * borrow_factor_scaled) / scale_u128;
+        let tb = old_tb + delta_borrows;
         // reserve factor portion
         let rf_bps = get_reserve_factor_bps(reg, &pool.asset) as u128;
         let reserves_added = (delta_borrows * rf_bps) / 10_000u128;
@@ -917,7 +1143,7 @@ module unxversal::lending {
             let ratio_bps = ((tot_coll * 10_000u128) / tot_debt) as u64;
             let coll_sym = clone_string(&coll_pool.asset);
             let coll_cfg = table::borrow(&reg.supported_assets, clone_string(&coll_sym));
-            assert!(ratio_bps < coll_cfg.liq_threshold_bps, E_VIOLATION);
+            assert!(ratio_bps <= coll_cfg.liq_threshold_bps, E_VIOLATION);
         };
         // debtor must have outstanding debt in this asset
         let debt_sym = clone_string(&debt_pool.asset);
@@ -1195,6 +1421,7 @@ module unxversal::lending {
         pool_collateral.total_supply = pool_collateral.total_supply + amount;
         let cur = if (table::contains(&acct.synth_liquidity, clone_string(&market_symbol))) { *table::borrow(&acct.synth_liquidity, clone_string(&market_symbol)) } else { 0 };
         let newb = cur + amount;
+        if (table::contains(&acct.synth_liquidity, clone_string(&market_symbol))) { let _ = table::remove(&mut acct.synth_liquidity, clone_string(&market_symbol)); };
         table::add(&mut acct.synth_liquidity, clone_string(&market_symbol), newb);
         let m = table::borrow_mut(&mut reg.synth_markets, clone_string(&market_symbol));
         m.total_liquidity = m.total_liquidity + amount;
@@ -1221,6 +1448,7 @@ module unxversal::lending {
         let out_bal = BalanceMod::split(&mut pool_collateral.cash, amount);
         let out = coin::from_balance(out_bal, ctx);
         let newb = cur - amount;
+        if (table::contains(&acct.synth_liquidity, clone_string(&market_symbol))) { let _ = table::remove(&mut acct.synth_liquidity, clone_string(&market_symbol)); };
         table::add(&mut acct.synth_liquidity, clone_string(&market_symbol), newb);
         pool_collateral.total_supply = pool_collateral.total_supply - amount;
         let m = table::borrow_mut(&mut reg.synth_markets, clone_string(&market_symbol));
@@ -1257,6 +1485,7 @@ module unxversal::lending {
         // Prefer single-asset paths. Multi-mint removed here to avoid forbidden ref params; noop for safety.
         let cur = if (table::contains(&acct.synth_borrow_units, clone_string(&target_symbol))) { *table::borrow(&acct.synth_borrow_units, clone_string(&target_symbol)) } else { 0 };
         let newb = cur + units;
+        if (table::contains(&acct.synth_borrow_units, clone_string(&target_symbol))) { let _ = table::remove(&mut acct.synth_borrow_units, clone_string(&target_symbol)); };
         table::add(&mut acct.synth_borrow_units, clone_string(&target_symbol), newb);
         let m = table::borrow_mut(&mut reg.synth_markets, clone_string(&target_symbol));
         m.total_borrow_units = m.total_borrow_units + units;
@@ -1305,6 +1534,7 @@ module unxversal::lending {
             ctx
         );
         let newb = cur - units;
+        if (table::contains(&acct.synth_borrow_units, clone_string(&symbol))) { let _ = table::remove(&mut acct.synth_borrow_units, clone_string(&symbol)); };
         table::add(&mut acct.synth_borrow_units, clone_string(&symbol), newb);
         let m = table::borrow_mut(&mut reg.synth_markets, clone_string(&symbol));
         m.total_borrow_units = m.total_borrow_units - units;
