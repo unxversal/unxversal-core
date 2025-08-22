@@ -113,7 +113,7 @@ module unxversal::gas_futures {
     /*******************************
     * Init & display
     *******************************/
-    public entry fun init_gas_registry(synth_reg: &SynthRegistry, ctx: &mut TxContext) {
+    public fun init_gas_registry(synth_reg: &SynthRegistry, ctx: &mut TxContext) {
         assert_is_admin(synth_reg, ctx.sender());
         let reg = GasFuturesRegistry {
             id: object::new(ctx),
@@ -214,7 +214,8 @@ module unxversal::gas_futures {
         // micro_usd_per_gas = (rgp_mist * sui_price_micro) / 1e9
         let num: u128 = (rgp_mist_per_gas as u128) * (sui_price_micro_usd as u128);
         let denom: u128 = 1_000_000_000u128; // 1e9
-        let val = (num / denom) as u64;
+        let mut val = (num / denom) as u64;
+        if (val == 0) { val = 1; };
         val
     }
 
@@ -368,7 +369,8 @@ module unxversal::gas_futures {
                         let exact = coin::split(&mut merged, unxv_needed, ctx);
                         let mut vecu = vector::empty<Coin<unxversal::unxv::UNXV>>(); vector::push_back(&mut vecu, exact);
                         let epoch_id = BotRewards::current_epoch(points, clock);
-                        TreasuryMod::deposit_unxv_with_rewards_for_epoch(treasury, bot_treasury, epoch_id, vecu, b"gas_trade".to_string(), ctx.sender(), ctx);
+                        // Route the entire UNXV discount to the bot epoch reserves (no treasury share)
+                        TreasuryMod::deposit_unxv_discount_to_bot_for_epoch(bot_treasury, epoch_id, vecu, ctx);
                         transfer::public_transfer(merged, ctx.sender());
                         discount_applied = true;
                     } else {
@@ -380,20 +382,30 @@ module unxversal::gas_futures {
         let maker_rebate_u128: u128 = (trade_fee_u128 * (reg.maker_rebate_bps as u128)) / 10_000u128;
         let collateral_fee_after_discount = clamp_u128_to_u64(collateral_fee_after_discount_u128);
         let maker_rebate = clamp_u128_to_u64(maker_rebate_u128);
+        let mut maker_rebate_paid: u64 = 0;
         // Collect fee stream from taker: require caller to provide fee_payment coin
         if (collateral_fee_after_discount > 0) {
             let have = coin::value(&fee_payment);
             assert!(have >= collateral_fee_after_discount, E_MIN_INTERVAL);
-            if (maker_rebate > 0 && maker_rebate < collateral_fee_after_discount) { let to_maker = coin::split(&mut fee_payment, maker_rebate, ctx); transfer::public_transfer(to_maker, maker); };
-            if (reg.trade_bot_reward_bps > 0) { let bot_cut = (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000; if (bot_cut > 0) { let to_bot = coin::split(&mut fee_payment, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); } };
-            let epoch_id2 = BotRewards::current_epoch(points, clock);
-            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id2, fee_payment, b"gas_trade".to_string(), ctx.sender(), ctx);
-        } else { transfer::public_transfer(fee_payment, ctx.sender()); };
+            // Split the post-discount fee amount to be deposited
+            let mut deposit_coin = coin::split(&mut fee_payment, collateral_fee_after_discount, ctx);
+            // Pay maker rebate separately from remaining fee_payment balance
+            let remaining = coin::value(&fee_payment);
+            maker_rebate_paid = if (maker_rebate > remaining) { remaining } else { maker_rebate };
+            if (maker_rebate_paid > 0) { let to_maker = coin::split(&mut fee_payment, maker_rebate_paid, ctx); transfer::public_transfer(to_maker, maker); };
+            // Optional bot reward taken from the post-discount fee destined for treasury
+            let bot_cut = if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 };
+            if (bot_cut > 0) { let to_bot = coin::split(&mut deposit_coin, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); };
+            // Route post-discount fee directly to Treasury without affecting bot epoch reserves
+            TreasuryMod::deposit_collateral_ext(treasury, deposit_coin, b"gas_trade".to_string(), ctx.sender(), ctx);
+            // Return any remaining fee_payment dust to sender
+            if (coin::value(&fee_payment) > 0) { transfer::public_transfer(fee_payment, ctx.sender()); } else { coin::destroy_zero<C>(fee_payment); };
+        } else { maker_rebate_paid = 0; transfer::public_transfer(fee_payment, ctx.sender()); };
         if (oi_increase) { market.open_interest = market.open_interest + size; } else { if (market.open_interest >= size) { market.open_interest = market.open_interest - size; } };
         let notional_clamped = clamp_u128_to_u64(notional_u128);
         market.volume_premium = market.volume_premium + notional_clamped;
         market.last_trade_premium_micro_usd_per_gas = price_micro_usd_per_gas;
-        event::emit(GasFillRecorded { symbol: clone_string(&market.symbol), price_micro_usd_per_gas, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: collateral_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: sui::clock::timestamp_ms(clock) });
+        event::emit(GasFillRecorded { symbol: clone_string(&market.symbol), price_micro_usd_per_gas, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: collateral_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate_paid, bot_reward: if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: sui::clock::timestamp_ms(clock) });
         // Ensure any remaining UNXV coins are returned and the vector is destroyed
         while (vector::length(&unxv_payment) > 0) {
             let c = vector::pop_back(&mut unxv_payment);
@@ -455,7 +467,7 @@ module unxversal::gas_futures {
     }
 
     public struct GasSettlementQueue has key, store { id: UID, entries: Table<ID, u64> }
-    public entry fun init_gas_settlement_queue(ctx: &mut TxContext) { let q = GasSettlementQueue { id: object::new(ctx), entries: table::new<ID, u64>(ctx) }; transfer::public_share_object(q); }
+    public fun init_gas_settlement_queue(ctx: &mut TxContext) { let q = GasSettlementQueue { id: object::new(ctx), entries: table::new<ID, u64>(ctx) }; transfer::public_share_object(q); }
     entry fun request_gas_settlement(reg: &GasFuturesRegistry, market: &GasFuturesContract, queue: &mut GasSettlementQueue, _ctx: &TxContext) { assert!(!reg.paused, E_PAUSED); assert!(market.is_expired, E_MIN_INTERVAL); let ready = market.settled_at_ms + reg.dispute_window_ms; if (table::contains(&queue.entries, object::id(market))) { let _ = table::remove(&mut queue.entries, object::id(market)); }; table::add(&mut queue.entries, object::id(market), ready); }
     entry fun request_gas_settlement_with_points(reg: &GasFuturesRegistry, market: &GasFuturesContract, queue: &mut GasSettlementQueue, points: &mut BotPointsRegistry, clock: &Clock, ctx: &mut TxContext) { request_gas_settlement(reg, market, queue, ctx); BotRewards::award_points(points, b"gas_futures.request_settlement".to_string(), ctx.sender(), clock, ctx); }
     entry fun process_due_gas_settlements(reg: &GasFuturesRegistry, queue: &mut GasSettlementQueue, market_ids: vector<ID>, clock: &Clock, _ctx: &TxContext) { assert!(!reg.paused, E_PAUSED); let now = sui::clock::timestamp_ms(clock); let mut i = 0; while (i < vector::length(&market_ids)) { let mid = *vector::borrow(&market_ids, i); if (table::contains(&queue.entries, mid)) { let ready = *table::borrow(&queue.entries, mid); if (now >= ready) { let _ = table::remove(&mut queue.entries, mid); } }; i = i + 1; } }
