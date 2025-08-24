@@ -317,17 +317,26 @@ module unxversal::perpetuals {
         let maker_rebate = if (maker_rebate_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { maker_rebate_u128 as u64 };
         if (collateral_fee_after_discount > 0) {
             let have = coin::value(&fee_payment);
-            assert!(have >= collateral_fee_after_discount, E_MIN_INTERVAL);
-            if (maker_rebate > 0 && maker_rebate < collateral_fee_after_discount) {
+            // Payer must cover maker rebate + net fee (which includes bot split)
+            let bot_cut = if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 };
+            let required_total = collateral_fee_after_discount + maker_rebate + bot_cut;
+            assert!(have >= required_total, E_MIN_INTERVAL);
+            // Pay maker rebate first (if any)
+            if (maker_rebate > 0) {
                 let to_maker = coin::split(&mut fee_payment, maker_rebate, ctx);
                 transfer::public_transfer(to_maker, maker);
             };
-            if (reg.trade_bot_reward_bps > 0) {
-                let bot_cut = (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000;
-                if (bot_cut > 0) { let to_bot = coin::split(&mut fee_payment, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); }
+            // Pay bot cut next (if any)
+            if (bot_cut > 0) {
+                let to_bot = coin::split(&mut fee_payment, bot_cut, ctx);
+                transfer::public_transfer(to_bot, ctx.sender());
             };
+            // Pay treasury the exact net fee after discount
+            let mut to_treasury = coin::split(&mut fee_payment, collateral_fee_after_discount, ctx);
             let epoch_id2 = BotRewards::current_epoch(points, clock);
-            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id2, fee_payment, b"perp_trade".to_string(), ctx.sender(), ctx);
+            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id2, to_treasury, b"perp_trade".to_string(), ctx.sender(), ctx);
+            // Refund any remaining change
+            transfer::public_transfer(fee_payment, ctx.sender());
         } else {
             transfer::public_transfer(fee_payment, ctx.sender());
         };

@@ -318,16 +318,23 @@ module unxversal::perpetuals {
         if (collateral_fee_after_discount > 0) {
             let have = coin::value(&fee_payment);
             assert!(have >= collateral_fee_after_discount, E_MIN_INTERVAL);
+            // Isolate the exact fee due; keep change in fee_payment to refund later
+            let mut fee_due = coin::split(&mut fee_payment, collateral_fee_after_discount, ctx);
+            // Maker rebate comes out of the fee due
             if (maker_rebate > 0 && maker_rebate < collateral_fee_after_discount) {
-                let to_maker = coin::split(&mut fee_payment, maker_rebate, ctx);
+                let to_maker = coin::split(&mut fee_due, maker_rebate, ctx);
                 transfer::public_transfer(to_maker, maker);
             };
+            // Optional bot reward as a split from fee due
             if (reg.trade_bot_reward_bps > 0) {
                 let bot_cut = (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000;
-                if (bot_cut > 0) { let to_bot = coin::split(&mut fee_payment, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); }
+                if (bot_cut > 0) { let to_bot = coin::split(&mut fee_due, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); }
             };
+            // Deposit remaining net fee
             let epoch_id2 = BotRewards::current_epoch(points, clock);
-            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id2, fee_payment, b"perp_trade".to_string(), ctx.sender(), ctx);
+            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id2, fee_due, b"perp_trade".to_string(), ctx.sender(), ctx);
+            // Refund any extra funds back to the sender
+            transfer::public_transfer(fee_payment, ctx.sender());
         } else {
             transfer::public_transfer(fee_payment, ctx.sender());
         };
