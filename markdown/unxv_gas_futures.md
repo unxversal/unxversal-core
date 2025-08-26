@@ -18,6 +18,10 @@ Cash-settled futures on Sui gas price, priced in micro-USD per gas via RGP×SUI.
 - Bots: lister, recorder, liquidation, settlement queue, display registrar.
 - API: endpoints mirror dated futures with gas-specific parameters and price checks.
 
+### Testing
+- See `markdown/tests_overview.md` for coverage summary.
+- Tests validate fee routing and metrics, discount and maker rebate, pause guards, tick/bounds, settlement and queue with points, full lifecycle including liquidation, and settlement-close bot split accounting. All current tests pass.
+
 ### SDK and API interfaces (TS)
 ```ts
 export interface GasFuturesApi {

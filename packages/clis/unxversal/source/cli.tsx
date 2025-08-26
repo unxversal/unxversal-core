@@ -7,13 +7,13 @@ import App from './app.js';
 const cli = meow(
 	`
 	Usage
-	  $ unxversal-protocol
+	  $ unxversal
 
 	Options
 		--name  Your name
 
 	Examples
-	  $ unxversal-protocol --name=Jane
+	  $ unxversal --name=Jane
 	  Hello, Jane
 `,
 	{

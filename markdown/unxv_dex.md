@@ -17,6 +17,10 @@ On-chain orderbook for coin-base markets with vault-safe variants for protocol-o
 - Bots: order matching and expiry GC; config display registration.
 - API: build order placement, cancel, and match transactions; decode order states.
 
+### Testing
+- See `markdown/tests_overview.md` for details.
+- Tests validate admin setters and pause controls, vault-mode place/cancel/match flows, and maker/taker economics including UNXV discount and maker rebate. All current tests pass.
+
 ### SDK and API interfaces (TS)
 ```ts
 export interface DexApi {

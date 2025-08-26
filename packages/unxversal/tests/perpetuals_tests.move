@@ -35,9 +35,12 @@ module unxversal::perpetuals_tests {
         let reg_admin2 = test_scenario::take_shared<unxversal::admin::AdminRegistry>(&scen);
         let mut orx2 = test_scenario::take_shared<unxversal::oracle::OracleRegistry>(&scen);
         let ocfg2 = test_scenario::take_shared<unxversal::oracle::OracleConfig>(&scen);
-        Oracle::set_feed(&reg_admin2, &mut orx2, string::utf8(b"UNXV"), &px_unxv, scen.ctx());
+        // Prepare IDX aggregator before registering it on the oracle registry
         let mut idx = aggregator::new_aggregator(aggregator::example_queue_id(), string::utf8(b"IDX_px"), user, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, scen.ctx());
         aggregator::set_current_value(&mut idx, switchboard::decimal::new(1_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
+        // Register UNXV and IDX feeds on the oracle registry
+        Oracle::set_feed(&reg_admin2, &mut orx2, string::utf8(b"UNXV"), &px_unxv, scen.ctx());
+        Oracle::set_feed(&reg_admin2, &mut orx2, string::utf8(b"IDX"), &idx, scen.ctx());
         // whitelist underlying
         Perp::whitelist_underlying_feed_admin(&reg_admin2, &mut reg, string::utf8(b"IDX"), &idx, scen.ctx());
         aggregator::share_for_testing(px_unxv);
@@ -55,8 +58,10 @@ module unxversal::perpetuals_tests {
         let reg_admin2 = test_scenario::take_shared<unxversal::admin::AdminRegistry>(&scen);
         let orx2 = test_scenario::take_shared<unxversal::oracle::OracleRegistry>(&scen);
         let ocfg3 = test_scenario::take_shared<unxversal::oracle::OracleConfig>(&scen);
-        let px_unxv2 = test_scenario::take_shared<switchboard::aggregator::Aggregator>(&scen);
-        let idx2 = test_scenario::take_shared<switchboard::aggregator::Aggregator>(&scen);
+        let unxv_id = Oracle::expected_feed_id(&orx2, &string::utf8(b"UNXV"));
+        let idx_id = Oracle::expected_feed_id(&orx2, &string::utf8(b"IDX"));
+        let px_unxv2 = test_scenario::take_shared_by_id<switchboard::aggregator::Aggregator>(&scen, unxv_id);
+        let idx2 = test_scenario::take_shared_by_id<switchboard::aggregator::Aggregator>(&scen, idx_id);
         let mid = Perp::market_id(&reg, &string::utf8(b"IDX-PERP"));
         let mut market: PerpMarket = test_scenario::take_shared_by_id<PerpMarket>(&scen, mid);
         // set fee config: 1% fee, 50% rebate, 50% discount
@@ -315,7 +320,8 @@ module unxversal::perpetuals_tests {
         let orx = Oracle::new_registry_for_testing(scen.ctx());
         let reg_admin: AdminRegistry = Admin::new_admin_registry_for_testing(scen.ctx());
         Perp::init_perps_registry_admin(&reg_admin, scen.ctx());
-        // Share admin and oracle in this tx; will re-take next tx
+        // Share config, admin and oracle in this tx; will re-take next tx
+        sui::transfer::public_share_object(ocfg);
         sui::transfer::public_share_object(orx);
         sui::transfer::public_share_object(reg_admin);
         test_scenario::next_tx(&mut scen, user);
@@ -350,9 +356,11 @@ module unxversal::perpetuals_tests {
         let mut unxv_payment = vector::empty<sui::coin::Coin<unxversal::unxv::UNXV>>();
         vector::push_back(&mut unxv_payment, sui::coin::mint_for_testing<unxversal::unxv::UNXV>(100, scen.ctx()));
         let mut mir2 = Perp::new_perp_event_mirror_for_testing(scen.ctx());
-        let px_unxv2 = test_scenario::take_shared<switchboard::aggregator::Aggregator>(&scen);
         let orx3 = test_scenario::take_shared<unxversal::oracle::OracleRegistry>(&scen);
-        Perp::record_fill_with_event_mirror<TestBaseUSD>(&mut reg, &mut market, 1_000_000, 4, true, user, unxv_payment, &px_unxv2, &orx3, &ocfg, &clk, fee_pay, &mut tre, &mut bot_t, &pts, true, 1, 4_000_000, &mut mir2, scen.ctx());
+        let ocfg3 = test_scenario::take_shared<unxversal::oracle::OracleConfig>(&scen);
+        let unxv_id_fee = Oracle::expected_feed_id(&orx3, &string::utf8(b"UNXV"));
+        let px_unxv2 = test_scenario::take_shared_by_id<switchboard::aggregator::Aggregator>(&scen, unxv_id_fee);
+        Perp::record_fill_with_event_mirror<TestBaseUSD>(&mut reg, &mut market, 1_000_000, 4, true, user, unxv_payment, &px_unxv2, &orx3, &ocfg3, &clk, fee_pay, &mut tre, &mut bot_t, &pts, true, 1, 4_000_000, &mut mir2, scen.ctx());
         let post = Tre::tre_balance_collateral_for_testing(&tre);
         assert!(post - pre == 18_000);
         assert!(Perp::pem_last_fill_fee(&mir2) == 20_000 && Perp::pem_last_fill_rebate(&mir2) == 20_000 && Perp::pem_last_fill_discount(&mir2) && Perp::pem_last_fill_bot_reward(&mir2) == 2_000);
@@ -360,12 +368,12 @@ module unxversal::perpetuals_tests {
         sui::transfer::public_transfer(mir2, user);
         test_scenario::return_shared(px_unxv2);
         test_scenario::return_shared(orx3);
+        test_scenario::return_shared(ocfg3);
         test_scenario::return_shared(reg);
         test_scenario::return_shared(market);
         sui::transfer::public_share_object(tre);
         sui::transfer::public_share_object(bot_t);
         sui::transfer::public_share_object(pts);
-        sui::transfer::public_share_object(ocfg);
         clock::destroy_for_testing(clk);
         test_scenario::end(scen);
     }

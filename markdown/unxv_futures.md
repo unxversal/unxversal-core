@@ -21,6 +21,10 @@ Cash-settled dated futures with registry-governed listings and settlement via or
 - Bots: lister, fill recorder (from off-chain venues), liquidation scanner, settlement queue worker.
 - API: build tx for listings (admin), positions, fills, settlement, liquidation.
 
+### Testing
+- See `markdown/tests_overview.md` for an overview.
+- Tests cover discount/rebate math and clamp edges, pause guards, settlement flow and queue with points, full lifecycle (open/close/liquidate/settle), and oracle identity enforcement. All current tests pass.
+
 ### SDK and API interfaces (TS)
 ```ts
 export interface FuturesApi {

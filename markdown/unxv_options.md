@@ -22,6 +22,10 @@ Admin-whitelisted underlyings, permissionless market creation, OTC matching with
 - Bots: market listing curator, premium matching, dispute/settlement queue processor, exercise orchestration.
 - API: build tx for offers/escrows, matching, exercises, settlement.
 
+### Testing
+- See `markdown/tests_overview.md` for suite overview.
+- Tests cover underlying registration and market creation, admin gating (happy/negative), fee math (discount, maker/taker split), exercise (American), physical delivery flows, cash settlement, queue + points, guards (tick, contract size, OI caps), duplicates and pre-expiry settlement rejections, cancellation and GC, and read-only helpers. All current tests pass.
+
 ### SDK and API interfaces (TS)
 ```ts
 export interface OptionsApi {
