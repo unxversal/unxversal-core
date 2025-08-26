@@ -1,0 +1,1451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UNXV Protocol Test Suite Overview</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            background-color: #000;
+            color: #fff;
+            line-height: 1.6;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            border-bottom: 2px solid #333;
+            padding-bottom: 20px;
+        }
+
+        .controls {
+            margin-bottom: 30px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .search-box {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            background-color: #111;
+            border: 1px solid #333;
+            color: #fff;
+            border-radius: 4px;
+            font-family: inherit;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #555;
+        }
+
+        .filter-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .filter-btn {
+            padding: 8px 16px;
+            background-color: #222;
+            border: 1px solid #444;
+            color: #fff;
+            cursor: pointer;
+            border-radius: 4px;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover {
+            background-color: #333;
+        }
+
+        .filter-btn.active {
+            background-color: #444;
+            border-color: #666;
+        }
+
+        .stats {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 15px;
+            background-color: #111;
+            border-radius: 4px;
+            border: 1px solid #333;
+        }
+
+        .protocol-section {
+            margin-bottom: 40px;
+            border: 1px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .protocol-header {
+            background-color: #111;
+            padding: 15px 20px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #333;
+            transition: background-color 0.2s;
+        }
+
+        .protocol-header:hover {
+            background-color: #1a1a1a;
+        }
+
+        .protocol-title {
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+
+        .protocol-count {
+            background-color: #333;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.9em;
+        }
+
+        .collapse-icon {
+            font-size: 1.2em;
+            transition: transform 0.2s;
+        }
+
+        .protocol-section.collapsed .collapse-icon {
+            transform: rotate(-90deg);
+        }
+
+        .protocol-content {
+            padding: 0;
+            max-height: none;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+
+        .protocol-section.collapsed .protocol-content {
+            max-height: 0;
+        }
+
+        .test-item {
+            padding: 20px;
+            border-bottom: 1px solid #222;
+            transition: background-color 0.2s;
+        }
+
+        .test-item:hover {
+            background-color: #0a0a0a;
+        }
+
+        .test-item:last-child {
+            border-bottom: none;
+        }
+
+        .test-name {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .test-status {
+            font-size: 1.5em;
+        }
+
+        .test-description {
+            color: #ccc;
+            margin-left: 35px;
+        }
+
+        .coverage-highlights {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #0a0a0a;
+            border-radius: 4px;
+        }
+
+        .coverage-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .coverage-list {
+            color: #aaa;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .expand-all-btn {
+            padding: 8px 16px;
+            background-color: #333;
+            border: 1px solid #555;
+            color: #fff;
+            cursor: pointer;
+            border-radius: 4px;
+            font-family: inherit;
+        }
+
+        .expand-all-btn:hover {
+            background-color: #444;
+        }
+
+        @media (max-width: 768px) {
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .filter-buttons {
+                justify-content: center;
+            }
+
+            .protocol-header {
+                padding: 12px 15px;
+            }
+
+            .test-item {
+                padding: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>UNXV Protocol Test Suite Overview</h1>
+        
+        <div class="controls">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Search tests by name or description...">
+            </div>
+            <div class="filter-buttons">
+                <button class="filter-btn active" data-protocol="all">All</button>
+                <button class="filter-btn" data-protocol="perpetuals">Perpetuals</button>
+                <button class="filter-btn" data-protocol="gas-futures">Gas Futures</button>
+                <button class="filter-btn" data-protocol="futures">Futures</button>
+                <button class="filter-btn" data-protocol="options">Options</button>
+                <button class="filter-btn" data-protocol="lending">Lending</button>
+                <button class="filter-btn" data-protocol="synthetics">Synthetics</button>
+                <button class="filter-btn" data-protocol="dex">DEX</button>
+                <button class="filter-btn" data-protocol="vaults">Vaults</button>
+                <button class="filter-btn" data-protocol="treasury">Treasury</button>
+                <button class="filter-btn" data-protocol="oracle">Oracle</button>
+                <button class="filter-btn" data-protocol="unxv">UNXV</button>
+                <button class="filter-btn" data-protocol="bot-rewards">Bot Rewards</button>
+            </div>
+            <button class="expand-all-btn" id="expandAllBtn">Expand All</button>
+        </div>
+
+        <div class="stats">
+            <strong>Total Tests: <span id="totalTests">107</span> | Passing: <span id="passingTests">107</span> | Visible: <span id="visibleTests">107</span></strong>
+        </div>
+
+        <div class="protocol-section" data-protocol="perpetuals">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">Perpetuals</span>
+                    <span class="protocol-count">9 tests</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>perps_record_fill_discount_and_metrics</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the complete trade fee calculation and routing system for perpetuals. It sets up a market with specific fee parameters (1% trade fee, 50% maker rebate, 50% UNXV discount), records a fill, and verifies that the math works correctly: taker fee = notional × fee_bps, maker rebate = fee × maker_rebate_bps, UNXV discount = fee × discount_bps. The test confirms that the fee after discount is properly deposited to treasury, market metrics (open_interest, volume, last_trade_price) are updated, and the event mirror captures all fee/discount/rebate fields for external verification.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>perps_fill_tick_and_slippage_guards</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that the perpetuals trading system enforces proper price controls to prevent manipulation and errors. It attempts to record a fill with a price that doesn't align to the market's tick size and verifies that the transaction aborts. Additionally, it tests slippage bounds by providing min/max price parameters and confirming that fills outside these bounds are rejected. This protects traders from execution at stale or manipulated prices.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>perps_refresh_with_wrong_index_feed</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the security of the funding mechanism by ensuring that funding rate calculations can only use the authorized index price feed. It attempts to refresh market funding using an aggregator that doesn't match the whitelisted underlying feed and confirms that the operation aborts. This prevents malicious actors from manipulating funding rates using unauthorized price sources.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>perps_paused_market_blocks_ops</span>
+                    </div>
+                    <div class="test-description">
+                        This test verifies that the market-level pause mechanism works correctly as a safety control. When a specific perpetual market is paused, it should block all trading operations including fills and position management. The test pauses a market and attempts to record a fill, confirming that the operation is rejected, allowing administrators to halt trading on problematic markets while keeping others operational.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>perps_paused_registry_blocks_ops</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the registry-level pause functionality, which serves as a circuit breaker for the entire perpetuals system. When the registry is paused, no new markets can be listed and no operational calls should succeed. The test pauses the registry and attempts to list a new market, verifying that the operation fails, providing administrators with emergency shutdown capabilities.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>perps_funding_refresh_and_points</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the funding rate calculation and points reward system for maintenance operations. It sets up a market with trading history, advances time to allow funding refresh, and calls the funding refresh function. The test verifies that the funding rate and direction are computed correctly based on the premium between mark price and index price, capped by the maximum funding rate. It also confirms that the caller receives points for performing this maintenance operation.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>perps_open_close_liquidate_apply_funding</span>
+                    </div>
+                    <div class="test-description">
+                        This comprehensive test validates the complete lifecycle of perpetual positions. It creates a position with specific margin requirements, performs a partial close (verifying proportional margin refund), liquidates another position when underwater (confirming margin seizure), and applies funding to a fresh position. The test uses event mirrors to capture and verify all the emitted state changes, ensuring that position management works correctly across all scenarios.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>perps_trade_bot_split_fee_routes_treasury</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the bot reward system for trading operations. It configures a trade fee with maker rebate, UNXV discount, and bot split parameters, then records a fill that should result in specific fee routing. The test verifies that after applying discount and rebate, the remaining fee is split between the bot operator and the treasury according to the configured percentages, ensuring proper incentives for bot operators while generating protocol revenue.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>perps_liquidation_bot_split_routes_treasury</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that liquidation operations properly compensate both bot operators and the protocol treasury. It creates an under-collateralized position, triggers liquidation, and verifies that the seized margin is split between the liquidating bot and the treasury according to the configured bot reward percentage. This incentivizes timely liquidation while ensuring the protocol captures appropriate revenue from risk management.
+                    </div>
+                </div>
+                <div class="coverage-highlights">
+                    <div class="coverage-title">Coverage highlights:</div>
+                    <div class="coverage-list">- Trade fee stack (fee, rebate, discount, bot split)<br>- Market controls (tick, bounds, pause)<br>- Funding (rate/direction calc, accrual)<br>- Position lifecycle and liquidation<br>- Reward points integration</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="protocol-section" data-protocol="gas-futures">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">Gas Futures</span>
+                    <span class="protocol-count">8 tests</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>gas_record_fill_fee_routing_and_metrics</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the core trading functionality for gas futures contracts. It records a fill with specific price and size parameters, verifies that the trade fee is calculated correctly and routed to the treasury, and confirms that market metrics (open interest, volume, last price) are updated appropriately. The test uses both SUI and UNXV price feeds to ensure proper fee calculations in the gas futures context, where prices are denominated in micro-USD per gas unit.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>gas_discount_and_maker_rebate_flow</span>
+                    </div>
+                    <div class="test-description">
+                        This test comprehensively validates the UNXV discount and maker rebate system for gas futures. It configures specific fee parameters (1% fee, 50% rebate, 50% UNXV discount), provides UNXV payment for the discount, and verifies that the discount is applied correctly with precise UNXV accounting. The test confirms that the discounted UNXV amount is deposited to epoch reserves while the remaining fee flows to the treasury, and that bot reserves properly accrue UNXV tokens.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>gas_settle_rejects_wrong_aggregator</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures the integrity of gas futures settlement by validating oracle identity binding. It attempts to settle a gas futures contract using an aggregator that doesn't match the one bound to the contract during listing. The test confirms that settlement fails, preventing manipulation of settlement prices through unauthorized oracle feeds and ensuring that only the designated price source can be used for final settlement.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>gas_paused_registry_blocks_ops</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the registry-level pause mechanism for gas futures. When the gas futures registry is paused, all operations including trading and settlement should be blocked. The test pauses the registry and attempts to record a fill, confirming that the operation is rejected. This provides administrators with emergency control capabilities to halt all gas futures activity during system issues.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>gas_paused_contract_blocks_ops</span>
+                    </div>
+                    <div class="test-description">
+                        This test verifies contract-level pause functionality, allowing administrators to selectively halt individual gas futures contracts while keeping others operational. The test pauses a specific contract and attempts to record a fill, confirming that trading is blocked for that contract. This granular control enables targeted responses to issues with specific contracts without affecting the entire system.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>gas_tick_and_slippage_guards</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that gas futures trading enforces proper price controls similar to other derivatives. It attempts to record a fill with a price that violates tick size requirements and price bounds, confirming that such trades are rejected. This prevents execution at invalid prices and protects traders from slippage beyond their acceptable limits in the volatile gas price market.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>gas_settle_and_queue_points</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the complete settlement workflow for expired gas futures contracts. It settles a contract after expiry using oracle price data, enqueues the settlement for processing, and then processes the queue. The test confirms that points are awarded to the executor for performing these maintenance operations, incentivizing timely settlement processing while ensuring contracts are properly closed at expiry.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>gas_open_close_liquidate_and_settle_position</span>
+                    </div>
+                    <div class="test-description">
+                        This comprehensive test validates the complete lifecycle of gas futures positions from creation to final settlement. It creates positions, performs partial closes with margin refunds, executes liquidations for underwater positions, and settles positions at contract expiry. The test uses event mirrors to capture and verify all state changes, ensuring that position management works correctly across all scenarios in the gas futures context.
+                    </div>
+                </div>
+                <div class="coverage-highlights">
+                    <div class="coverage-title">Coverage highlights:</div>
+                    <div class="coverage-list">- Trade and settlement fee math<br>- Pause guards, tick/bounds<br>- Queue + points flows<br>- Lifecycle and liquidation logic</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Continue with other protocol sections... -->
+        <!-- For brevity, I'll add a few more key sections -->
+
+        <div class="protocol-section" data-protocol="options">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">Options</span>
+                    <span class="protocol-count">18 tests</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>add_underlying_and_create_market_happy</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the fundamental setup process for options trading by adding an underlying asset and creating an option market. It adds an underlying with a bound feed hash, creates a market with specific parameters (strike, expiry, settlement type), and verifies that the creation fee is properly calculated and routed.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>paused_registry_rejects_create_market</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that the registry-level pause mechanism effectively blocks market creation as a safety control. When the options registry is paused, no new option markets should be creatable, preventing potentially problematic markets from being listed during system issues.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>wrong_feed_hash_rejected_on_exercise</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the security of option exercise by ensuring that only the exact price feed bound during market creation can be used for exercise calculations. It attempts to exercise an option using an aggregator with a different feed hash than the one registered for the underlying.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>match_offer_and_escrow_fee_and_rebate_paths</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the OTC matching system that pairs short option offers with premium escrows. It creates a short offer and premium escrow, matches them together, and verifies that the taker fee is collected, maker rebate is paid, and market totals are updated correctly.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>unxv_discount_applied_and_leftover_refunded</span>
+                    </div>
+                    <div class="test-description">
+                        This test comprehensively validates the UNXV discount system for options trading. It configures a high discount percentage, provides UNXV payment that exceeds the required amount, and verifies that the exact discount amount is applied and deposited to epoch reserves while any leftover UNXV is precisely refunded.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>close_by_premium_payer_short_fee_routing_and_oi_updates</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the position closing mechanism where one party pays the other to close their positions early. It sets up matched long and short positions, has the short pay the long to close a portion, and verifies that fees are properly routed and open interest is updated accordingly.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>cash_settlement_after_expiry_updates_market</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the cash settlement process for expired options. It creates a market that has already expired, triggers cash settlement using oracle price data, and verifies that the market state is updated correctly to reflect the settled status.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>physical_call_escrow_and_exercise_flow</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the physical delivery mechanism for call options. It sets up a call option with underlying asset escrow, exercises the option to transfer the underlying from short to long, and then garbage collects the empty escrow.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>physical_put_escrow_and_exercise_flow</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the physical delivery mechanism for put options. It creates a put option where the long delivers the underlying asset to the short in exchange for the strike price, verifying that the asset transfer occurs correctly.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>admin_gating_via_synth_admincap_pause_resume</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates that administrative functions are properly gated through the central AdminRegistry system. It confirms that authorized admins can set maker rebate parameters and fees, while unauthorized calls are properly rejected.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>admin_gating_negative_non_admin_cannot_pause</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the negative case of admin gating by confirming that non-admin addresses cannot modify system parameters. It attempts to set fee configuration from a non-admin address and verifies that the operation is rejected, ensuring the security of administrative functions.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>duplicate_market_key_rejected</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that market keys must be unique within the options system. It attempts to create two markets with identical parameters (same underlying, type, strike, expiry) and verifies that the second creation is rejected, preventing confusion and potential issues from duplicate markets.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>settle_before_expiry_rejected</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates that settlement can only occur after option expiry. It attempts to settle an option market before its expiry time and confirms that the operation is rejected, ensuring that options can only be settled at the appropriate time according to their contract terms.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>tick_and_contract_size_violations_rejected</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that option trading respects tick size and contract size constraints. It attempts to create trades that violate these parameters (non-tick-aligned premiums, incorrect contract size multiples) and verifies that such trades are rejected, maintaining market integrity and preventing invalid transactions.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>oi_caps_violations_rejected</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates that open interest caps are properly enforced to limit risk exposure. It attempts to create positions that would exceed the configured open interest limits and confirms that such trades are rejected, protecting the system from excessive risk concentration in any single option market.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>cancel_and_gc_helpers_flow</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the utility functions for canceling orders and garbage collecting empty objects. It creates premium escrows and short offers, cancels them, and then garbage collects empty escrows with zero balances. This ensures that cleanup mechanisms work properly to maintain system efficiency.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>readonly_helpers_checks</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates various read-only helper functions that provide information about the options system. It tests functions that list underlyings, retrieve underlying details, list market keys, and get treasury IDs, ensuring that these informational functions work correctly and provide accurate data.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>american_exercise_payout_and_fee_routing</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates American-style option exercise where options can be exercised before expiry. It sets up an American call option that is in-the-money, exercises it, and verifies that the payout calculation is correct and fees are properly routed to the treasury and bot rewards system.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>liquidation_under_collateralized_short_routes_fee_and_bonus</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the liquidation mechanism for under-collateralized short option positions. When a short position doesn't have sufficient collateral to cover potential payouts, it can be liquidated. The test verifies that liquidation fees and bonuses are properly routed between the liquidator and the treasury.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>settlement_queue_request_and_process_points</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the settlement queue system that allows for disputed settlements with a time delay. It requests settlement for an expired option, waits for the dispute window to pass, and then processes the settlement. The test confirms that points are awarded to the executor for performing this maintenance operation.
+                    </div>
+                </div>
+                <div class="coverage-highlights">
+                    <div class="coverage-title">Coverage highlights:</div>
+                    <div class="coverage-list">- Admin gating, market controls, fee math, UNXV discount<br>- Exercise, physical delivery, settlement<br>- Queues and points</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="protocol-section" data-protocol="dex">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">DEX</span>
+                    <span class="protocol-count">3 tests</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>dex_admin_setters_and_pause_resume</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the administrative controls for the DEX system. It tests that authorized administrators can set fee parameters, maker rebate percentages, UNXV discount rates, and pause/resume functionality. The test confirms that these settings take effect immediately and are enforced during subsequent order operations.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>dex_match_coin_orders_with_unxv_discount_and_rebate</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the complete order matching system including fee economics. It places buy and sell orders, matches them together, and verifies that taker fees are collected, maker rebates are paid, UNXV discounts are applied when provided, and all fees are properly routed to the treasury.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>dex_vault_mode_place_cancel_match_and_getters</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the vault-safe trading mode that allows protocol-owned liquidity to participate in the orderbook. It places vault orders, cancels some, matches others, and tests various getter functions.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="protocol-section" data-protocol="futures">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">Standard Futures</span>
+                    <span class="protocol-count">7 tests</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>record_fill_discount_and_fee_routing_happy</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the complete fee calculation and routing system for standard futures contracts. It sets up a contract with UNXV discount and maker rebate parameters, records a fill with UNXV payment, and verifies that all fee components are calculated and routed correctly.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>clamp_edge_large_notional_routes_clamped_fee</span>
+                    </div>
+                    <div class="test-description">
+                        This test stress-tests the arithmetic safety measures in fee calculations by using extremely large notional values that would cause u128 overflow when computing fees. It verifies that the fee calculation properly clamps the result to u64::MAX to prevent arithmetic overflow.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>paused_registry_blocks_settlement</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates that registry-level pause controls effectively block settlement operations. When the futures registry is paused, settlement should not be allowed to proceed, providing administrators with emergency control capabilities.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>paused_contract_blocks_settlement</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that contract-level pause functionality blocks settlement for individual contracts while allowing others to operate normally. The test pauses a specific contract and attempts settlement, verifying that the operation fails.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>settle_flow_and_queue_points</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the complete settlement workflow for expired futures contracts, including the points reward system. After contract expiry, it performs settlement to record the final oracle price, enqueues the settlement for processing, and processes the queue.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>settle_rejects_wrong_aggregator</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures the security of futures settlement by validating oracle identity binding. It attempts to settle a contract using an aggregator that doesn't match the one authorized for that contract's underlying asset.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>position_open_close_liquidate_settle_flows</span>
+                    </div>
+                    <div class="test-description">
+                        This comprehensive test validates the complete lifecycle of futures positions from creation through final settlement. It creates positions with specific margin requirements, performs partial closes with proportional margin refunds, executes liquidations for underwater positions, and settles positions at contract expiry.
+                    </div>
+                </div>
+                <div class="coverage-highlights">
+                    <div class="coverage-title">Coverage highlights:</div>
+                    <div class="coverage-list">- Arithmetic bounds and clamps<br>- Admin/pause controls<br>- Lifecycle and treasury routing</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="protocol-section" data-protocol="lending">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">Lending</span>
+                    <span class="protocol-count">16 tests</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>supply_withdraw_scaled_and_totals</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the core scaled balance accounting system for lending operations. It performs supply and withdrawal operations and verifies that scaled balances, total supply metrics, and interest indices are updated consistently across all edge cases including rounding scenarios.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>accrue_updates_indices_and_reserves</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the interest accrual mechanism that drives lending profitability. It triggers interest accrual and verifies that borrow indices increase according to the interest rate parameters, and that protocol reserves accumulate the appropriate portion of interest payments.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>borrow_and_repay_scaled_math</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the borrowing and repayment mechanisms including their complex scaled mathematics. It performs borrow operations that adjust scaled principal correctly, executes repayments that properly reduce debt including accrued interest, and handles boundary cases such as partial repayments and full payoffs.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>admin_set_caps_happy_path</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates that authorized administrators can successfully modify lending caps and parameters. It tests setting supply caps, borrow caps, and other risk parameters, confirming that the changes take effect and are enforced in subsequent operations. This ensures that risk management controls can be adjusted as market conditions change.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>admin_set_caps_rejects_non_admin</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the security of administrative functions by confirming that non-admin addresses cannot modify lending parameters. It attempts to set caps and parameters from unauthorized addresses and verifies that all such operations are rejected, protecting the system from unauthorized parameter changes.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>admin_global_params_happy_and_negative</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates both positive and negative cases for global parameter management. It tests successful parameter updates by authorized admins and confirms rejection of unauthorized attempts, ensuring that critical system parameters like interest rate models and fee structures are properly protected.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>caps_enforced_supply_borrow_and_tx_limits</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that various caps are properly enforced during lending operations. It tests supply caps that limit total deposits, borrow caps that limit outstanding loans, and transaction limits that prevent excessively large single operations. This protects the system from concentration risk and potential manipulation.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>caps_negative_exceed_tx_caps</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates that transaction size limits are enforced by attempting operations that exceed the configured transaction caps and confirming they are rejected. This prevents large single transactions that could destabilize the lending pools or create unfair advantages for large users.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>borrow_exceed_tx_cap_negative</span>
+                    </div>
+                    <div class="test-description">
+                        This test specifically validates that borrowing operations respect transaction size limits. It attempts to borrow amounts exceeding the configured caps and verifies that such operations are rejected, preventing excessive single borrowing transactions that could drain liquidity.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>flash_loan_fee_routed_to_treasury_epoch</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the flash loan mechanism and fee collection system. It executes flash loans and verifies that the fees are correctly calculated and routed to the treasury with proper epoch accounting, ensuring that flash loan operations generate appropriate revenue for the protocol.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>liquidation_coin_routes_to_treasury_and_bot</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the liquidation mechanism that protects lenders when borrowers become undercollateralized. It triggers liquidation of an unsafe position and verifies that liquidation bonuses and fees are properly split between the liquidating bot and the protocol treasury, incentivizing timely liquidation.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>paused_rejects_core_ops</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that the lending system's pause mechanism effectively blocks all core operations during emergencies. It pauses the system and attempts various operations (supply, borrow, withdraw, repay), confirming that all are properly rejected to protect users during system maintenance or security issues.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>repay_over_debt_rejected</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates debt accounting accuracy by ensuring that users cannot repay more than they actually owe. It attempts to repay amounts exceeding the outstanding debt and confirms that such operations are rejected, preventing accounting errors and potential exploitation.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>skim_reserves_to_treasury_routes_and_reduces_reserves</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the reserve management system that allows accumulated protocol reserves to be moved to the treasury. It skims reserves and verifies that the amounts are correctly transferred to the treasury while being deducted from the lending pool reserves, ensuring proper revenue recognition.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>synth_integration_supply_withdraw_borrow_repay_accrue</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the integration between the lending system and synthetic asset protocols. It performs lending operations involving synthetic assets and verifies that all interactions work correctly, ensuring seamless integration between different protocol modules.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>withdraw_ltv_guard_rejects</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates loan-to-value ratio protection by preventing withdrawals that would make positions unsafe. It attempts withdrawals that would push LTV ratios beyond safe limits and confirms they are rejected, protecting both lenders and borrowers from dangerous leverage levels.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>withdraw_zero_amount_rejected</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates input validation by ensuring that zero-amount withdrawal attempts are properly rejected. This prevents unnecessary transaction processing and potential accounting edge cases that could arise from meaningless operations.
+                    </div>
+                </div>
+                <div class="coverage-highlights">
+                    <div class="coverage-title">Coverage highlights:</div>
+                    <div class="coverage-list">- Core scaled accounting, accrual, caps, safety checks<br>- Treasury routing paths</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="protocol-section" data-protocol="synthetics">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">Synthetics</span>
+                    <span class="protocol-count">18 tests</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>fee_math_u128_bounds_and_ccr_edges</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the arithmetic safety and collateral coverage ratio (CCR) edge cases in synthetic asset operations. It tests fee calculations with large amounts that approach u128 limits and verifies that CCR calculations work correctly at boundary conditions.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>liquidation_executes_and_routes</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the liquidation mechanism for undercollateralized synthetic asset positions. It creates a position that becomes liquidatable due to collateral value decline, executes the liquidation, and verifies that liquidation fees and bonuses are properly routed between the liquidator and protocol treasury.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>mint_with_unxv_discount_routes_fee_and_refund_leftovers</span>
+                    </div>
+                    <div class="test-description">
+                        This test comprehensively validates the UNXV discount system for synthetic asset minting. It provides UNXV payment for discount, verifies that the discount is correctly applied and routed to epoch reserves, and confirms that any leftover UNXV is precisely refunded.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>liquidation_rejects_when_not_liquidatable</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures liquidation can only occur when positions are actually undercollateralized. It attempts to liquidate a healthy position and verifies that the operation is rejected, protecting users from inappropriate liquidations that could occur due to errors or manipulation attempts.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>liquidation_repay_clamps_to_outstanding</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates that liquidation repayments are properly bounded by the actual outstanding debt. It attempts liquidations that would repay more than the borrower owes and verifies that the repayment amount is correctly clamped to prevent over-repayment and accounting errors.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>match_orders_maker_rebate_and_fee_routing</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the order matching system for synthetic asset trading including fee economics. It matches orders between users and verifies that taker fees are collected, maker rebates are paid, and all fees are properly routed to the treasury, ensuring fair economics for synthetic asset trading.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>mint_fee_deposits_to_treasury_no_unxv</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the basic minting fee collection mechanism without UNXV discount. It mints synthetic assets and verifies that minting fees are correctly calculated and deposited to the treasury, ensuring the protocol generates revenue from synthetic asset creation.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>mint_then_burn_updates_debt_and_routes_fees</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the complete mint/burn cycle for synthetic assets. It mints synthetics (creating debt), burns them back (reducing debt), and verifies that total debt tracking is accurate while fees are properly routed throughout the process.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>mint_with_unxv_discount_without_binding_aborts</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that UNXV discount can only be used when properly configured. It attempts to use UNXV discount for minting when the discount system isn't properly bound/configured and verifies that the operation fails, preventing incorrect discount applications.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>oracle_binding_mismatch_aborts</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates oracle security by ensuring that only properly bound price feeds can be used for synthetic asset operations. It attempts operations with mismatched oracle bindings and confirms they fail, preventing price manipulation through unauthorized feeds.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>reconciliation_helpers_reflect_mint_burn</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates helper functions that track synthetic asset supply changes. It performs mint and burn operations and verifies that reconciliation helpers accurately reflect the changes in total supply and debt, ensuring accurate system state tracking.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>stability_accrual_increments_debt</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the stability fee mechanism that generates revenue from outstanding synthetic debt. It advances time to trigger stability fee accrual and verifies that total debt increases according to the configured stability rate, ensuring sustainable protocol revenue.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>stale_price_aborts</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that synthetic asset operations cannot proceed with stale price data. It uses an oracle with outdated price information and verifies that operations are rejected, protecting users from operations based on incorrect pricing.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>withdraw_collateral_multi_is_deprecated</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates that deprecated withdrawal functions are properly disabled. It attempts to use old withdrawal methods and confirms they fail, ensuring users must use the current, secure withdrawal mechanisms.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>withdraw_health_guard_rejects_when_ratio_drops_below_min</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates collateral health checks that prevent unsafe withdrawals. It attempts to withdraw collateral that would push the health ratio below minimum requirements and verifies the operation is rejected, protecting both the user and protocol from liquidation risk.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>clob_bond_cancel_and_gc_slash</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates CLOB (Central Limit Order Book) integration including bond management, order cancellation, garbage collection, and slashing mechanisms. It ensures that the order book system works correctly with proper incentive structures and cleanup procedures.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>clob_escrow_accrual_and_claim_cycle</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the complete lifecycle of CLOB escrow operations including fee accrual and claim processing. It ensures that escrowed funds earn appropriate returns and that claim mechanisms work correctly for all parties involved in order book operations.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>mint_and_burn_event_mirror_validates_fields</span>
+                    </div>
+                    <div class="test-description">
+                        This test uses event mirrors to validate that mint and burn operations emit correct event data. It performs operations and checks that all event fields accurately reflect the transaction details, ensuring proper external system integration and monitoring.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>synthetics_points_variants_award_points</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the points reward system for various synthetic asset operations. It performs different types of operations and verifies that points are correctly awarded to participants, ensuring proper incentives for protocol usage and maintenance.
+                    </div>
+                </div>
+                <div class="coverage-highlights">
+                    <div class="coverage-title">Coverage highlights:</div>
+                    <div class="coverage-list">- Debt accounting, stability fees, liquidation<br>- Discount accuracy and orderbook integration</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="protocol-section" data-protocol="vaults">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">Vaults</span>
+                    <span class="protocol-count">1 test</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>vaults_stake_registry_and_vault_lifecycle</span>
+                    </div>
+                    <div class="test-description">
+                        This comprehensive test validates the complete vault management system including manager staking requirements. It demonstrates the full lifecycle: staking UNXV to meet minimum requirements, creating a vault, performing deposits and withdrawals, managing asset stores for different token types, freezing/unfreezing operations, and administrative slashing of misbehaving managers.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="protocol-section" data-protocol="treasury">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">Treasury</span>
+                    <span class="protocol-count">6 tests</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>epoch_reserves_and_payouts_unxv</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the epoch-based reward system for UNXV token management. It deposits UNXV to specific epochs, advances time across epoch boundaries, and verifies that epoch reserves are tracked correctly. The test also validates payout mechanisms that distribute accumulated UNXV rewards proportionally to participants.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>unxv_deposit_auto_route_split</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the automatic routing system that splits UNXV deposits between immediate treasury needs and epoch-based reserves according to configured percentages. It performs deposits and verifies that the split routing works correctly, ensuring efficient UNXV token distribution.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>auto_route_bps_cases_collateral_and_epoch</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates various percentage-based routing scenarios for collateral deposits. It tests different basis point configurations for routing between immediate treasury use and epoch-based rewards, ensuring that the automatic routing system works correctly across different parameter settings.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>auto_route_bps_cases_unxv</span>
+                    </div>
+                    <div class="test-description">
+                        This test specifically validates percentage-based routing for UNXV token deposits across different configuration scenarios. It ensures that UNXV routing percentages work correctly and that funds are distributed according to the configured parameters.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>deposit_collateral_zero_amount_aborts</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates input validation by ensuring that zero-amount collateral deposits are properly rejected. This prevents meaningless transactions and potential accounting edge cases.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>deposit_unxv_zero_amount_aborts</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates input validation by ensuring that zero-amount UNXV deposits are properly rejected, maintaining transaction integrity and preventing potential accounting issues.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="protocol-section" data-protocol="oracle">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">Oracle</span>
+                    <span class="protocol-count">6 tests</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>set_feed_and_read_price_happy_path</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the complete oracle setup and reading process. It sets up oracle feeds through administrative functions, binds aggregators to symbols, and then reads prices with proper staleness and positivity checks. This ensures the oracle system works correctly for price discovery across the protocol.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>feed_mismatch_rejected</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures oracle security by validating that price reads reject aggregators that don't match the registered feed for a symbol. It attempts to read prices using mismatched aggregators and confirms the operations fail, preventing price manipulation through unauthorized feeds.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>direct_scaled_read_happy_path</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates direct oracle reading functionality that bypasses the registry for specific use cases. It reads prices directly from aggregators with proper scaling and validation, ensuring that direct oracle access works correctly when needed.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>stale_price_rejected</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates staleness protection by attempting to read prices from aggregators with outdated timestamps. It confirms that stale price reads are rejected, protecting the system from operating on outdated market data.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>zero_price_rejected</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates price sanity checks by attempting to read zero or negative prices and confirming they are rejected. This prevents invalid price data from propagating through the system.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>unregistered_symbol_rejected</span>
+                    </div>
+                    <div class="test-description">
+                        This test ensures that price reads for symbols that haven't been registered in the oracle system are properly rejected, preventing operations with unbound price feeds.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="protocol-section" data-protocol="unxv">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">UNXV Token</span>
+                    <span class="protocol-count">3 tests</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>mint_burn_with_cap_happy_path</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the basic UNXV token minting and burning functionality including supply cap enforcement. It mints tokens up to the cap, burns some back, and verifies that total supply tracking remains accurate throughout the process.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>mint_burn_events_and_supply_conservation</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates that UNXV mint and burn operations emit proper events and maintain supply conservation. It performs various mint/burn operations and verifies that events are emitted with correct data and that the total supply always reflects the actual outstanding tokens.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>cap_violation_aborts</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates that attempts to mint UNXV tokens beyond the configured supply cap are properly rejected. It attempts to exceed the cap and confirms the operation fails, protecting against excessive token supply inflation.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="protocol-section" data-protocol="bot-rewards">
+            <div class="protocol-header">
+                <div>
+                    <span class="protocol-title">Bot Rewards</span>
+                    <span class="protocol-count">3 tests</span>
+                </div>
+                <span class="collapse-icon">▼</span>
+            </div>
+            <div class="protocol-content">
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>award_points_accumulates_and_updates_epoch</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the points award system that incentivizes protocol maintenance operations. It awards points to participants for various operations and verifies that points accumulate correctly and epoch transitions work properly.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>multi_actor_pro_rata_and_idempotent_claim</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates the multi-participant reward distribution system. It has multiple actors earn points, claim rewards pro-rata based on their contribution, and verifies that claims are idempotent (can't be double-claimed) while distribution is fair.
+                    </div>
+                </div>
+                <div class="test-item">
+                    <div class="test-name">
+                        <span class="test-status">✅</span>
+                        <span>zero_weight_award_no_change</span>
+                    </div>
+                    <div class="test-description">
+                        This test validates that zero-weight point awards don't affect the system state, ensuring that meaningless operations don't create unnecessary state changes or potential exploit vectors.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // Search functionality
+        const searchInput = document.getElementById('searchInput');
+        const filterButtons = document.querySelectorAll('.filter-btn');
+        const protocolSections = document.querySelectorAll('.protocol-section');
+        const expandAllBtn = document.getElementById('expandAllBtn');
+        const totalTestsSpan = document.getElementById('totalTests');
+        const passingTestsSpan = document.getElementById('passingTests');
+        const visibleTestsSpan = document.getElementById('visibleTests');
+
+        let currentFilter = 'all';
+        let allExpanded = false;
+
+        // Toggle protocol sections
+        document.querySelectorAll('.protocol-header').forEach(header => {
+            header.addEventListener('click', () => {
+                const section = header.parentElement;
+                section.classList.toggle('collapsed');
+            });
+        });
+
+        // Expand/Collapse all
+        expandAllBtn.addEventListener('click', () => {
+            allExpanded = !allExpanded;
+            protocolSections.forEach(section => {
+                if (allExpanded) {
+                    section.classList.remove('collapsed');
+                } else {
+                    section.classList.add('collapsed');
+                }
+            });
+            expandAllBtn.textContent = allExpanded ? 'Collapse All' : 'Expand All';
+        });
+
+        // Filter functionality
+        filterButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                filterButtons.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentFilter = btn.dataset.protocol;
+                applyFilters();
+            });
+        });
+
+        // Search functionality
+        searchInput.addEventListener('input', applyFilters);
+
+        function applyFilters() {
+            const searchTerm = searchInput.value.toLowerCase();
+            let visibleCount = 0;
+
+            protocolSections.forEach(section => {
+                const protocol = section.dataset.protocol;
+                const testItems = section.querySelectorAll('.test-item');
+                let sectionVisible = false;
+
+                // Protocol filter
+                if (currentFilter !== 'all' && protocol !== currentFilter) {
+                    section.classList.add('hidden');
+                    return;
+                }
+
+                // Search filter
+                testItems.forEach(item => {
+                    const testName = item.querySelector('.test-name span:last-child').textContent.toLowerCase();
+                    const testDesc = item.querySelector('.test-description').textContent.toLowerCase();
+                    
+                    if (searchTerm === '' || testName.includes(searchTerm) || testDesc.includes(searchTerm)) {
+                        item.classList.remove('hidden');
+                        sectionVisible = true;
+                        visibleCount++;
+                    } else {
+                        item.classList.add('hidden');
+                    }
+                });
+
+                if (sectionVisible) {
+                    section.classList.remove('hidden');
+                } else {
+                    section.classList.add('hidden');
+                }
+            });
+
+            visibleTestsSpan.textContent = visibleCount;
+        }
+
+        // Initialize collapsed state
+        protocolSections.forEach(section => {
+            section.classList.add('collapsed');
+        });
+    </script>
+</body>
+</html>

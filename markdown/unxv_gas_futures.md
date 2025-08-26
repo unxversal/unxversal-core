@@ -18,13 +18,17 @@ Cash-settled futures on Sui gas price, priced in micro-USD per gas via RGP×SUI.
 - Bots: lister, recorder, liquidation, settlement queue, display registrar.
 - API: endpoints mirror dated futures with gas-specific parameters and price checks.
 
+### Testing
+- See `markdown/tests_overview.md` for coverage summary.
+- Tests validate fee routing and metrics, discount and maker rebate, pause guards, tick/bounds, settlement and queue with points, full lifecycle including liquidation, and settlement-close bot split accounting. All current tests pass.
+
 ### SDK and API interfaces (TS)
 ```ts
 export interface GasFuturesApi {
   listContract(req: { registryId: string; symbol: string; contractSizeGas: bigint; tickSizeMicroUsdPerGas: bigint; expiryMs: bigint; initMarginBps?: number; maintMarginBps?: number; }): Promise<TxBuildResult>;
   recordFill(req: { registryId: string; contractId: string; priceMicroUsdPerGas: bigint; size: bigint; takerIsBuyer: boolean; maker: string; unxvCoins?: string[]; suiUsdAggId: string; unxvUsdAggId: string; oracleCfgId: string; clockId: string; feeCoin: string; treasuryId: string; oiIncrease: boolean; min: bigint; max: bigint; }): Promise<TxBuildResult>;
   openPosition(req: { contractId: string; side: 0|1; size: bigint; entryPriceMicroUsdPerGas: bigint; marginCoin: string; }): Promise<TxBuildResult>;
-  closePosition(req: { registryId: string; contractId: string; posId: string; priceMicroUsdPerGas: bigint; qty: bigint; treasuryId: string; }): Promise<TxBuildResult>;
+  closePosition(req: { registryId: string; contractId: string; posId: string; priceMicroUsdPerGas: bigint; qty: bigint; treasuryId: string; }): Promise<TxBuildResult>; // fee includes optional bot split
   settleContract(req: { registryId: string; contractId: string; oracleCfgId: string; clockId: string; suiUsdAggId: string; }): Promise<TxBuildResult>;
 }
 

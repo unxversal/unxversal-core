@@ -1,15 +1,19 @@
 ## Unxversal Perpetuals (Overview)
 
-Perpetuals will extend dated futures with funding payments and continuous trading. The current module is a placeholder; implementation will follow the patterns from `futures.move` with:
+Perpetuals implement continuous trading with funding payments and risk controls. The module mirrors `futures.move` patterns with:
 
 - Registry of markets and parameters (fee, rebate, funding intervals).
 - Positions with margin, PnL, and liquidation logic.
 - Funding index and periodic transfer mechanism.
 - Off-chain bots for funding, matching, liquidation, and settlement reporting.
 
-API and bot contracts will mirror Futures with additional funding operations:
-- `POST /perps/recordFill`, `POST /perps/position/open|close`, `POST /perps/liquidate`.
-- `FundingBot` to compute and submit funding transfers per market and interval.
+### Testing
+- See `markdown/tests_overview.md` for a full suite summary.
+- Coverage includes fee math (taker fee, maker rebate, UNXV discount, bot split), market controls (tick/bounds/pause), funding refresh and accrual, liquidation, and points integration. All current tests pass.
+
+API and bot contracts mirror Futures with additional funding operations:
+- `POST /perps/recordFill`, `POST /perps/position/open|close`, `POST /perps/liquidate`, `POST /perps/refreshFunding`.
+- `FundingBot` computes premiums and calls `refresh_market_funding`; then accrues per-position funding via `apply_funding_for_position`.
 
 ### SDK and API interfaces (TS)
 ```ts

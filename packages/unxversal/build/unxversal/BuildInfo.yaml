@@ -8,15 +8,15 @@ compiled_package_info:
     sui_system: "0000000000000000000000000000000000000000000000000000000000000003"
     switchboard: c3c7e6eb7202e9fb0389a2f7542b91cc40e4f7a33c02554fec11c4c92f938ea3
     unxversal: "0000000000000000000000000000000000000000000000000000000000000000"
-  source_digest: A5238318C3A160E671D3F143883D1DE8F738F58F581D7593025D2E1C7C62C371
+  source_digest: 9FC42E57944DF941C9268D8F68E2030CBD28BAA7A8FB95E2D962E25208359664
   build_flags:
-    dev_mode: false
-    test_mode: false
+    dev_mode: true
+    test_mode: true
     generate_docs: false
     save_disassembly: false
     install_dir: ~
     force_recompilation: false
-    lock_file: "./Move.lock"
+    lock_file: ~
     fetch_deps_only: false
     skip_fetch_latest_git_deps: false
     default_flavor: sui

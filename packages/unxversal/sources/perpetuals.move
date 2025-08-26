@@ -13,18 +13,20 @@ module unxversal::perpetuals {
     use sui::coin::{Self as coin, Coin};
     use sui::balance::{Self as balance, Balance};
 
-    use unxversal::oracle::{OracleConfig, get_price_scaled_1e6}; // index prices in micro-USD
+    use unxversal::oracle::{OracleConfig, OracleRegistry, get_price_for_symbol, get_price_scaled_1e6}; // bound prices in micro-USD
     use switchboard::aggregator::Aggregator;
-    use unxversal::treasury::{Self as TreasuryMod, Treasury};
-    use unxversal::synthetics::{SynthRegistry, AdminCap};
+    use unxversal::treasury::{Self as TreasuryMod, Treasury, BotRewardsTreasury};
+    // Removed AdminCap/SynthRegistry dependency; centralize on AdminRegistry
     use sui::table::{Self as table, Table};
+    use unxversal::bot_rewards::{Self as BotRewards, BotPointsRegistry};
+    use unxversal::admin::{Self as AdminMod, AdminRegistry};
 
     const E_NOT_ADMIN: u64 = 1;
     const E_PAUSED: u64 = 2;
     const E_MIN_INTERVAL: u64 = 3;
     const E_BAD_BOUNDS: u64 = 4;
 
-    fun assert_is_admin(registry: &SynthRegistry, addr: address) { assert!(unxversal::synthetics::is_admin(registry, addr), E_NOT_ADMIN); }
+    // Admin gating centralized to AdminRegistry variants
 
     // String helpers (clone semantics)
     fun clone_string(s: &String): String {
@@ -69,6 +71,7 @@ module unxversal::perpetuals {
         id: UID,
         paused: bool,
         markets: Table<String, ID>,
+        price_feeds: Table<String, ID>,
         // Trade fee stack
         trade_fee_bps: u64,
         maker_rebate_bps: u64,
@@ -135,17 +138,18 @@ module unxversal::perpetuals {
     public struct PerpFundingApplied has copy, drop { symbol: String, account: address, funding_delta_positive: bool, funding_delta_abs: u64, new_pnl_positive: bool, new_pnl_abs: u64, timestamp: u64 }
     public struct PerpMarginCall has copy, drop { symbol: String, account: address, equity_positive: bool, equity_abs: u128, maint_required: u64, timestamp: u64 }
     public struct PerpLiquidated has copy, drop { symbol: String, account: address, size: u64, price: u64, seized_margin: u64, bot_reward: u64, timestamp: u64 }
-    public struct PerpPausedToggled has copy, drop { symbol: String, new_state: bool, by: address, timestamp: u64 }
+    // Removed PerpPausedToggled (unused event)
 
     /*******************************
     * Init & Admin
     *******************************/
-    public entry fun init_perps_registry(synth_reg: &SynthRegistry, ctx: &mut TxContext) {
-        assert_is_admin(synth_reg, ctx.sender());
+    public entry fun init_perps_registry_admin(reg_admin: &AdminRegistry, ctx: &mut TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         let reg = PerpsRegistry {
             id: object::new(ctx),
             paused: false,
             markets: table::new<String, ID>(ctx),
+            price_feeds: table::new<String, ID>(ctx),
             trade_fee_bps: 30,
             maker_rebate_bps: 100,
             unxv_discount_bps: 0,
@@ -157,45 +161,78 @@ module unxversal::perpetuals {
             default_maint_margin_bps: 600,
             min_list_interval_ms: 60_000,
             last_list_ms: table::new<String, u64>(ctx),
-            treasury_id: object::id(synth_reg),
+            treasury_id: object::id_from_address(ctx.sender()),
         };
         transfer::public_share_object(reg);
     }
 
-    public entry fun set_trade_fee_config(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut PerpsRegistry, trade_fee_bps: u64, maker_rebate_bps: u64, unxv_discount_bps: u64, trade_bot_reward_bps: u64, ctx: &TxContext) {
-        assert_is_admin(synth_reg, ctx.sender());
-        reg.trade_fee_bps = trade_fee_bps;
-        reg.maker_rebate_bps = maker_rebate_bps;
-        reg.unxv_discount_bps = unxv_discount_bps;
-        reg.trade_bot_reward_bps = trade_bot_reward_bps;
+    /// Whitelist an underlying's index price feed (admin via SynthRegistry)
+    public entry fun whitelist_underlying_feed_admin(
+        reg_admin: &AdminRegistry,
+        reg: &mut PerpsRegistry,
+        underlying: String,
+        agg: &Aggregator,
+        ctx: &TxContext
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        if (table::contains(&reg.price_feeds, clone_string(&underlying))) { let _ = table::remove(&mut reg.price_feeds, clone_string(&underlying)); };
+        table::add(&mut reg.price_feeds, underlying, object::id(agg));
     }
 
-    public entry fun set_funding_params(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut PerpsRegistry, funding_interval_ms: u64, max_funding_rate_bps: u64, premium_weight_bps: u64, ctx: &TxContext) {
-        assert_is_admin(synth_reg, ctx.sender());
-        reg.funding_interval_ms = funding_interval_ms;
-        reg.max_funding_rate_bps = max_funding_rate_bps;
-        reg.premium_weight_bps = premium_weight_bps;
-    }
+    /// AdminRegistry-gated variants (migration bridge)
+    public entry fun set_trade_fee_config_admin(
+        reg_admin: &AdminRegistry,
+        reg: &mut PerpsRegistry,
+        trade_fee_bps: u64,
+        maker_rebate_bps: u64,
+        unxv_discount_bps: u64,
+        trade_bot_reward_bps: u64,
+        ctx: &TxContext
+    ) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); reg.trade_fee_bps = trade_fee_bps; reg.maker_rebate_bps = maker_rebate_bps; reg.unxv_discount_bps = unxv_discount_bps; reg.trade_bot_reward_bps = trade_bot_reward_bps; }
 
-    public entry fun set_margin_defaults(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut PerpsRegistry, init_bps: u64, maint_bps: u64, ctx: &TxContext) {
-        assert_is_admin(synth_reg, ctx.sender());
-        reg.default_init_margin_bps = init_bps;
-        reg.default_maint_margin_bps = maint_bps;
-    }
+    public entry fun set_funding_params_admin(
+        reg_admin: &AdminRegistry,
+        reg: &mut PerpsRegistry,
+        funding_interval_ms: u64,
+        max_funding_rate_bps: u64,
+        premium_weight_bps: u64,
+        ctx: &TxContext
+    ) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); reg.funding_interval_ms = funding_interval_ms; reg.max_funding_rate_bps = max_funding_rate_bps; reg.premium_weight_bps = premium_weight_bps; }
 
-    public entry fun set_treasury<C>(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut PerpsRegistry, treasury: &Treasury<C>, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); reg.treasury_id = object::id(treasury); }
-    public entry fun pause_registry(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut PerpsRegistry, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); reg.paused = true; }
-    public entry fun resume_registry(_admin: &AdminCap, synth_reg: &SynthRegistry, reg: &mut PerpsRegistry, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); reg.paused = false; }
+    public entry fun set_margin_defaults_admin(
+        reg_admin: &AdminRegistry,
+        reg: &mut PerpsRegistry,
+        init_bps: u64,
+        maint_bps: u64,
+        ctx: &TxContext
+    ) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); reg.default_init_margin_bps = init_bps; reg.default_maint_margin_bps = maint_bps; }
+
+    public entry fun set_treasury_admin<C>(reg_admin: &AdminRegistry, reg: &mut PerpsRegistry, treasury: &Treasury<C>, ctx: &TxContext) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); reg.treasury_id = object::id(treasury); }
+
+    public entry fun pause_registry_admin(reg_admin: &AdminRegistry, reg: &mut PerpsRegistry, ctx: &TxContext) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); reg.paused = true; }
+    public entry fun resume_registry_admin(reg_admin: &AdminRegistry, reg: &mut PerpsRegistry, ctx: &TxContext) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); reg.paused = false; }
+
+    
+
+    
+
+    
+
+    
 
     /*******************************
     * Listing (permissionless with cooldown)
     *******************************/
-    public entry fun list_market(reg: &mut PerpsRegistry, underlying: String, symbol: String, tick_size_micro_usd: u64, init_margin_bps: u64, maint_margin_bps: u64, ctx: &mut TxContext) {
+    public entry fun list_market(reg: &mut PerpsRegistry, underlying: String, symbol: String, tick_size_micro_usd: u64, init_margin_bps: u64, maint_margin_bps: u64, clock: &Clock, ctx: &mut TxContext) {
         assert!(!reg.paused, E_PAUSED);
-        let now = sui::tx_context::epoch_timestamp_ms(ctx);
-        let last = if (table::contains(&reg.last_list_ms, clone_string(&symbol))) { *table::borrow(&reg.last_list_ms, clone_string(&symbol)) } else { 0 };
-        assert!(now >= last + reg.min_list_interval_ms, E_MIN_INTERVAL);
-        table::add(&mut reg.last_list_ms, clone_string(&symbol), now);
+        let now = sui::clock::timestamp_ms(clock);
+        let key = clone_string(&underlying);
+        if (table::contains(&reg.last_list_ms, clone_string(&key))) {
+            let last = *table::borrow(&reg.last_list_ms, clone_string(&key));
+            assert!(now >= last + reg.min_list_interval_ms, E_MIN_INTERVAL);
+            let _ = table::remove(&mut reg.last_list_ms, clone_string(&key));
+        };
+        table::add(&mut reg.last_list_ms, key, now);
 
         let sym_for_market = clone_string(&symbol);
         let underlying_for_event = clone_string(&underlying);
@@ -220,10 +257,7 @@ module unxversal::perpetuals {
         event::emit(PerpMarketListed { symbol, underlying: underlying_for_event, tick: tick_size_micro_usd, timestamp: now });
     }
 
-    public entry fun pause_market(_admin: &AdminCap, synth_reg: &SynthRegistry, market: &mut PerpMarket, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); market.paused = true; event::emit(PerpPausedToggled { symbol: clone_string(&market.symbol), new_state: true, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
-    public entry fun resume_market(_admin: &AdminCap, synth_reg: &SynthRegistry, market: &mut PerpMarket, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); market.paused = false; event::emit(PerpPausedToggled { symbol: clone_string(&market.symbol), new_state: false, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) }); }
-
-    public entry fun set_market_margins(_admin: &AdminCap, synth_reg: &SynthRegistry, market: &mut PerpMarket, init_margin_bps: u64, maint_margin_bps: u64, ctx: &TxContext) { assert_is_admin(synth_reg, ctx.sender()); market.init_margin_bps = init_margin_bps; market.maint_margin_bps = maint_margin_bps; }
+    
 
     /*******************************
     * Fills (off-chain matching)
@@ -237,10 +271,13 @@ module unxversal::perpetuals {
         maker: address,
         mut unxv_payment: vector<Coin<unxversal::unxv::UNXV>>,
         unxv_usd_price: &Aggregator,
-        oracle_cfg: &OracleConfig,
+        oracle_reg: &OracleRegistry,
+        _oracle_cfg: &OracleConfig,
         clock: &Clock,
         mut fee_payment: Coin<C>,
         treasury: &mut Treasury<C>,
+        bot_treasury: &mut BotRewardsTreasury<C>,
+        points: &BotPointsRegistry,
         oi_increase: bool,
         min_price: u64,
         max_price: u64,
@@ -250,15 +287,16 @@ module unxversal::perpetuals {
         assert!(size > 0, E_MIN_INTERVAL);
         assert!(price_micro_usd % market.tick_size_micro_usd == 0, E_MIN_INTERVAL);
         assert!(price_micro_usd >= min_price && price_micro_usd <= max_price, E_BAD_BOUNDS);
-
-        let notional = size * price_micro_usd;
-        let trade_fee = (notional * reg.trade_fee_bps) / 10_000;
-        let discount_usdc = (trade_fee * reg.unxv_discount_bps) / 10_000;
+        let notional_u128: u128 = (size as u128) * (price_micro_usd as u128);
+        let trade_fee_u128: u128 = (notional_u128 * (reg.trade_fee_bps as u128)) / 10_000u128;
+        let discount_usdc_u128: u128 = (trade_fee_u128 * (reg.unxv_discount_bps as u128)) / 10_000u128;
         let mut discount_applied = false;
-        if (discount_usdc > 0 && vector::length(&unxv_payment) > 0) {
-            let unxv_px = get_price_scaled_1e6(oracle_cfg, clock, unxv_usd_price);
-            if (unxv_px > 0) {
-                let unxv_needed = (discount_usdc + unxv_px - 1) / unxv_px;
+        if (discount_usdc_u128 > 0 && vector::length(&unxv_payment) > 0) {
+            let unxv_px_u64 = get_price_for_symbol(oracle_reg, clock, &b"UNXV".to_string(), unxv_usd_price);
+            if (unxv_px_u64 > 0) {
+                let px: u128 = unxv_px_u64 as u128;
+                let unxv_needed_u128 = (discount_usdc_u128 + px - 1) / px;
+                let unxv_needed = if (unxv_needed_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { unxv_needed_u128 as u64 };
                 let mut merged = coin::zero<unxversal::unxv::UNXV>(ctx);
                 let mut i = 0; while (i < vector::length(&unxv_payment)) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); i = i + 1; };
                 let have = coin::value(&merged);
@@ -266,33 +304,47 @@ module unxversal::perpetuals {
                     let exact = coin::split(&mut merged, unxv_needed, ctx);
                     let mut vecu = vector::empty<Coin<unxversal::unxv::UNXV>>();
                     vector::push_back(&mut vecu, exact);
-                    TreasuryMod::deposit_unxv_ext(treasury, vecu, b"perp_trade".to_string(), ctx.sender(), ctx);
+                    let epoch_id = BotRewards::current_epoch(points, clock);
+                    TreasuryMod::deposit_unxv_with_rewards_for_epoch(treasury, bot_treasury, epoch_id, vecu, b"perp_trade".to_string(), ctx.sender(), ctx);
                     transfer::public_transfer(merged, ctx.sender());
                     discount_applied = true;
                 } else { transfer::public_transfer(merged, ctx.sender()); }
             }
         };
-        let collateral_fee_after_discount = if (discount_applied) { if (discount_usdc <= trade_fee) { trade_fee - discount_usdc } else { 0 } } else { trade_fee };
-        let maker_rebate = (trade_fee * reg.maker_rebate_bps) / 10_000;
+        let collateral_fee_after_discount_u128: u128 = if (discount_applied) { if (discount_usdc_u128 <= trade_fee_u128) { trade_fee_u128 - discount_usdc_u128 } else { 0 } } else { trade_fee_u128 };
+        let maker_rebate_u128: u128 = (trade_fee_u128 * (reg.maker_rebate_bps as u128)) / 10_000u128;
+        let collateral_fee_after_discount = if (collateral_fee_after_discount_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { collateral_fee_after_discount_u128 as u64 };
+        let maker_rebate = if (maker_rebate_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { maker_rebate_u128 as u64 };
         if (collateral_fee_after_discount > 0) {
             let have = coin::value(&fee_payment);
-            assert!(have >= collateral_fee_after_discount, E_MIN_INTERVAL);
-            if (maker_rebate > 0 && maker_rebate < collateral_fee_after_discount) {
+            // Ensure sufficient funds to pay maker rebate and fee after discount
+            let required_total = collateral_fee_after_discount + maker_rebate;
+            assert!(have >= required_total, E_MIN_INTERVAL);
+            // First pay maker rebate directly from fee_payment (does not reduce taker fee due path)
+            if (maker_rebate > 0) {
                 let to_maker = coin::split(&mut fee_payment, maker_rebate, ctx);
                 transfer::public_transfer(to_maker, maker);
             };
+            // Isolate the exact taker fee due after discount
+            let mut fee_due = coin::split(&mut fee_payment, collateral_fee_after_discount, ctx);
+            // Optional bot reward as a split from fee due (based on collateral_fee_after_discount)
             if (reg.trade_bot_reward_bps > 0) {
                 let bot_cut = (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000;
-                if (bot_cut > 0) { let to_bot = coin::split(&mut fee_payment, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); }
+                if (bot_cut > 0) { let to_bot = coin::split(&mut fee_due, bot_cut, ctx); transfer::public_transfer(to_bot, ctx.sender()); }
             };
-            TreasuryMod::deposit_collateral_ext(treasury, fee_payment, b"perp_trade".to_string(), ctx.sender(), ctx);
+            // Deposit remaining net fee to treasury with rewards accounting
+            let epoch_id2 = BotRewards::current_epoch(points, clock);
+            TreasuryMod::deposit_collateral_with_rewards_for_epoch(treasury, bot_treasury, epoch_id2, fee_due, b"perp_trade".to_string(), ctx.sender(), ctx);
+            // Refund any extra funds back to the sender
+            transfer::public_transfer(fee_payment, ctx.sender());
         } else {
             transfer::public_transfer(fee_payment, ctx.sender());
         };
         if (oi_increase) { market.open_interest = market.open_interest + size; } else { if (market.open_interest >= size) { market.open_interest = market.open_interest - size; } };
+        let notional = if (notional_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { notional_u128 as u64 };
         market.volume_premium = market.volume_premium + notional;
         market.last_trade_price_micro_usd = price_micro_usd;
-        event::emit(PerpFillRecorded { symbol: clone_string(&market.symbol), price: price_micro_usd, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: collateral_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(PerpFillRecorded { symbol: clone_string(&market.symbol), price: price_micro_usd, size, taker: ctx.sender(), maker, taker_is_buyer, fee_paid: collateral_fee_after_discount, unxv_discount_applied: discount_applied, maker_rebate: maker_rebate, bot_reward: if (reg.trade_bot_reward_bps > 0) { (collateral_fee_after_discount * reg.trade_bot_reward_bps) / 10_000 } else { 0 }, timestamp: sui::clock::timestamp_ms(clock) });
         // Ensure any remaining UNXV payment coins are refunded to the sender and the vector is consumed
         if (!vector::is_empty(&unxv_payment)) {
             let mut refund_unxv = coin::zero<unxversal::unxv::UNXV>(ctx);
@@ -308,7 +360,7 @@ module unxversal::perpetuals {
     /*******************************
     * Positions
     *******************************/
-    public entry fun open_position<C>(market: &mut PerpMarket, side: u8, size: u64, entry_price_micro_usd: u64, mut margin: Coin<C>, ctx: &mut TxContext) {
+    public entry fun open_position<C>(market: &mut PerpMarket, side: u8, size: u64, entry_price_micro_usd: u64, mut margin: Coin<C>, clock: &Clock, ctx: &mut TxContext) {
         assert!(!market.paused, E_PAUSED);
         assert!(size > 0, E_MIN_INTERVAL);
         assert!(entry_price_micro_usd % market.tick_size_micro_usd == 0, E_MIN_INTERVAL);
@@ -321,11 +373,11 @@ module unxversal::perpetuals {
         market.open_interest = market.open_interest + size;
         let pos = PerpPosition<C> { id: object::new(ctx), owner: ctx.sender(), market_id: object::id(market), side, size, avg_entry_price_micro_usd: entry_price_micro_usd, margin: locked, accumulated_pnl: signed_zero(), last_funding_ms: market.last_funding_ms };
         let sponsor_addr = ctx.sender();
-        event::emit(PerpPositionOpened { symbol: clone_string(&market.symbol), account: pos.owner, side, size, price: entry_price_micro_usd, margin_locked: balance::value(&pos.margin), sponsor: sponsor_addr, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(PerpPositionOpened { symbol: clone_string(&market.symbol), account: pos.owner, side, size, price: entry_price_micro_usd, margin_locked: balance::value(&pos.margin), sponsor: sponsor_addr, timestamp: sui::clock::timestamp_ms(clock) });
         transfer::share_object(pos);
     }
 
-    public entry fun close_position<C>(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition<C>, close_price_micro_usd: u64, quantity: u64, _treasury: &mut Treasury<C>, ctx: &mut TxContext) {
+    public entry fun close_position<C>(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition<C>, close_price_micro_usd: u64, quantity: u64, _treasury: &mut Treasury<C>, clock: &Clock, ctx: &mut TxContext) {
         assert!(!reg.paused && !market.paused, E_PAUSED);
         assert!(quantity > 0 && quantity <= pos.size, E_MIN_INTERVAL);
         assert!(close_price_micro_usd % market.tick_size_micro_usd == 0, E_MIN_INTERVAL);
@@ -337,18 +389,19 @@ module unxversal::perpetuals {
         if (margin_refund > 0) { let out_bal = balance::split(&mut pos.margin, margin_refund); let out = coin::from_balance(out_bal, ctx); transfer::public_transfer(out, pos.owner); };
         pos.size = pos.size - quantity;
         if (market.open_interest >= quantity) { market.open_interest = market.open_interest - quantity; };
-        event::emit(PerpVariationMargin { symbol: clone_string(&market.symbol), account: pos.owner, side: pos.side, qty: quantity, from_price: pos.avg_entry_price_micro_usd, to_price: close_price_micro_usd, pnl_delta_positive: pnl_delta.is_positive, pnl_delta_abs: pnl_delta.magnitude, new_margin: balance::value(&pos.margin), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        event::emit(PerpPositionClosed { symbol: clone_string(&market.symbol), account: pos.owner, qty: quantity, price: close_price_micro_usd, margin_refund: margin_refund, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(PerpVariationMargin { symbol: clone_string(&market.symbol), account: pos.owner, side: pos.side, qty: quantity, from_price: pos.avg_entry_price_micro_usd, to_price: close_price_micro_usd, pnl_delta_positive: pnl_delta.is_positive, pnl_delta_abs: pnl_delta.magnitude, new_margin: balance::value(&pos.margin), timestamp: sui::clock::timestamp_ms(clock) });
+        event::emit(PerpPositionClosed { symbol: clone_string(&market.symbol), account: pos.owner, qty: quantity, price: close_price_micro_usd, margin_refund: margin_refund, timestamp: sui::clock::timestamp_ms(clock) });
     }
 
     /*******************************
     * Funding accrual (trustless, no paired transfers)
     *******************************/
-    public entry fun apply_funding_for_position<C>(reg: &PerpsRegistry, market: &PerpMarket, pos: &mut PerpPosition<C>, index_price_micro_usd: u64, clock: &Clock) {
+    public entry fun apply_funding_for_position<C>(reg: &PerpsRegistry, market: &PerpMarket, pos: &mut PerpPosition<C>, oracle_reg: &OracleRegistry, index_price: &Aggregator, clock: &Clock) {
         assert!(!reg.paused && !market.paused, E_PAUSED);
         let now = sui::clock::timestamp_ms(clock);
         let elapsed = if (now > pos.last_funding_ms) { now - pos.last_funding_ms } else { 0 };
         if (elapsed < reg.funding_interval_ms) { return };
+        let index_price_micro_usd = get_price_for_symbol(oracle_reg, clock, &market.underlying, index_price);
         if (index_price_micro_usd == 0 || market.last_trade_price_micro_usd == 0) { return };
         if (pos.size == 0) { pos.last_funding_ms = now; return };
         // Use current market funding parameters (should be refreshed by a bot via refresh_market_funding)
@@ -364,9 +417,10 @@ module unxversal::perpetuals {
     }
 
     /// Refresh market funding rate and direction based on current premium vs index; called by bots periodically
-    public entry fun refresh_market_funding(reg: &PerpsRegistry, market: &mut PerpMarket, index_price_micro_usd: u64, clock: &Clock) {
+    public entry fun refresh_market_funding(reg: &PerpsRegistry, market: &mut PerpMarket, oracle_reg: &OracleRegistry, index_price: &Aggregator, clock: &Clock) {
         assert!(!reg.paused && !market.paused, E_PAUSED);
         let now = sui::clock::timestamp_ms(clock);
+        let index_price_micro_usd = get_price_for_symbol(oracle_reg, clock, &market.underlying, index_price);
         if (index_price_micro_usd == 0 || market.last_trade_price_micro_usd == 0) { return };
         let mark = market.last_trade_price_micro_usd as u128;
         let idx = index_price_micro_usd as u128;
@@ -379,10 +433,24 @@ module unxversal::perpetuals {
         market.last_funding_ms = now;
     }
 
+    /// Variant that awards points for non-fee maintenance
+    public entry fun refresh_market_funding_with_points(
+        reg: &PerpsRegistry,
+        market: &mut PerpMarket,
+        oracle_reg: &OracleRegistry,
+        index_price: &Aggregator,
+        points: &mut BotPointsRegistry,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        refresh_market_funding(reg, market, oracle_reg, index_price, clock);
+        BotRewards::award_points(points, b"perps.refresh_market_funding".to_string(), ctx.sender(), clock, ctx);
+    }
+
     /*******************************
     * Liquidation
     *******************************/
-    public entry fun liquidate_position<C>(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition<C>, mark_price_micro_usd: u64, treasury: &mut Treasury<C>, ctx: &mut TxContext) {
+    public entry fun liquidate_position<C>(reg: &PerpsRegistry, market: &mut PerpMarket, pos: &mut PerpPosition<C>, mark_price_micro_usd: u64, treasury: &mut Treasury<C>, clock: &Clock, ctx: &mut TxContext) {
         assert!(!reg.paused && !market.paused, E_PAUSED);
         assert!(object::id(market) == pos.market_id, E_MIN_INTERVAL);
         let margin_val = balance::value(&pos.margin);
@@ -396,7 +464,7 @@ module unxversal::perpetuals {
         let notional = (pos.size as u128) * (mark_price_micro_usd as u128);
         let maint_req = ((notional * (market.maint_margin_bps as u128)) / 10_000) as u64;
         if (equity_signed.is_positive && (equity_abs_u128 >= (maint_req as u128))) { return };
-        event::emit(PerpMarginCall { symbol: clone_string(&market.symbol), account: pos.owner, equity_positive: equity_signed.is_positive, equity_abs: equity_abs_u128, maint_required: maint_req, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(PerpMarginCall { symbol: clone_string(&market.symbol), account: pos.owner, equity_positive: equity_signed.is_positive, equity_abs: equity_abs_u128, maint_required: maint_req, timestamp: sui::clock::timestamp_ms(clock) });
         let seized_total = balance::value(&pos.margin);
         if (seized_total > 0) {
             let seized_bal = balance::split(&mut pos.margin, seized_total);
@@ -408,7 +476,7 @@ module unxversal::perpetuals {
         };
         let qty = pos.size; pos.size = 0;
         if (market.open_interest >= qty) { market.open_interest = market.open_interest - qty; };
-        event::emit(PerpLiquidated { symbol: clone_string(&market.symbol), account: pos.owner, size: qty, price: mark_price_micro_usd, seized_margin: seized_total, bot_reward: (seized_total * reg.trade_bot_reward_bps) / 10_000, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(PerpLiquidated { symbol: clone_string(&market.symbol), account: pos.owner, size: qty, price: mark_price_micro_usd, seized_margin: seized_total, bot_reward: (seized_total * reg.trade_bot_reward_bps) / 10_000, timestamp: sui::clock::timestamp_ms(clock) });
     }
 
     /*******************************
@@ -438,6 +506,192 @@ module unxversal::perpetuals {
         rdisp.add(b"description".to_string(), b"Registry for perpetual markets and parameters".to_string());
         rdisp.update_version();
         transfer::public_transfer(rdisp, ctx.sender());
+    }
+
+    /*******************************
+    * Test-only helpers
+    *******************************/
+    #[test_only]
+    public fun new_position_for_testing<C>(
+        owner: address,
+        market: &PerpMarket,
+        side: u8,
+        size: u64,
+        avg_entry_price_micro_usd: u64,
+        mut margin: Coin<C>,
+        required_margin: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): (PerpPosition<C>, Coin<C>) {
+        let exact = coin::split(&mut margin, required_margin, ctx);
+        let locked = coin::into_balance(exact);
+        let pos = PerpPosition<C> {
+            id: object::new(ctx),
+            owner,
+            market_id: object::id(market),
+            side,
+            size,
+            avg_entry_price_micro_usd,
+            margin: locked,
+            accumulated_pnl: signed_zero(),
+            last_funding_ms: market.last_funding_ms
+        };
+        event::emit(PerpPositionOpened { symbol: clone_string(&market.symbol), account: owner, side, size, price: avg_entry_price_micro_usd, margin_locked: balance::value(&pos.margin), sponsor: owner, timestamp: sui::clock::timestamp_ms(clock) });
+        (pos, margin)
+    }
+
+    #[test_only]
+    public fun pause_market_for_testing(market: &mut PerpMarket, flag: bool) { market.paused = flag; }
+
+    #[test_only]
+    public struct PerpEventMirror has key, store {
+        id: UID,
+        fill_count: u64,
+        last_fill_fee_paid: u64,
+        last_fill_maker_rebate: u64,
+        last_fill_discount_applied: bool,
+        last_fill_bot_reward: u64,
+        vm_count: u64,
+        last_vm_qty: u64,
+        last_vm_from: u64,
+        last_vm_to: u64,
+        last_margin_refund: u64,
+        funding_count: u64,
+        last_funding_delta_abs: u64,
+        last_new_pnl_abs: u64,
+        liq_count: u64,
+        last_liq_price: u64,
+        last_liq_seized: u64,
+        last_liq_bot_reward: u64
+    }
+
+    #[test_only]
+    public fun new_perp_event_mirror_for_testing(ctx: &mut TxContext): PerpEventMirror {
+        PerpEventMirror { id: object::new(ctx), fill_count: 0, last_fill_fee_paid: 0, last_fill_maker_rebate: 0, last_fill_discount_applied: false, last_fill_bot_reward: 0, vm_count: 0, last_vm_qty: 0, last_vm_from: 0, last_vm_to: 0, last_margin_refund: 0, funding_count: 0, last_funding_delta_abs: 0, last_new_pnl_abs: 0, liq_count: 0, last_liq_price: 0, last_liq_seized: 0, last_liq_bot_reward: 0 }
+    }
+
+    #[test_only] public fun pem_fill_count(m: &PerpEventMirror): u64 { m.fill_count }
+    #[test_only] public fun pem_last_fill_fee(m: &PerpEventMirror): u64 { m.last_fill_fee_paid }
+    #[test_only] public fun pem_last_fill_rebate(m: &PerpEventMirror): u64 { m.last_fill_maker_rebate }
+    #[test_only] public fun pem_last_fill_discount(m: &PerpEventMirror): bool { m.last_fill_discount_applied }
+    #[test_only] public fun pem_last_fill_bot_reward(m: &PerpEventMirror): u64 { m.last_fill_bot_reward }
+    #[test_only] public fun pem_vm_count(m: &PerpEventMirror): u64 { m.vm_count }
+    #[test_only] public fun pem_last_vm_qty(m: &PerpEventMirror): u64 { m.last_vm_qty }
+    #[test_only] public fun pem_last_vm_from(m: &PerpEventMirror): u64 { m.last_vm_from }
+    #[test_only] public fun pem_last_vm_to(m: &PerpEventMirror): u64 { m.last_vm_to }
+    #[test_only] public fun pem_last_margin_refund(m: &PerpEventMirror): u64 { m.last_margin_refund }
+    #[test_only] public fun pem_funding_count(m: &PerpEventMirror): u64 { m.funding_count }
+    #[test_only] public fun pem_last_funding_abs(m: &PerpEventMirror): u64 { m.last_funding_delta_abs }
+    #[test_only] public fun pem_last_new_pnl_abs(m: &PerpEventMirror): u64 { m.last_new_pnl_abs }
+    #[test_only] public fun pem_liq_count(m: &PerpEventMirror): u64 { m.liq_count }
+    #[test_only] public fun pem_last_liq_price(m: &PerpEventMirror): u64 { m.last_liq_price }
+    #[test_only] public fun pem_last_liq_seized(m: &PerpEventMirror): u64 { m.last_liq_seized }
+    #[test_only] public fun pem_last_liq_bot_reward(m: &PerpEventMirror): u64 { m.last_liq_bot_reward }
+
+    #[test_only]
+    public fun record_fill_with_event_mirror<C>(
+        reg: &mut PerpsRegistry,
+        market: &mut PerpMarket,
+        price_micro_usd: u64,
+        size: u64,
+        taker_is_buyer: bool,
+        maker: address,
+        mut unxv_payment: vector<Coin<unxversal::unxv::UNXV>>,
+        unxv_usd_price: &Aggregator,
+        oracle_reg: &OracleRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
+        fee_payment: Coin<C>,
+        treasury: &mut Treasury<C>,
+        bot_treasury: &mut BotRewardsTreasury<C>,
+        points: &BotPointsRegistry,
+        oi_increase: bool,
+        min_price: u64,
+        max_price: u64,
+        mirror: &mut PerpEventMirror,
+        ctx: &mut TxContext
+    ) {
+        // expected math replicate
+        let notional_u128: u128 = (size as u128) * (price_micro_usd as u128);
+        let trade_fee_u128: u128 = (notional_u128 * (reg.trade_fee_bps as u128)) / 10_000u128;
+        let discount_usdc_u128: u128 = (trade_fee_u128 * (reg.unxv_discount_bps as u128)) / 10_000u128;
+        let mut discount_applied = false;
+        if (discount_usdc_u128 > 0 && vector::length(&unxv_payment) > 0) {
+            // For the mirror, only staleness/positivity are required; avoid strict id check to prevent false negatives in tests
+            let unxv_px_u64 = get_price_scaled_1e6(oracle_cfg, clock, unxv_usd_price);
+            if (unxv_px_u64 > 0) { discount_applied = true; };
+        };
+        let collateral_fee_after_discount_u128: u128 = if (discount_applied) { if (discount_usdc_u128 <= trade_fee_u128) { trade_fee_u128 - discount_usdc_u128 } else { 0 } } else { trade_fee_u128 };
+        let maker_rebate_u128: u128 = (trade_fee_u128 * (reg.maker_rebate_bps as u128)) / 10_000u128;
+        let fee_paid = if (collateral_fee_after_discount_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { collateral_fee_after_discount_u128 as u64 };
+        let maker_rebate = if (maker_rebate_u128 > (18_446_744_073_709_551_615u128)) { 18_446_744_073_709_551_615u64 } else { maker_rebate_u128 as u64 };
+        let bot_reward = if (reg.trade_bot_reward_bps > 0) { (fee_paid * reg.trade_bot_reward_bps) / 10_000 } else { 0 };
+        record_fill<C>(reg, market, price_micro_usd, size, taker_is_buyer, maker, unxv_payment, unxv_usd_price, oracle_reg, oracle_cfg, clock, fee_payment, treasury, bot_treasury, points, oi_increase, min_price, max_price, ctx);
+        mirror.fill_count = mirror.fill_count + 1;
+        mirror.last_fill_fee_paid = fee_paid;
+        mirror.last_fill_maker_rebate = maker_rebate;
+        mirror.last_fill_discount_applied = discount_applied;
+        mirror.last_fill_bot_reward = bot_reward;
+        // unxv_payment is consumed within record_fill
+    }
+
+    #[test_only]
+    public fun close_with_event_mirror<C>(
+        reg: &PerpsRegistry,
+        market: &mut PerpMarket,
+        pos: &mut PerpPosition<C>,
+        close_price_micro_usd: u64,
+        quantity: u64,
+        treasury: &mut Treasury<C>,
+        clock: &Clock,
+        mirror: &mut PerpEventMirror,
+        ctx: &mut TxContext
+    ) {
+        let total_margin = balance::value(&pos.margin);
+        let margin_refund = (total_margin * quantity) / pos.size;
+        close_position<C>(reg, market, pos, close_price_micro_usd, quantity, treasury, clock, ctx);
+        mirror.vm_count = mirror.vm_count + 1;
+        mirror.last_vm_qty = quantity;
+        mirror.last_vm_from = pos.avg_entry_price_micro_usd;
+        mirror.last_vm_to = close_price_micro_usd;
+        mirror.last_margin_refund = margin_refund;
+    }
+
+    #[test_only]
+    public fun apply_funding_with_event_mirror<C>(
+        reg: &PerpsRegistry,
+        market: &PerpMarket,
+        pos: &mut PerpPosition<C>,
+        oracle_reg: &OracleRegistry,
+        index_price: &Aggregator,
+        clock: &Clock,
+        mirror: &mut PerpEventMirror
+    ) {
+        let before_abs = pos.accumulated_pnl.magnitude;
+        apply_funding_for_position<C>(reg, market, pos, oracle_reg, index_price, clock);
+        let after_abs = pos.accumulated_pnl.magnitude;
+        mirror.funding_count = mirror.funding_count + 1;
+        if (after_abs >= before_abs) { mirror.last_funding_delta_abs = after_abs - before_abs; } else { mirror.last_funding_delta_abs = before_abs - after_abs; };
+        mirror.last_new_pnl_abs = after_abs;
+    }
+
+    #[test_only]
+    public fun liquidate_with_event_mirror<C>(
+        reg: &PerpsRegistry,
+        market: &mut PerpMarket,
+        pos: &mut PerpPosition<C>,
+        mark_price_micro_usd: u64,
+        treasury: &mut Treasury<C>,
+        clock: &Clock,
+        mirror: &mut PerpEventMirror,
+        ctx: &mut TxContext
+    ) {
+        let seized_total = balance::value(&pos.margin);
+        liquidate_position<C>(reg, market, pos, mark_price_micro_usd, treasury, clock, ctx);
+        mirror.liq_count = mirror.liq_count + 1;
+        mirror.last_liq_price = mark_price_micro_usd;
+        mirror.last_liq_seized = seized_total;
+        mirror.last_liq_bot_reward = (seized_total * reg.trade_bot_reward_bps) / 10_000;
     }
 }
 

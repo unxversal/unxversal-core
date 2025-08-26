@@ -21,13 +21,17 @@ Cash-settled dated futures with registry-governed listings and settlement via or
 - Bots: lister, fill recorder (from off-chain venues), liquidation scanner, settlement queue worker.
 - API: build tx for listings (admin), positions, fills, settlement, liquidation.
 
+### Testing
+- See `markdown/tests_overview.md` for an overview.
+- Tests cover discount/rebate math and clamp edges, pause guards, settlement flow and queue with points, full lifecycle (open/close/liquidate/settle), and oracle identity enforcement. All current tests pass.
+
 ### SDK and API interfaces (TS)
 ```ts
 export interface FuturesApi {
   listContract(req: { registryId: string; underlying: string; symbol: string; contractSize: bigint; tickSize: bigint; expiryMs: bigint; initMarginBps: number; maintMarginBps: number; }): Promise<TxBuildResult>;
-  recordFill(req: { registryId: string; contractId: string; price: bigint; size: bigint; takerIsBuyer: boolean; maker: string; unxvCoins?: string[]; unxvAggId: string; oracleCfgId: string; clockId: string; feeCoin: string; treasuryId: string; oiIncrease: boolean; }): Promise<TxBuildResult>;
+  recordFill(req: { registryId: string; contractId: string; price: bigint; size: bigint; takerIsBuyer: boolean; maker: string; unxvCoins?: string[]; unxvAggId: string; oracleCfgId: string; clockId: string; feeCoin: string; treasuryId: string; oiIncrease: boolean; minPrice: bigint; maxPrice: bigint; }): Promise<TxBuildResult>;
   openPosition(req: { contractId: string; side: 0|1; size: bigint; entryPrice: bigint; marginCoin: string; }): Promise<TxBuildResult>;
-  closePosition(req: { registryId: string; contractId: string; posId: string; price: bigint; qty: bigint; treasuryId: string; }): Promise<TxBuildResult>;
+  closePosition(req: { registryId: string; contractId: string; posId: string; price: bigint; qty: bigint; treasuryId: string; }): Promise<TxBuildResult>; // tick-size enforced; close fee includes optional bot split
   settleContract(req: { registryId: string; contractId: string; oracleCfgId: string; clockId: string; priceAggId: string; treasuryId: string; }): Promise<TxBuildResult>;
   liquidate(req: { registryId: string; contractId: string; posId: string; markPrice: bigint; treasuryId: string; }): Promise<TxBuildResult>;
 }
