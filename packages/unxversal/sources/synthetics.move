@@ -14,7 +14,6 @@ module unxversal::synthetics {
     use sui::types;                        // is_one_time_witness check
     use sui::event;                        // emit events
     use std::string::{Self as string, String};
-    use sui::vec_set::{Self as vec_set, VecSet};
     use sui::table::{Self as table, Table};
     use sui::clock::Clock;                 // clock for oracle staleness checks
     use sui::coin::{Self as coin, Coin};   // coin helpers (merge/split/zero/value)
@@ -109,34 +108,12 @@ module unxversal::synthetics {
         *list = out;
     }
 
-    // Lookup helper: find price for a symbol inside the parallel vectors. Returns 0 if not found.
-    #[allow(unused_function)]
-    fun price_for_symbol(symbols: &vector<String>, prices: &vector<u64>, sym: &String): u64 {
-        let mut i = 0; let n = vector::length(symbols);
-        while (i < n) {
-            let s = vector::borrow(symbols, i);
-            if (eq_string(s, sym)) { return *vector::borrow(prices, i) };
-            i = i + 1;
-        };
-        0
-    }
-
     // Local price scaling helper (micro-USD), avoids dependency cycle with oracle module
     // Using Switchboard's aggregator recency; no per-call max-age here
     const U64_MAX_LITERAL: u64 = 18_446_744_073_709_551_615;
 
     fun clamp_u128_to_u64(x: u128): u64 { if (x > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { x as u64 } }
 
-    #[allow(unused_function)]
-    fun safe_mul_u64(a: u64, b: u64): u64 { clamp_u128_to_u64((a as u128) * (b as u128)) }
-
-    #[allow(unused_function)]
-    fun safe_ratio_bps(numerator_value: u64, denominator_value: u64): u64 {
-        if (denominator_value == 0) { return U64_MAX_LITERAL };
-        let num: u128 = (numerator_value as u128) * 10_000u128;
-        let den: u128 = denominator_value as u128;
-        clamp_u128_to_u64(num / den)
-    }
     fun get_price_scaled_1e6(clock: &Clock, cfg: &OracleConfig, agg: &Aggregator): u64 { OracleMod::get_price_scaled_1e6(cfg, clock, agg) }
 
     // Scale helpers for decimals-aware notional/debt calculations
@@ -219,17 +196,7 @@ module unxversal::synthetics {
         assert!(table::contains(&ps.prices, k), E_BAD_PRICE);
         *table::borrow(&ps.prices, clone_string(symbol))
     }
-
-    #[allow(unused_function)]
-    fun get_symbol_ts_from_set(ps: &PriceSet, symbol: &String): u64 {
-        let k = clone_string(symbol);
-        assert!(table::contains(&ps.ts_ms, k), E_BAD_PRICE);
-        *table::borrow(&ps.ts_ms, clone_string(symbol))
-    }
-
-    #[allow(unused_function)]
-    fun ensure_recent_from_set(_clock: &Clock, _oracle_cfg: &OracleConfig, _ps: &PriceSet, _symbol: &String) { }
-
+    
     /// Error codes (0‑99 reserved for general)
     const E_NOT_ADMIN: u64 = 1;            // Caller not in admin allow‑list
     const E_ASSET_EXISTS: u64 = 2;
@@ -244,8 +211,7 @@ module unxversal::synthetics {
     const E_BAD_PRICE: u64 = 11;
     const E_COLLATERAL_NOT_SET: u64 = 13;
     const E_WRONG_COLLATERAL_CFG: u64 = 14;
-    #[allow(unused_const)]
-    const E_ORACLE_FEED_NOT_SET: u64 = 15;
+
     const E_ORACLE_MISMATCH: u64 = 16;
     const E_DEPRECATED: u64 = 17;
     const E_ZERO_AMOUNT: u64 = 18;
@@ -254,18 +220,7 @@ module unxversal::synthetics {
     /// Guarantees `init` executes exactly once when the package is published.
     public struct SYNTHETICS has drop {}
 
-    /// Capability & authority objects
-    /// **DaddyCap** – the root capability.  Only one exists.
-    /// Possession allows minting / revoking admin rights by modifying the
-    /// `admin_addrs` allow‑list inside `SynthRegistry`.
-    public struct DaddyCap has key, store { id: UID }
-
-    /// **AdminCap** – a wallet‑visible token that proves the holder *should*
-    /// be an admin **for UX purposes only**.  Effective authority is enforced
-    /// by checking that the caller's `address` is in `registry.admin_addrs`.
-    /// If the DaddyCap holder removes an address from the allow‑list, any
-    /// AdminCap tokens that address still holds become inert.
-    public struct AdminCap has key, store { id: UID }
+    /// Capability & authority objects (legacy AdminCap/DaddyCap removed; use AdminRegistry)
 
     /// Global‑parameter struct (basis‑points units for ratios/fees)
     public struct GlobalParams has store, drop {
@@ -302,8 +257,7 @@ module unxversal::synthetics {
     const DEFAULT_LOT_SIZE: u64 = 1;
     const DEFAULT_MIN_SIZE: u64 = 1;
 
-    /// Synthetic‑asset placeholder (filled out in Phase‑2)
-    /// NOTE: only minimal fields kept for now so the table type is defined.
+    /// Synthetic‑asset object definition
     public struct SyntheticAsset has store {
         name: String,
         symbol: String,
@@ -341,8 +295,6 @@ module unxversal::synthetics {
         global_params: GlobalParams,
         /// Emergency-circuit-breaker flag.
         paused: bool,
-        /// Addresses approved as admins (DaddyCap manages this set).
-        admin_addrs: VecSet<address>,
         /// Treasury reference (shared object)
         treasury_id: ID,
         /// Count of listed synthetic assets
@@ -354,8 +306,6 @@ module unxversal::synthetics {
     }
 
     /// Event structs for indexers / UI
-    public struct AdminGranted has copy, drop { admin_addr: address, timestamp: u64 }
-    public struct AdminRevoked has copy, drop { admin_addr: address, timestamp: u64 }
     public struct ParamsUpdated has copy, drop { updater: address, timestamp: u64 }
     public struct OrderPlaced has copy, drop { order_id: u128, symbol: String, side: u8, price: u64, size: u64, maker: address, timestamp: u64 }
     public struct OrderCanceled has copy, drop { order_id: u128, symbol: String, maker: address, timestamp: u64 }
@@ -365,7 +315,6 @@ module unxversal::synthetics {
     public struct CollateralDeposited has copy, drop { vault_id: ID, amount: u64, depositor: address, timestamp: u64 }
     public struct CollateralWithdrawn has copy, drop { vault_id: ID, amount: u64, withdrawer: address, timestamp: u64 }
 
-    /// Phase‑2 – new events
     public struct SyntheticAssetCreated has copy, drop {
         asset_name:   String,
         asset_symbol: String,
@@ -374,7 +323,6 @@ module unxversal::synthetics {
         timestamp:    u64,
     }
 
-    /// Emitted when SyntheticAssetInfo is created for display
     public struct SyntheticAssetInfoCreated has copy, drop {
         symbol: String,
         timestamp: u64,
@@ -447,7 +395,7 @@ module unxversal::synthetics {
     }
     public struct StabilityAccrued has copy, drop { vault_id: ID, synthetic_type: String, delta_units: u64, from_ms: u64, to_ms: u64 }
 
-    /// Phase‑2 – collateral vault
+    /// Collateral vault
     public struct CollateralVault<phantom C> has key, store {
         id: UID,
         owner: address,
@@ -498,42 +446,6 @@ module unxversal::synthetics {
         claimed_units: Table<u128, u64>,
     }
 
-    /// Create and share a new Synth CLOB market for a listed symbol
-    entry fun init_synth_market(
-        registry: &SynthRegistry,
-        symbol: String,
-        tick_size: u64,
-        lot_size: u64,
-        min_size: u64,
-        ctx: &mut TxContext
-    ) {
-        assert!(!registry.paused, 1000);
-        // Ensure symbol is listed
-        let _asset = table::borrow(&registry.synthetics, clone_string(&symbol));
-        let book = Book::empty(tick_size, lot_size, min_size, ctx);
-        let makers = table::new<u128, ID>(ctx);
-        let maker_sides = table::new<u128, u8>(ctx);
-        let claimed_units = table::new<u128, u64>(ctx);
-        let mkt = SynthMarket { id: object::new(ctx), symbol, tick_size, lot_size, min_size, book, makers, maker_sides, claimed_units };
-        transfer::share_object(mkt);
-    }
-
-    /// Variant that awards bot points for market listing orchestration
-    entry fun init_synth_market_with_points(
-        registry: &SynthRegistry,
-        symbol: String,
-        tick_size: u64,
-        lot_size: u64,
-        min_size: u64,
-        points: &mut BotPointsRegistry,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        init_synth_market(registry, clone_string(&symbol), tick_size, lot_size, min_size, ctx);
-        // Award points to caller for non-fee bot task
-        BotRewards::award_points(points, b"synthetics.init_synth_market".to_string(), ctx.sender(), clock, ctx);
-    }
-
     /// Escrow object holding collateral owed to makers until claimed
     #[allow(lint(coin_field))]
     public struct SynthEscrow<phantom C> has key, store {
@@ -543,8 +455,8 @@ module unxversal::synthetics {
         bonds: Table<u128, Balance<C>>,   // order_id -> reserved GC bond
     }
 
-    /// Initialize an escrow for a given market
-    entry fun init_synth_escrow_for_market<C>(market: &SynthMarket, ctx: &mut TxContext) {
+    /// Initialize an escrow for a given market (internal-only)
+    fun init_synth_escrow_for_market<C>(market: &SynthMarket, ctx: &mut TxContext) {
         let escrow = SynthEscrow<C> {
             id: object::new(ctx),
             market_id: object::id(market),
@@ -554,123 +466,6 @@ module unxversal::synthetics {
         transfer::share_object(escrow);
     }
 
-    /// Place a limit order into the synth CLOB via plan/settle/commit
-    entry fun place_synth_limit<C: store>(
-        registry: &mut SynthRegistry,
-        market: &mut SynthMarket,
-        clock: &Clock,
-        oracle_cfg: &OracleConfig,
-        price_info: &Aggregator,
-        unxv_price: &Aggregator,
-        taker_is_bid: bool,
-        price: u64,
-        size_units: u64,
-        expiry_ms: u64,
-        maker_vault: &mut CollateralVault<C>,
-        mut unxv_payment: vector<Coin<UNXV>>,
-        treasury: &mut Treasury<C>,
-        ctx: &mut TxContext
-    ) {
-        assert!(!registry.paused, 1000);
-        // Verify market symbol exists and owner authorization
-        let sym = clone_string(&market.symbol);
-        let _asset = table::borrow(&registry.synthetics, clone_string(&sym));
-        assert!(maker_vault.owner == ctx.sender(), E_NOT_OWNER);
-
-        // Build a plan from the on-chain book
-        let now = sui::tx_context::epoch_timestamp_ms(ctx);
-        let plan = Book::compute_fill_plan(&market.book, taker_is_bid, price, size_units, 0, expiry_ms, now);
-
-        // Settle per fill: taker is this maker order; maker side is book makers
-        let mut i = 0u64;
-        let num = Book::fillplan_num_fills(&plan);
-        while (i < num) {
-            let f: Fill = Book::fillplan_get_fill(&plan, i);
-            let maker_id = Book::fill_maker_id(&f);
-            let (_, maker_price, _) = utils::decode_order_id(maker_id);
-            let qty = Book::fill_base_qty(&f);
-            let notional = qty * maker_price;
-
-            if (taker_is_bid) {
-                // Buyer (taker) mints; pay collateral from taker vault to book-maker via treasury-less transfer
-                let bal_to_pay = balance::split(&mut maker_vault.collateral, notional);
-                let coin_to_pay = coin::from_balance(bal_to_pay, ctx);
-                // For now, transfer to taker address; product module that created maker will handle coin receipt
-                // In synth, we simply burn seller's debt and mint buyer's exposure
-                mint_synthetic_internal(maker_vault, registry, clock, oracle_cfg, price_info, clone_string(&sym), qty, ctx);
-                // Refund back into taker vault by immediately re-wrapping; settlement to opposite vault is not tracked here
-                // In full integration, we would lookup maker's vault by order_id and transfer to it. Left as future enhancement.
-                let bal_back = coin::into_balance(coin_to_pay);
-                balance::join(&mut maker_vault.collateral, bal_back);
-            } else {
-                // Seller (taker) burns exposure and receives collateral
-                burn_synthetic_internal(maker_vault, registry, clock, price_info, clone_string(&sym), qty, ctx);
-                // Credit collateral from taker's own vault as if paid by buyer; symmetric to above placeholder
-                let bal_in = balance::split(&mut maker_vault.collateral, notional);
-                let coin_in = coin::from_balance(bal_in, ctx);
-                let bal_back2 = coin::into_balance(coin_in);
-                balance::join(&mut maker_vault.collateral, bal_back2);
-            };
-
-            // Trade fee from taker side with UNXV discount and maker rebate (maker rebate honored later by product module)
-            let trade_fee = (notional * registry.global_params.mint_fee) / 10_000;
-            let discount_collateral = (trade_fee * registry.global_params.unxv_discount_bps) / 10_000;
-            let mut discount_applied = false;
-            if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
-                let price_unxv_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &b"UNXV".to_string(), unxv_price);
-                if (price_unxv_u64 > 0) {
-                    let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
-                    let mut merged = coin::zero<UNXV>(ctx);
-                    let mut j = 0; let m = vector::length(&unxv_payment);
-                    while (j < m) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); j = j + 1; };
-                    let have = coin::value(&merged);
-                    if (have >= unxv_needed) {
-                        let exact = coin::split(&mut merged, unxv_needed, ctx);
-                        let mut vec_unxv = vector::empty<Coin<UNXV>>();
-                        vector::push_back(&mut vec_unxv, exact);
-                        TreasuryMod::deposit_unxv(treasury, vec_unxv, b"synth_trade".to_string(), maker_vault.owner, ctx);
-                        transfer::public_transfer(merged, maker_vault.owner);
-                        discount_applied = true;
-                    } else { transfer::public_transfer(merged, maker_vault.owner); }
-                }
-            };
-            let fee_after = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
-            if (fee_after > 0) {
-                let mut fee_coin_all = coin::from_balance(balance::split(&mut maker_vault.collateral, fee_after), ctx);
-                let keeper_reward = (fee_after * registry.global_params.keeper_reward_bps) / 10_000;
-                if (keeper_reward > 0 && keeper_reward < fee_after) {
-                    let to_keeper = coin::split(&mut fee_coin_all, keeper_reward, ctx);
-                    transfer::public_transfer(to_keeper, ctx.sender());
-                };
-                TreasuryMod::deposit_collateral(treasury, fee_coin_all, b"synth_trade".to_string(), maker_vault.owner, ctx);
-            };
-
-            i = i + 1;
-        };
-
-        // Commit the plan and optionally inject remainder
-        let maybe_id = Book::commit_fill_plan(&mut market.book, plan, now, true);
-        if (option::is_some(&maybe_id)) {
-            let oid = *option::borrow(&maybe_id);
-            let side: u8 = if (taker_is_bid) { 0 } else { 1 };
-            table::add(&mut market.makers, oid, object::id(maker_vault));
-            table::add(&mut market.maker_sides, oid, side);
-            // Post maker bond from collateral, proportional to notional at price
-            // Note: no escrow here; bond not posted in non-escrow placement
-            event::emit(OrderPlaced { order_id: oid, symbol: clone_string(&market.symbol), side, price, size: size_units, maker: maker_vault.owner, timestamp: now });
-        };
-
-        // Drain and refund any leftover UNXV coins and destroy the empty vector to consume it
-        if (vector::length(&unxv_payment) > 0) {
-            let mut leftover = coin::zero<UNXV>(ctx);
-            while (vector::length(&unxv_payment) > 0) {
-                let c = vector::pop_back(&mut unxv_payment);
-                coin::join(&mut leftover, c);
-            };
-            transfer::public_transfer(leftover, maker_vault.owner);
-        };
-        vector::destroy_empty(unxv_payment);
-    }
 
     /// Place with escrow: taker collateral payments are accrued into escrow for maker claims (buyer taker only)
     entry fun place_synth_limit_with_escrow<C: store>(
@@ -859,28 +654,7 @@ module unxversal::synthetics {
         ctx: &mut TxContext
     ) { claim_maker_fills<BaseUSD>(registry, market, escrow, order_id, maker_vault, ctx) }
 
-    /// Cancel a synth CLOB order. Verifies maker ownership and cleans metadata.
-    entry fun cancel_synth_clob<C: store>(
-        market: &mut SynthMarket,
-        order_id: u128,
-        maker_vault: &CollateralVault<C>,
-        _ctx: &TxContext
-    ) {
-        if (table::contains(&market.makers, order_id)) {
-            let vid = *table::borrow(&market.makers, order_id);
-            assert!(vid == object::id(maker_vault) && maker_vault.owner == _ctx.sender(), E_NOT_OWNER);
-            let _ = table::remove(&mut market.makers, order_id);
-            if (table::contains(&market.maker_sides, order_id)) { let _ = table::remove(&mut market.maker_sides, order_id); };
-            if (table::contains(&market.claimed_units, order_id)) { let _ = table::remove(&mut market.claimed_units, order_id); };
-            // Return bond to maker if any
-            // Note: requires escrow reference; for cancel via owner, bond should be returned. If escrow not provided here,
-            // rely on claim_maker_fills to sweep bonds at completion or add a cancel-with-escrow entry.
-        } else {
-            assert!(false, E_INVALID_ORDER);
-        };
-        Book::cancel_order_by_id(&mut market.book, order_id);
-        event::emit(OrderCanceled { order_id, symbol: clone_string(&market.symbol), maker: maker_vault.owner, timestamp: sui::tx_context::epoch_timestamp_ms(_ctx) });
-    }
+    
 
     /// Cancel with escrow: returns any posted bond to the maker
     entry fun cancel_synth_clob_with_escrow<C: store>(
@@ -905,8 +679,9 @@ module unxversal::synthetics {
         event::emit(OrderCanceled { order_id, symbol: clone_string(&market.symbol), maker: maker_vault.owner, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
-    /// Reduce order quantity; refunds occur at product-level when settlement maps are extended.
+    /// Reduce order quantity; adjust escrowed maker bond to new remaining notional.
     entry fun modify_synth_clob<C: store>(
+        registry: &SynthRegistry,
         market: &mut SynthMarket,
         escrow: &mut SynthEscrow<C>,
         order_id: u128,
@@ -916,13 +691,16 @@ module unxversal::synthetics {
         _ctx: &TxContext
     ) {
         assert!(table::contains(&market.makers, order_id), E_INVALID_ORDER);
+        assert!(escrow.market_id == object::id(market), E_INVALID_ORDER);
         let vid = *table::borrow(&market.makers, order_id);
         assert!(vid == object::id(maker_vault) && maker_vault.owner == _ctx.sender(), E_NOT_OWNER);
         let (_cancel_qty, _o_ref) = Book::modify_order(&mut market.book, order_id, new_quantity, now_ts);
-        // Resize bond proportional to new remaining notional (approx: price × quantity)
-        let (_is_bid_tmp, _price, _lid) = utils::decode_order_id(order_id);
-        // Keep bond unchanged here to avoid requiring registry; routing planned via separate admin hook
-        let target_bond = if (table::contains(&escrow.bonds, order_id)) { balance::value(table::borrow(&escrow.bonds, order_id)) } else { 0 };
+        // Recompute target bond = remaining_qty × price × maker_bond_bps / 10_000
+        let (_is_bid_tmp, price, _lid) = utils::decode_order_id(order_id);
+        let (filled_units, total_units) = Book::order_progress(&market.book, order_id);
+        let remaining = total_units - filled_units;
+        let notional = remaining * price;
+        let target_bond = (notional * registry.global_params.maker_bond_bps) / 10_000;
         let current_bond = if (table::contains(&escrow.bonds, order_id)) { balance::value(table::borrow(&escrow.bonds, order_id)) } else { 0 };
         if (target_bond > current_bond) {
             let top_up = target_bond - current_bond;
@@ -944,19 +722,18 @@ module unxversal::synthetics {
         event::emit(OrderModified { order_id, symbol: clone_string(&market.symbol), new_quantity, maker: maker_vault.owner, timestamp: sui::tx_context::epoch_timestamp_ms(_ctx) });
     }
 
-    /// Automatic on-chain matching across best levels, fully on-chain settlement between maker vaults.
-    entry fun match_step_auto<C: store>(
+    
+
+    /// Award points to keepers running match steps (no direct fee to caller)
+    entry fun match_step_auto_with_points(
+        points: &mut BotPointsRegistry,
+        clock: &Clock,
         registry: &SynthRegistry,
         market: &mut SynthMarket,
-        _clock: &Clock,
-        _oracle_cfg: &OracleConfig,
-        _price_info: &Aggregator,
-        _unxv_price: &Aggregator,
         max_steps: u64,
         min_price: u64,
         max_price: u64,
-        _treasury: &mut Treasury<C>,
-        ctx: &TxContext
+        ctx: &mut TxContext
     ) {
         assert!(!registry.paused, 1000);
         let now = sui::tx_context::epoch_timestamp_ms(ctx);
@@ -976,30 +753,10 @@ module unxversal::synthetics {
             let bid_rem = bid_total - bid_filled;
             let qty = if (ask_rem < bid_rem) { ask_rem } else { bid_rem };
             assert!(qty > 0, E_BAD_PRICE);
-            // advance book one step
             Book::commit_maker_fill(&mut market.book, ask_id, true, trade_price, qty, now);
             Book::commit_maker_fill(&mut market.book, bid_id, false, trade_price, qty, now);
             steps = steps + 1;
-        }
-    }
-
-    /// Award points to keepers running match steps (no direct fee to caller)
-    entry fun match_step_auto_with_points<C: store>(
-        points: &mut BotPointsRegistry,
-        clock: &Clock,
-        registry: &SynthRegistry,
-        market: &mut SynthMarket,
-        _clock: &Clock,
-        _oracle_cfg: &OracleConfig,
-        _price_info: &Aggregator,
-        _unxv_price: &Aggregator,
-        max_steps: u64,
-        min_price: u64,
-        max_price: u64,
-        _treasury: &mut Treasury<C>,
-        ctx: &mut TxContext
-    ) {
-        match_step_auto<C>(registry, market, _clock, _oracle_cfg, _price_info, _unxv_price, max_steps, min_price, max_price, _treasury, ctx);
+        };
         BotRewards::award_points(points, b"synthetics.match_step_auto".to_string(), ctx.sender(), clock, ctx);
     }
 
@@ -1076,19 +833,19 @@ module unxversal::synthetics {
     }
 
     /// Phase‑2 – synthetic asset listing (admin‑only)
-    public fun create_synthetic_asset(
+    public fun create_synthetic_asset<C>(
+        reg_admin: &AdminRegistry,
         registry: &mut SynthRegistry,
         asset_name: String,
         asset_symbol: String,
         decimals: u8,
         pyth_feed_id: vector<u8>,
         min_coll_ratio: u64,
-        _admin: &AdminCap,                // proves msg.sender ∈ allow‑list UX‑wise
+        _cfg: &CollateralConfig<C>,
         ctx: &mut TxContext
     ) {
         assert!(!registry.paused, 1000);
-        // authority check (address allow‑list)
-        assert_is_admin(registry, ctx.sender());
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
 
         // ensure symbol not taken
         let sym_check = clone_string(&asset_symbol);
@@ -1136,15 +893,16 @@ module unxversal::synthetics {
             burn_fee_bps: 0,
         } };
 
-        // Auto-create a CLOB market denominated in collateral units for this synth
-        init_synth_market(
-            registry,
-            clone_string(&asset_symbol),
-            DEFAULT_TICK_SIZE,
-            DEFAULT_LOT_SIZE,
-            DEFAULT_MIN_SIZE,
-            ctx,
-        );
+        // Auto-create a CLOB market and escrow for this synth (single canonical market per symbol)
+        let book = Book::empty(DEFAULT_TICK_SIZE, DEFAULT_LOT_SIZE, DEFAULT_MIN_SIZE, ctx);
+        let makers = table::new<u128, ID>(ctx);
+        let maker_sides = table::new<u128, u8>(ctx);
+        let claimed_units = table::new<u128, u64>(ctx);
+        let mkt = SynthMarket { id: object::new(ctx), symbol: clone_string(&asset_symbol), tick_size: DEFAULT_TICK_SIZE, lot_size: DEFAULT_LOT_SIZE, min_size: DEFAULT_MIN_SIZE, book: book, makers, maker_sides, claimed_units };
+        // Create and share escrow bound to this market
+        init_synth_escrow_for_market<C>(&mkt, ctx);
+        // Share market
+        transfer::share_object(mkt);
 
         // emit events
         event::emit(SyntheticAssetCreated {
@@ -1161,20 +919,6 @@ module unxversal::synthetics {
 
     }
 
-    /// Per-asset parameter setters (admin-only)
-    public fun set_asset_stability_fee(
-        registry: &mut SynthRegistry,
-        symbol: String,
-        bps: u64,
-        _admin: &AdminCap,
-        ctx: &TxContext
-    ) {
-        assert_is_admin(registry, ctx.sender());
-        let k = clone_string(&symbol);
-        let asset = table::borrow_mut(&mut registry.synthetics, k);
-        asset.stability_fee_bps = bps;
-    }
-
     /// AdminRegistry-gated variant (migration bridge)
     public fun set_asset_stability_fee_admin(
         reg_admin: &AdminRegistry,
@@ -1183,24 +927,12 @@ module unxversal::synthetics {
         bps: u64,
         ctx: &TxContext
     ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         let k = clone_string(&symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k);
         asset.stability_fee_bps = bps;
     }
 
-    public fun set_asset_liquidation_threshold(
-        registry: &mut SynthRegistry,
-        symbol: String,
-        bps: u64,
-        _admin: &AdminCap,
-        ctx: &TxContext
-    ) {
-        assert_is_admin(registry, ctx.sender());
-        let k = clone_string(&symbol);
-        let asset = table::borrow_mut(&mut registry.synthetics, k);
-        asset.liquidation_threshold_bps = bps;
-    }
 
     public fun set_asset_liquidation_threshold_admin(
         reg_admin: &AdminRegistry,
@@ -1209,13 +941,13 @@ module unxversal::synthetics {
         bps: u64,
         ctx: &TxContext
     ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         let k = clone_string(&symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k);
         asset.liquidation_threshold_bps = bps;
     }
 
-    public fun set_asset_liquidation_penalty(
+    /*public fun set_asset_liquidation_penalty(
         registry: &mut SynthRegistry,
         symbol: String,
         bps: u64,
@@ -1226,7 +958,7 @@ module unxversal::synthetics {
         let k = clone_string(&symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k);
         asset.liquidation_penalty_bps = bps;
-    }
+    }*/
 
     public fun set_asset_liquidation_penalty_admin(
         reg_admin: &AdminRegistry,
@@ -1235,13 +967,13 @@ module unxversal::synthetics {
         bps: u64,
         ctx: &TxContext
     ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         let k = clone_string(&symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k);
         asset.liquidation_penalty_bps = bps;
     }
 
-    public fun set_asset_mint_fee(
+    /*public fun set_asset_mint_fee(
         registry: &mut SynthRegistry,
         symbol: String,
         bps: u64,
@@ -1252,7 +984,7 @@ module unxversal::synthetics {
         let k = clone_string(&symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k);
         asset.mint_fee_bps = bps;
-    }
+    }*/
 
     public fun set_asset_mint_fee_admin(
         reg_admin: &AdminRegistry,
@@ -1261,13 +993,13 @@ module unxversal::synthetics {
         bps: u64,
         ctx: &TxContext
     ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         let k = clone_string(&symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k);
         asset.mint_fee_bps = bps;
     }
 
-    public fun set_asset_burn_fee(
+    /*public fun set_asset_burn_fee(
         registry: &mut SynthRegistry,
         symbol: String,
         bps: u64,
@@ -1278,7 +1010,7 @@ module unxversal::synthetics {
         let k = clone_string(&symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k);
         asset.burn_fee_bps = bps;
-    }
+    }*/
 
     public fun set_asset_burn_fee_admin(
         reg_admin: &AdminRegistry,
@@ -1287,7 +1019,7 @@ module unxversal::synthetics {
         bps: u64,
         ctx: &TxContext
     ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         let k = clone_string(&symbol);
         let asset = table::borrow_mut(&mut registry.synthetics, k);
         asset.burn_fee_bps = bps;
@@ -2602,8 +2334,10 @@ module unxversal::synthetics {
         // Price in micro-USD units and penalty
         let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
         let notional_u128: u128 = (repay as u128) * (price_u64 as u128);
-        let asset_for_liq = table::borrow(&registry.synthetics, clone_string(&synthetic_symbol));
-        let liq_pen_bps = if (asset_for_liq.liquidation_penalty_bps > 0) { asset_for_liq.liquidation_penalty_bps } else { registry.global_params.liquidation_penalty };
+        let liq_pen_bps = {
+            let a = table::borrow(&registry.synthetics, clone_string(&synthetic_symbol));
+            if (a.liquidation_penalty_bps > 0) { a.liquidation_penalty_bps } else { registry.global_params.liquidation_penalty }
+        };
         let penalty_u128: u128 = (notional_u128 * (liq_pen_bps as u128)) / 10_000u128;
         let penalty = clamp_u128_to_u64(penalty_u128);
         let seize_u128: u128 = notional_u128 + (penalty as u128);
@@ -2615,6 +2349,11 @@ module unxversal::synthetics {
             let _ = table::remove(&mut vault.synthetic_debt, clone_string(&synthetic_symbol));
         };
         table::add(&mut vault.synthetic_debt, clone_string(&synthetic_symbol), new_debt);
+        if (new_debt == 0) { remove_symbol_if_present(&mut vault.debt_symbols, &synthetic_symbol); };
+        // Mirror burn behavior on liquidation: reduce global total_supply
+        let aset = table::borrow_mut(&mut registry.synthetics, clone_string(&synthetic_symbol));
+        aset.total_supply = aset.total_supply - repay;
+        if (new_debt == 0) { remove_symbol_if_present(&mut vault.debt_symbols, &synthetic_symbol); };
 
         // Seize collateral and split bot reward
         let available = balance::value(&vault.collateral);
@@ -2710,15 +2449,6 @@ module unxversal::synthetics {
         event::emit(LiquidationExecuted { vault_id: object::id(vault), liquidator, liquidated_amount: repay, collateral_seized: seize, liquidation_penalty: penalty, synthetic_type: target_symbol, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
     }
-    /// Internal helper – assert caller is in allow‑list
-    fun assert_is_admin(registry: &SynthRegistry, addr: address) {
-        assert!(vec_set::contains(&registry.admin_addrs, &addr), E_NOT_ADMIN);
-    }
-
-    /// Public read-only helper for external modules to verify admin status
-    public fun is_admin(registry: &SynthRegistry, addr: address): bool {
-        vec_set::contains(&registry.admin_addrs, &addr)
-    }
 
     /// INIT – executed once on package publish
     fun init(otw: SYNTHETICS, ctx: &mut TxContext) {
@@ -2749,8 +2479,6 @@ module unxversal::synthetics {
         let syn_table = table::new<String, SyntheticAsset>(ctx);
         let feed_table = table::new<String, vector<u8>>(ctx);
         let listed_symbols = vector::empty<String>();
-        let mut admins = vec_set::empty<address>();
-        vec_set::insert(&mut admins, ctx.sender());
 
         // 5️⃣ Share the SynthRegistry object
         // For now, create a fresh Treasury and capture its ID
@@ -2764,7 +2492,6 @@ module unxversal::synthetics {
             listed_symbols,
             global_params: params,
             paused: false,
-            admin_addrs: admins,
             treasury_id: treasury_id_local,
             num_synthetics: 0,
             collateral_set: false,
@@ -2772,9 +2499,7 @@ module unxversal::synthetics {
         };
         transfer::share_object(registry);
 
-        // 6️⃣ Mint capabilities to deployer (DaddyCap + UX AdminCap token)
-        transfer::public_transfer(DaddyCap { id: object::new(ctx) }, ctx.sender());
-        transfer::public_transfer(AdminCap  { id: object::new(ctx) }, ctx.sender());
+        // Legacy caps removed in favor of centralized AdminRegistry
 
         // 7️⃣ Register Display metadata so wallets can render the registry nicely
         let mut disp = display::new<SynthRegistry>(&publisher, ctx);
@@ -2821,43 +2546,18 @@ module unxversal::synthetics {
         // OracleConfig display is registered within the oracle module to avoid dependency cycles.
     }
 
-    /// Daddy‑level admin management
-    /// Mint a new AdminCap **and** add `new_admin` to `admin_addrs`.
-    /// Can only be invoked by the unique DaddyCap holder.
-    public fun grant_admin(
-        _daddy: &DaddyCap,
-        registry: &mut SynthRegistry,
-        new_admin: address,
-        ctx: &mut TxContext
-    ) {
-        vec_set::insert(&mut registry.admin_addrs, new_admin);
-        transfer::public_transfer(AdminCap { id: object::new(ctx) }, new_admin);
-        event::emit(AdminGranted { admin_addr: new_admin, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-    }
-
-    /// Remove an address from the allow‑list. Any AdminCap tokens that
-    /// address still controls become decorative.
-    public fun revoke_admin(
-        _daddy: &DaddyCap,
-        registry: &mut SynthRegistry,
-        bad_admin: address,
-        ctx: &TxContext
-    ) {
-        vec_set::remove(&mut registry.admin_addrs, &bad_admin);
-        event::emit(AdminRevoked { admin_addr: bad_admin, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-    }
+    // Legacy admin cap flows removed in favor of centralized AdminRegistry
 
     /// Bind the system to a specific collateral coin type C exactly once.
     /// Creates and shares a `CollateralConfig<C>` object and records its ID in the registry.
     /// Also registers Display metadata for `CollateralVault<C>` using a provided `Publisher`.
-    public fun set_collateral<C>(
-        _admin: &AdminCap,
+    public fun set_collateral_admin<C>(
+        reg_admin: &AdminRegistry,
         registry: &mut SynthRegistry,
         publisher: &Publisher,
         ctx: &mut TxContext
     ): display::Display<CollateralVault<C>> {
-        // Allow‑list enforcement
-        assert_is_admin(registry, ctx.sender());
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         // One‑time only
         assert!(!registry.collateral_set, E_COLLATERAL_NOT_SET);
         let cfg = CollateralConfig<C> { id: object::new(ctx) };
@@ -2872,26 +2572,14 @@ module unxversal::synthetics {
     }
 
     /// Update the registry's treasury reference to the concrete `Treasury<C>` selected by governance.
-    public fun set_registry_treasury<C>(
-        _admin: &AdminCap,
+    public fun set_registry_treasury_admin<C>(
+        reg_admin: &AdminRegistry,
         registry: &mut SynthRegistry,
         treasury: &Treasury<C>,
         ctx: &TxContext
     ) {
-        assert_is_admin(registry, ctx.sender());
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         registry.treasury_id = object::id(treasury);
-        event::emit(ParamsUpdated { updater: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-    }
-
-    /// Parameter updates & emergency pause – gated by allow‑list
-    /// Replace **all** global parameters. Consider granular setters in future.
-    public fun update_global_params(
-        registry: &mut SynthRegistry,
-        new_params: GlobalParams,
-        ctx: &TxContext
-    ) {
-        assert_is_admin(registry, ctx.sender());
-        registry.global_params = new_params;
         event::emit(ParamsUpdated { updater: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
@@ -2901,33 +2589,20 @@ module unxversal::synthetics {
         new_params: GlobalParams,
         ctx: &TxContext
     ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         registry.global_params = new_params;
         event::emit(ParamsUpdated { updater: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
-    /// Flip the `paused` flag on. Prevents state‑changing funcs in later phases.
-    public fun emergency_pause(registry: &mut SynthRegistry, ctx: &TxContext) {
-        assert_is_admin(registry, ctx.sender());
-        registry.paused = true;
-        event::emit(EmergencyPauseToggled { new_state: true, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-    }
-
    /// Turn the circuit breaker **off**.
-    public fun resume(registry: &mut SynthRegistry, ctx: &TxContext) {
-        assert_is_admin(registry, ctx.sender());
-        registry.paused = false;
-        event::emit(EmergencyPauseToggled { new_state: false, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-    }
-
     public fun emergency_pause_admin(reg_admin: &AdminRegistry, registry: &mut SynthRegistry, ctx: &TxContext) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         registry.paused = true;
         event::emit(EmergencyPauseToggled { new_state: true, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public fun resume_admin(reg_admin: &AdminRegistry, registry: &mut SynthRegistry, ctx: &TxContext) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()) || is_admin(registry, ctx.sender()), E_NOT_ADMIN);
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         registry.paused = false;
         event::emit(EmergencyPauseToggled { new_state: false, by: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
@@ -2937,8 +2612,6 @@ module unxversal::synthetics {
     // ------------------------
     #[test_only]
     public fun new_registry_for_testing(ctx: &mut TxContext): SynthRegistry {
-        let mut admins = vec_set::empty<address>();
-        vec_set::insert(&mut admins, ctx.sender());
         SynthRegistry {
             id: object::new(ctx),
             synthetics: table::new<String, SyntheticAsset>(ctx),
@@ -2960,7 +2633,6 @@ module unxversal::synthetics {
                 maker_bond_bps: 10,
             },
             paused: false,
-            admin_addrs: admins,
             treasury_id: object::id_from_address(ctx.sender()),
             num_synthetics: 0,
             collateral_set: false,
