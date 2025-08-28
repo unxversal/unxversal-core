@@ -4,9 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Unxversal Synthetics - Trading Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial"></script>
+
     <style>
         * {
             margin: 0;
@@ -1015,110 +1013,193 @@
     </div>
 
     <script>
-        // Price Chart
-        let priceChart;
+        // Price Chart Data
+        let priceData = [];
+        let canvas, ctx;
         
         function initChart() {
-            const ctx = document.getElementById('priceChart').getContext('2d');
+            canvas = document.getElementById('priceChart');
+            ctx = canvas.getContext('2d');
             
-            // Generate sample candlestick data
-            const candles = generateCandlestickData();
+            // Generate initial price data
+            priceData = generatePriceData();
             
-            priceChart = new Chart(ctx, {
-                type: 'candlestick',
-                data: {
-                    datasets: [{
-                        label: 'sETH',
-                        data: candles,
-                        color: {
-                            up: '#00ff00',
-                            down: '#ff0000',
-                            unchanged: '#888'
-                        },
-                        borderColor: {
-                            up: '#00ff00',
-                            down: '#ff0000', 
-                            unchanged: '#888'
-                        }
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            display: false
-                        }
-                    },
-                    scales: {
-                        x: {
-                            type: 'time',
-                            time: {
-                                unit: 'minute',
-                                displayFormats: {
-                                    minute: 'HH:mm',
-                                    hour: 'HH:mm'
-                                }
-                            },
-                            ticks: {
-                                color: '#888',
-                                font: {
-                                    size: 10
-                                },
-                                maxTicksLimit: 8
-                            },
-                            grid: {
-                                color: '#333'
-                            }
-                        },
-                        y: {
-                            position: 'right',
-                            ticks: {
-                                color: '#888',
-                                font: {
-                                    size: 10
-                                },
-                                callback: function(value) {
-                                    return '$' + value.toFixed(2);
-                                }
-                            },
-                            grid: {
-                                color: '#333'
-                            }
-                        }
-                    },
-                    interaction: {
-                        intersect: false,
-                        mode: 'index'
-                    }
-                }
+            // Set canvas size
+            resizeCanvas();
+            
+            // Draw initial chart
+            drawChart();
+            
+            // Handle resize
+            window.addEventListener('resize', () => {
+                resizeCanvas();
+                drawChart();
             });
         }
         
-        // Candlestick sample data generator
-        function generateCandlestickData() {
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+        }
+        
+        function drawChart() {
+            if (!ctx || !priceData.length) return;
+            
+            const width = canvas.width;
+            const height = canvas.height;
+            const padding = 40;
+            const chartWidth = width - padding * 2;
+            const chartHeight = height - padding * 2;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, width, height);
+            
+            // Auto-adjust Y-axis to fit all candles perfectly
+            const allPrices = priceData.flatMap(d => [d.open, d.high, d.low, d.close]);
+            const rawMinPrice = Math.min(...allPrices);
+            const rawMaxPrice = Math.max(...allPrices);
+            const rawRange = rawMaxPrice - rawMinPrice;
+            
+            // Dynamic padding: larger padding for smaller ranges, smaller for larger ranges
+            let paddingPercent = 0.08; // Default 8%
+            if (rawRange < 10) paddingPercent = 0.15; // 15% for small ranges
+            else if (rawRange < 50) paddingPercent = 0.12; // 12% for medium ranges
+            else if (rawRange > 200) paddingPercent = 0.05; // 5% for large ranges
+            
+            const pricePadding = rawRange * paddingPercent;
+            const minPrice = rawMinPrice - pricePadding;
+            const maxPrice = rawMaxPrice + pricePadding;
+            const priceRange = maxPrice - minPrice;
+            
+            // Draw grid lines
+            const isLight = document.body.classList.contains('light-theme');
+            const gridColor = isLight ? '#ddd' : '#333';
+            const textColor = isLight ? '#000' : '#888';
+            
+            ctx.strokeStyle = gridColor;
+            ctx.lineWidth = 1;
+            
+            // Horizontal grid lines
+            for (let i = 0; i <= 5; i++) {
+                const y = padding + (chartHeight / 5) * i;
+                ctx.beginPath();
+                ctx.moveTo(padding, y);
+                ctx.lineTo(width - padding, y);
+                ctx.stroke();
+                
+                // Price labels
+                const price = maxPrice - (priceRange / 5) * i;
+                ctx.fillStyle = textColor;
+                ctx.font = '10px Monaco';
+                ctx.textAlign = 'right';
+                ctx.fillText('$' + price.toFixed(2), width - 5, y + 3);
+            }
+            
+            // Vertical grid lines
+            for (let i = 0; i <= 6; i++) {
+                const x = padding + (chartWidth / 6) * i;
+                ctx.beginPath();
+                ctx.moveTo(x, padding);
+                ctx.lineTo(x, height - padding);
+                ctx.stroke();
+                
+                // Time labels
+                if (i < priceData.length) {
+                    const dataIndex = Math.floor((priceData.length - 1) * (i / 6));
+                    const time = priceData[dataIndex].time;
+                    ctx.fillStyle = textColor;
+                    ctx.font = '10px Monaco';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(time, x, height - 10);
+                }
+            }
+            
+            // Draw candlesticks - THICKER
+            const candleWidth = Math.max(4, Math.min(8, chartWidth / (priceData.length * 2))); // Max 8px, min 4px
+            const wickWidth = 1; // Always 1px for wicks
+            
+            for (let i = 0; i < priceData.length; i++) {
+                const candle = priceData[i];
+                const x = padding + (chartWidth / (priceData.length - 1)) * i;
+                
+                // Calculate positions with bounds checking
+                const openY = Math.max(padding, Math.min(height - padding, height - padding - ((candle.open - minPrice) / priceRange * chartHeight)));
+                const closeY = Math.max(padding, Math.min(height - padding, height - padding - ((candle.close - minPrice) / priceRange * chartHeight)));
+                const highY = Math.max(padding, Math.min(height - padding, height - padding - ((candle.high - minPrice) / priceRange * chartHeight)));
+                const lowY = Math.max(padding, Math.min(height - padding, height - padding - ((candle.low - minPrice) / priceRange * chartHeight)));
+                
+                const isGreen = candle.close >= candle.open;
+                
+                // Draw wick (thin line from high to low)
+                ctx.strokeStyle = isGreen ? '#00ff00' : '#ff0000';
+                ctx.lineWidth = wickWidth;
+                ctx.beginPath();
+                ctx.moveTo(x, highY);
+                ctx.lineTo(x, lowY);
+                ctx.stroke();
+                
+                // Draw candle body (very thin rectangle)
+                const bodyTop = Math.min(openY, closeY);
+                const bodyHeight = Math.abs(closeY - openY);
+                
+                if (isGreen) {
+                    ctx.fillStyle = '#00ff00';
+                    ctx.strokeStyle = '#00ff00';
+                } else {
+                    ctx.fillStyle = '#ff0000';
+                    ctx.strokeStyle = '#ff0000';
+                }
+                
+                // Draw thin body
+                ctx.lineWidth = 1;
+                const halfWidth = candleWidth / 2;
+                ctx.fillRect(x - halfWidth, bodyTop, candleWidth, Math.max(1, bodyHeight));
+                
+                // Add border to body for definition
+                ctx.strokeRect(x - halfWidth, bodyTop, candleWidth, Math.max(1, bodyHeight));
+            }
+        }
+        
+        // Price data generator for candlesticks
+        function generatePriceData() {
             const data = [];
             let current = 2445.75;
             
-            for (let i = 0; i < 80; i++) {
-                const t = new Date();
-                t.setMinutes(t.getMinutes() - (79 - i) * 5); // 5-minute candles
-                
+            // Generate realistic candlestick data
+            for (let i = 0; i < 60; i++) {
                 const open = current;
-                const direction = (Math.random() - 0.5) * 15; // ±$7.5 move baseline
-                const trend = Math.sin(i / 12) * 6; // gentle oscillation
-                const close = open + direction + trend;
-                const high = Math.max(open, close) + Math.random() * 5;
-                const low = Math.min(open, close) - Math.random() * 5;
                 
-                current = Math.max(2300, Math.min(2600, close));
+                // Realistic price movements with trend and volatility
+                const volatility = 1 + Math.sin(i / 20) * 0.5;
+                const direction = (Math.random() - 0.5) * 12 * volatility; // ±$6 moves for more variation
+                const trend = Math.sin(i / 25) * 5; // Stronger trend for better auto-scaling demo
+                
+                const close = open + direction + trend;
+                
+                // Generate high and low with wicks
+                const bodyRange = Math.abs(close - open);
+                const wickSize = bodyRange * (0.2 + Math.random() * 0.8); // Variable wick size
+                
+                const high = Math.max(open, close) + Math.random() * wickSize;
+                const low = Math.min(open, close) - Math.random() * wickSize;
+                
+                current = close;
+                
+                // Keep prices in reasonable range but allow more variation for auto-scaling demo
+                current = Math.max(2300, Math.min(2600, current));
+                
+                // Generate time label
+                const now = new Date();
+                now.setMinutes(now.getMinutes() - (60 - i) * 2);
+                const timeStr = now.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
                 
                 data.push({
-                    x: t,
-                    o: round2(open),
-                    h: round2(high),
-                    l: round2(low),
-                    c: round2(current)
+                    open: round2(open),
+                    high: round2(Math.max(2300, Math.min(2600, high))),
+                    low: round2(Math.max(2300, Math.min(2600, low))),
+                    close: round2(current),
+                    time: timeStr
                 });
             }
             return data;
@@ -1155,11 +1236,9 @@
             updateMintBurnForms(symbol);
             
             // Regenerate chart data for new symbol
-            if (priceChart) {
-                const newCandles = generateCandlestickData();
-                priceChart.data.datasets[0].data = newCandles;
-                priceChart.data.datasets[0].label = symbol;
-                priceChart.update();
+            if (ctx) {
+                priceData = generatePriceData();
+                drawChart();
             }
         }
         
@@ -1197,9 +1276,8 @@
             element.classList.add('active');
             
             // Regenerate chart data for new timeframe
-            const newCandles = generateCandlestickData();
-            priceChart.data.datasets[0].data = newCandles;
-            priceChart.update();
+            priceData = generatePriceData();
+            drawChart();
         }
         
         // Trading Tabs
@@ -1254,15 +1332,9 @@
         }
         
         function updateChartTheme(isLight) {
-            if (priceChart) {
-                const gridColor = isLight ? '#ddd' : '#333';
-                const textColor = isLight ? '#000' : '#888';
-                
-                priceChart.options.scales.x.ticks.color = textColor;
-                priceChart.options.scales.x.grid.color = gridColor;
-                priceChart.options.scales.y.ticks.color = textColor;
-                priceChart.options.scales.y.grid.color = gridColor;
-                priceChart.update();
+            // Redraw chart with new theme
+            if (ctx) {
+                drawChart();
             }
         }
         
@@ -1278,69 +1350,12 @@
             }
         }
         
-        // Real-time price updates
-        function updatePrices() {
-            const priceElements = document.querySelectorAll('.market-price');
-            priceElements.forEach(priceEl => {
-                const currentPrice = parseFloat(priceEl.textContent.replace('$', '').replace(',', ''));
-                if (!isNaN(currentPrice)) {
-                    const change = (Math.random() - 0.5) * 0.01;
-                    const newPrice = currentPrice * (1 + change);
-                    priceEl.textContent = '$' + newPrice.toLocaleString('en-US', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2
-                    });
-                }
-            });
-            
-            // Update header ticker
-            const tickerPrices = document.querySelectorAll('.market-ticker .ticker-item span:nth-child(2)');
-            tickerPrices.forEach(priceEl => {
-                const currentPrice = parseFloat(priceEl.textContent.replace('$', '').replace(',', ''));
-                if (!isNaN(currentPrice)) {
-                    const change = (Math.random() - 0.5) * 0.01;
-                    const newPrice = currentPrice * (1 + change);
-                    priceEl.textContent = '$' + newPrice.toLocaleString('en-US', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2
-                    });
-                }
-            });
-            
-            // Append a new candle
-            if (priceChart && priceChart.data && priceChart.data.datasets[0]) {
-                const ds = priceChart.data.datasets[0].data;
-                if (ds.length > 0) {
-                    const last = ds[ds.length - 1];
-                    const open = last.c;
-                    const drift = (Math.random() - 0.5) * 8;
-                    const close = round2(open + drift);
-                    const high = round2(Math.max(open, close) + Math.random() * 3);
-                    const low = round2(Math.min(open, close) - Math.random() * 3);
-                    const t = new Date();
-                    
-                    // shift and push new candle
-                    ds.shift();
-                    ds.push({ 
-                        x: t, 
-                        o: open, 
-                        h: high, 
-                        l: low, 
-                        c: close 
-                    });
-                    
-                    priceChart.update('none');
-                }
-            }
-        }
+        // Static demo - no real-time updates needed for proof of concept
         
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
             loadTheme();
             initChart();
-            
-            // Update prices every 3 seconds
-            setInterval(updatePrices, 3000);
         });
     </script>
 </body>
