@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unxversal Synthetics Protocol - Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Monaco', 'Consolas', monospace;
+            background: #000000;
+            color: #ffffff;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: bold;
+            color: #ffffff;
+            margin-bottom: 10px;
+        }
+
+        .wallet-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #111;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #333;
+            border: none;
+            color: #ffffff;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 12px;
+            z-index: 1000;
+            transition: all 0.3s ease;
+        }
+
+        .theme-toggle:hover {
+            background: #555;
+        }
+
+        .address {
+            font-family: monospace;
+            color: #888;
+        }
+
+        .balance {
+            color: #ffffff;
+            font-weight: bold;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .panel {
+            background: #111;
+            padding: 20px;
+            min-height: 400px;
+        }
+
+        .panel h2 {
+            color: #ffffff;
+            margin-bottom: 20px;
+            font-size: 18px;
+            padding-bottom: 10px;
+        }
+
+        .vault-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat {
+            background: #0a0a0a;
+            padding: 15px;
+        }
+
+        .stat-label {
+            color: #888;
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .health-good { color: #00ff00; }
+        .health-warning { color: #ffffff; }
+        .health-danger { color: #ff0000; }
+
+        .debt-list {
+            margin-bottom: 20px;
+        }
+
+        .debt-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background: #0a0a0a;
+            margin-bottom: 5px;
+        }
+
+        .debt-symbol {
+            font-weight: bold;
+            color: #ffffff;
+        }
+
+        .debt-amount {
+            color: #ffffff;
+        }
+
+        .debt-value {
+            color: #888;
+            font-size: 12px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #888;
+            font-size: 12px;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 10px;
+            background: #0a0a0a;
+            border: none;
+            color: #ffffff;
+            font-family: inherit;
+        }
+
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+        }
+
+        .btn {
+            padding: 12px 20px;
+            background: #ffffff;
+            color: #000;
+            border: none;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: bold;
+            width: 100%;
+            margin-bottom: 10px;
+            transition: opacity 0.2s;
+        }
+
+        .btn:hover {
+            opacity: 0.8;
+        }
+
+        .btn-danger {
+            background: #ff0000;
+            color: #fff;
+        }
+
+        .btn-secondary {
+            background: #333;
+            color: #ffffff;
+        }
+
+        .market-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .market-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            background: #0a0a0a;
+            margin-bottom: 5px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .market-item:hover {
+            background: #1a1a1a;
+        }
+
+        .market-symbol {
+            font-weight: bold;
+            color: #ffffff;
+        }
+
+        .market-price {
+            color: #ffffff;
+        }
+
+        .market-change {
+            font-size: 12px;
+        }
+
+        .change-positive { color: #00ff00; }
+        .change-negative { color: #ff0000; }
+
+        .order-book {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .asks, .bids {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .order-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px;
+            font-size: 12px;
+        }
+
+        .ask-price { color: #ff0000; }
+        .bid-price { color: #00ff00; }
+
+        .activity-log {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .activity-item {
+            padding: 10px;
+            background: #0a0a0a;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+
+        .activity-time {
+            color: #888;
+        }
+
+        .activity-type {
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .mint { color: #00ff00; }
+        .burn { color: #ff0000; }
+        .trade { color: #ffffff; }
+
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .tab.active {
+            color: #ffffff;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .liquidation-warning {
+            background: #111;
+            padding: 15px;
+            margin-bottom: 20px;
+            color: #ffffff;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #333;
+            margin-top: 5px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+
+        .cr-excellent { background: #00ff00; }
+        .cr-good { background: #00ff00; }
+        .cr-warning { background: #ffffff; }
+        .cr-danger { background: #ff0000; }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        .three-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+        }
+
+        /* Light Theme */
+        body.light-theme {
+            background: #ffffff;
+            color: #000000;
+        }
+
+        body.light-theme .logo {
+            color: #000000;
+        }
+
+        body.light-theme .wallet-info {
+            background: #f5f5f5;
+        }
+
+        body.light-theme .balance {
+            color: #000000;
+        }
+
+        body.light-theme .panel {
+            background: #f5f5f5;
+        }
+
+        body.light-theme .panel h2 {
+            color: #000000;
+        }
+
+        body.light-theme .stat {
+            background: #ffffff;
+        }
+
+        body.light-theme .debt-item {
+            background: #ffffff;
+        }
+
+        body.light-theme .debt-symbol {
+            color: #000000;
+        }
+
+        body.light-theme .debt-amount {
+            color: #000000;
+        }
+
+        body.light-theme .form-group input,
+        body.light-theme .form-group select {
+            background: #ffffff;
+            color: #000000;
+        }
+
+        body.light-theme .btn {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        body.light-theme .btn-secondary {
+            background: #ddd;
+            color: #000000;
+        }
+
+        body.light-theme .market-item {
+            background: #ffffff;
+        }
+
+        body.light-theme .market-item:hover {
+            background: #f0f0f0;
+        }
+
+        body.light-theme .market-symbol {
+            color: #000000;
+        }
+
+        body.light-theme .market-price {
+            color: #000000;
+        }
+
+        body.light-theme .activity-item {
+            background: #ffffff;
+        }
+
+        body.light-theme .tab.active {
+            color: #000000;
+        }
+
+        body.light-theme .liquidation-warning {
+            background: #f5f5f5;
+            color: #000000;
+        }
+
+        body.light-theme .progress-bar {
+            background: #ddd;
+        }
+
+        body.light-theme .cr-warning {
+            background: #000000;
+        }
+
+        body.light-theme .trade {
+            color: #000000;
+        }
+
+        body.light-theme .theme-toggle {
+            background: #ddd;
+            color: #000000;
+        }
+
+        body.light-theme .theme-toggle:hover {
+            background: #bbb;
+        }
+    </style>
+</head>
+<body>
+    <button class="theme-toggle" onclick="toggleTheme()">🌙 DARK</button>
+    <div class="container">
+        <header>
+            <div class="logo">UNXVERSAL SYNTHETICS</div>
+            <div class="wallet-info">
+                <div>
+                    <div class="address">0x742d35cc6ba7827b5b8b1c8f8e3d4d5e6f7a8b9c</div>
+                    <div>Connected • Mainnet</div>
+                </div>
+                <div class="balance">2,450.67 SUI</div>
+            </div>
+        </header>
+
+        <div class="grid">
+            <!-- Vault Management Panel -->
+            <div class="panel">
+                <h2>My Collateral Vault</h2>
+                
+                <div class="vault-stats">
+                    <div class="stat">
+                        <div class="stat-label">COLLATERAL DEPOSITED</div>
+                        <div class="stat-value">12,500.00 USDC</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-label">TOTAL DEBT VALUE</div>
+                        <div class="stat-value">7,340.25 USD</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-label">COLLATERAL RATIO</div>
+                        <div class="stat-value health-good">170.3%</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill cr-excellent" style="width: 70%"></div>
+                        </div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-label">LIQUIDATION THRESHOLD</div>
+                        <div class="stat-value">120.0%</div>
+                    </div>
+                </div>
+
+                <div class="debt-list">
+                    <h3 style="color: #888; margin-bottom: 10px; font-size: 14px;">SYNTHETIC DEBT POSITIONS</h3>
+                    <div class="debt-item">
+                        <div>
+                            <div class="debt-symbol">sUSD</div>
+                            <div class="debt-value">$1.00 • MCR: 150%</div>
+                        </div>
+                        <div>
+                            <div class="debt-amount">2,450.50 sUSD</div>
+                            <div class="debt-value">$2,450.50</div>
+                        </div>
+                    </div>
+                    <div class="debt-item">
+                        <div>
+                            <div class="debt-symbol">sETH</div>
+                            <div class="debt-value">$2,445.75 • MCR: 150%</div>
+                        </div>
+                        <div>
+                            <div class="debt-amount">2.00 sETH</div>
+                            <div class="debt-value">$4,891.50</div>
+                        </div>
+                    </div>
+                    <div class="debt-item">
+                        <div>
+                            <div class="debt-symbol">sBTC</div>
+                            <div class="debt-value">$99,650.00 • MCR: 150%</div>
+                        </div>
+                        <div>
+                            <div class="debt-amount">-1.00 sBTC</div>
+                            <div class="debt-value">-$99,650.00</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tabs">
+                    <button class="tab active" onclick="switchTab('deposit')">DEPOSIT</button>
+                    <button class="tab" onclick="switchTab('withdraw')">WITHDRAW</button>
+                </div>
+
+                <div id="deposit" class="tab-content active">
+                    <div class="form-group">
+                        <label>COLLATERAL AMOUNT (USDC)</label>
+                        <input type="number" placeholder="0.00" value="1000">
+                    </div>
+                    <button class="btn">DEPOSIT COLLATERAL</button>
+                </div>
+
+                <div id="withdraw" class="tab-content">
+                    <div class="form-group">
+                        <label>WITHDRAW AMOUNT (USDC)</label>
+                        <input type="number" placeholder="0.00">
+                    </div>
+                    <div style="color: #888; font-size: 12px; margin-bottom: 15px;">
+                        Max withdrawable: 2,156.75 USDC (maintains 150% CR)
+                    </div>
+                    <button class="btn btn-secondary">WITHDRAW COLLATERAL</button>
+                </div>
+            </div>
+
+            <!-- Mint/Burn Panel -->
+            <div class="panel">
+                <h2>Mint & Burn Synthetics</h2>
+                
+                <div class="tabs">
+                    <button class="tab active" onclick="switchTab('mint')">MINT</button>
+                    <button class="tab" onclick="switchTab('burn')">BURN</button>
+                </div>
+
+                <div id="mint" class="tab-content active">
+                    <div class="form-group">
+                        <label>SYNTHETIC ASSET</label>
+                        <select>
+                            <option>sUSD - Synthetic USD</option>
+                            <option>sETH - Synthetic Ethereum</option>
+                            <option>sBTC - Synthetic Bitcoin</option>
+                            <option>sSOL - Synthetic Solana</option>
+                            <option>sAVAX - Synthetic Avalanche</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>AMOUNT TO MINT</label>
+                        <input type="number" placeholder="0.00" id="mintAmount">
+                    </div>
+                    <div class="form-group">
+                        <label>CURRENT PRICE</label>
+                        <input type="text" value="$2,445.75" readonly style="background: #333;">
+                    </div>
+                    <div style="color: #888; font-size: 12px; margin-bottom: 15px;">
+                        • Mint Fee: 0.5% ($12.23)<br>
+                        • New CR after mint: 165.2%<br>
+                        • Required collateral: $3,668.63
+                    </div>
+                    <button class="btn">MINT SYNTHETIC</button>
+                </div>
+
+                <div id="burn" class="tab-content">
+                    <div class="form-group">
+                        <label>SYNTHETIC ASSET</label>
+                        <select>
+                            <option>sUSD - 2,450.50 available</option>
+                            <option>sETH - 2.00 available</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>AMOUNT TO BURN</label>
+                        <input type="number" placeholder="0.00">
+                    </div>
+                    <div style="color: #888; font-size: 12px; margin-bottom: 15px;">
+                        • Burn Fee: 0.3% ($7.35)<br>
+                        • Collateral freed: $2,445.75<br>
+                        • New CR after burn: 185.4%
+                    </div>
+                    <button class="btn btn-danger">BURN SYNTHETIC</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Market Data & Trading -->
+        <div class="grid">
+            <div class="panel">
+                <h2>Synthetic Markets</h2>
+                <div class="market-list">
+                    <div class="market-item" onclick="selectMarket('sUSD')">
+                        <div>
+                            <div class="market-symbol">sUSD/USDC</div>
+                            <div style="font-size: 12px; color: #888;">Synthetic USD</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="market-price">$1.0000</div>
+                            <div class="market-change change-positive">+0.01%</div>
+                        </div>
+                    </div>
+                    <div class="market-item" onclick="selectMarket('sETH')">
+                        <div>
+                            <div class="market-symbol">sETH/USDC</div>
+                            <div style="font-size: 12px; color: #888;">Synthetic Ethereum</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="market-price">$2,445.75</div>
+                            <div class="market-change change-positive">+2.34%</div>
+                        </div>
+                    </div>
+                    <div class="market-item" onclick="selectMarket('sBTC')">
+                        <div>
+                            <div class="market-symbol">sBTC/USDC</div>
+                            <div style="font-size: 12px; color: #888;">Synthetic Bitcoin</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="market-price">$99,650.00</div>
+                            <div class="market-change change-negative">-1.45%</div>
+                        </div>
+                    </div>
+                    <div class="market-item" onclick="selectMarket('sSOL')">
+                        <div>
+                            <div class="market-symbol">sSOL/USDC</div>
+                            <div style="font-size: 12px; color: #888;">Synthetic Solana</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="market-price">$245.67</div>
+                            <div class="market-change change-positive">+5.78%</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="order-book">
+                                    <div>
+                    <h4 style="color: #ff0000; margin-bottom: 10px; font-size: 12px;">ASKS</h4>
+                        <div class="asks">
+                            <div class="order-row">
+                                <span class="ask-price">2,446.25</span>
+                                <span>0.5</span>
+                            </div>
+                            <div class="order-row">
+                                <span class="ask-price">2,446.00</span>
+                                <span>1.2</span>
+                            </div>
+                            <div class="order-row">
+                                <span class="ask-price">2,445.85</span>
+                                <span>0.8</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <h4 style="color: #00ff00; margin-bottom: 10px; font-size: 12px;">BIDS</h4>
+                        <div class="bids">
+                            <div class="order-row">
+                                <span class="bid-price">2,445.50</span>
+                                <span>0.7</span>
+                            </div>
+                            <div class="order-row">
+                                <span class="bid-price">2,445.25</span>
+                                <span>1.5</span>
+                            </div>
+                            <div class="order-row">
+                                <span class="bid-price">2,445.00</span>
+                                <span>2.1</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>Trading Interface</h2>
+                
+                <div class="tabs">
+                    <button class="tab active" onclick="switchTab('buy')">BUY</button>
+                    <button class="tab" onclick="switchTab('sell')">SELL</button>
+                </div>
+
+                <div id="buy" class="tab-content active">
+                    <div class="form-group">
+                        <label>MARKET</label>
+                        <select>
+                            <option>sETH/USDC</option>
+                            <option>sBTC/USDC</option>
+                            <option>sUSD/USDC</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>ORDER TYPE</label>
+                        <select>
+                            <option>Limit Order</option>
+                            <option>Market Order</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>PRICE (USDC)</label>
+                        <input type="number" placeholder="2445.75" value="2445.75">
+                    </div>
+                    <div class="form-group">
+                        <label>SIZE (sETH)</label>
+                        <input type="number" placeholder="0.00">
+                    </div>
+                    <div class="form-group">
+                        <label>EXPIRY</label>
+                        <select>
+                            <option>Good Till Cancelled</option>
+                            <option>1 Hour</option>
+                            <option>24 Hours</option>
+                            <option>7 Days</option>
+                        </select>
+                    </div>
+                    <div style="color: #888; font-size: 12px; margin-bottom: 15px;">
+                        • Maker Bond: 0.10% ($2.45)<br>
+                        • Trading Fee: 0.5% ($12.23)<br>
+                        • Required Collateral: $2,460.43
+                    </div>
+                    <button class="btn">PLACE BUY ORDER</button>
+                </div>
+
+                <div id="sell" class="tab-content">
+                    <div class="form-group">
+                        <label>AVAILABLE BALANCE</label>
+                        <input type="text" value="2.00 sETH" readonly style="background: #333;">
+                    </div>
+                    <div class="form-group">
+                        <label>PRICE (USDC)</label>
+                        <input type="number" placeholder="2445.75" value="2445.75">
+                    </div>
+                    <div class="form-group">
+                        <label>SIZE (sETH)</label>
+                        <input type="number" placeholder="0.00" max="2.00">
+                    </div>
+                    <div style="color: #888; font-size: 12px; margin-bottom: 15px;">
+                        • No additional collateral required<br>
+                        • Trading Fee: 0.5% (paid by buyer)<br>
+                        • Will reduce your debt position
+                    </div>
+                    <button class="btn btn-danger">PLACE SELL ORDER</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Activity & Orders -->
+        <div class="panel full-width">
+            <h2>Recent Activity & Open Orders</h2>
+            
+            <div class="three-col">
+                <div>
+                    <h3 style="color: #888; margin-bottom: 15px; font-size: 14px;">OPEN ORDERS</h3>
+                    <div class="activity-item">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <span class="activity-type" style="color: #00ff00;">BUY</span>
+                                <span>1.5 sETH @ $2,440.00</span>
+                            </div>
+                            <button class="btn btn-danger" style="width: auto; padding: 5px 10px; font-size: 10px;">CANCEL</button>
+                        </div>
+                        <div class="activity-time">Expires in 23h 45m</div>
+                    </div>
+                    <div class="activity-item">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <span class="activity-type" style="color: #ff0000;">SELL</span>
+                                <span>1.0 sBTC @ $100,000.00</span>
+                            </div>
+                            <button class="btn btn-danger" style="width: auto; padding: 5px 10px; font-size: 10px;">CANCEL</button>
+                        </div>
+                        <div class="activity-time">Good till cancelled</div>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 style="color: #888; margin-bottom: 15px; font-size: 14px;">RECENT TRADES</h3>
+                    <div class="activity-item">
+                        <div>
+                            <span class="activity-type trade">MATCHED</span>
+                            <span>Sold 0.5 sETH @ $2,445.75</span>
+                        </div>
+                        <div class="activity-time">2 minutes ago</div>
+                    </div>
+                    <div class="activity-item">
+                        <div>
+                            <span class="activity-type mint">MINTED</span>
+                            <span>2.0 sETH • Fee: $24.46</span>
+                        </div>
+                        <div class="activity-time">1 hour ago</div>
+                    </div>
+                    <div class="activity-item">
+                        <div>
+                            <span class="activity-type burn">BURNED</span>
+                            <span>500.0 sUSD • Fee: $1.50</span>
+                        </div>
+                        <div class="activity-time">3 hours ago</div>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 style="color: #888; margin-bottom: 15px; font-size: 14px;">VAULT ACTIVITY</h3>
+                    <div class="activity-item">
+                        <div>
+                            <span class="activity-type" style="color: #ffffff;">DEPOSIT</span>
+                            <span>1,000.00 USDC</span>
+                        </div>
+                        <div class="activity-time">4 hours ago</div>
+                    </div>
+                    <div class="activity-item">
+                        <div>
+                            <span class="activity-type" style="color: #ffffff;">ACCRUE</span>
+                            <span>Stability fee: +2.1 sETH</span>
+                        </div>
+                        <div class="activity-time">1 day ago</div>
+                    </div>
+                    <div class="activity-item">
+                        <div>
+                            <span class="activity-type" style="color: #ffffff;">WITHDRAW</span>
+                            <span>500.00 USDC</span>
+                        </div>
+                        <div class="activity-time">2 days ago</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Risk Management Warning -->
+        <div class="liquidation-warning" style="margin-top: 30px;">
+            <h3 style="margin-bottom: 10px;">⚠️ RISK MANAGEMENT</h3>
+            <p>Your collateral ratio is currently <strong>170.3%</strong>. Monitor market prices and maintain adequate collateral to avoid liquidation below <strong>120%</strong>. Consider setting up automated alerts or using stop-loss orders to manage your positions.</p>
+        </div>
+    </div>
+
+    <script>
+        function switchTab(tabName) {
+            // Hide all tab contents
+            const contents = document.querySelectorAll('.tab-content');
+            contents.forEach(content => content.classList.remove('active'));
+            
+            // Remove active class from all tabs
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
+            
+            // Show selected tab content
+            const targetContent = document.getElementById(tabName);
+            if (targetContent) {
+                targetContent.classList.add('active');
+            }
+            
+            // Add active class to clicked tab
+            event.target.classList.add('active');
+        }
+
+        function selectMarket(symbol) {
+            // Highlight selected market and update trading interface
+            const marketItems = document.querySelectorAll('.market-item');
+            marketItems.forEach(item => item.style.background = '#0a0a0a');
+            event.currentTarget.style.background = '#1a1a1a';
+            
+            // Update trading interface with selected market
+            const selects = document.querySelectorAll('select');
+            selects.forEach(select => {
+                if (select.options[0].textContent.includes('/USDC')) {
+                    select.value = select.options[0].value;
+                }
+            });
+        }
+
+        // Simulate real-time price updates
+        function updatePrices() {
+            const prices = document.querySelectorAll('.market-price');
+            prices.forEach(price => {
+                const currentPrice = parseFloat(price.textContent.replace('$', '').replace(',', ''));
+                const change = (Math.random() - 0.5) * 0.01; // ±0.5% change
+                const newPrice = currentPrice * (1 + change);
+                price.textContent = '$' + newPrice.toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                });
+            });
+        }
+
+        // Update CR color based on value
+        function updateCRIndicator() {
+            const crElement = document.querySelector('.health-good');
+            const progressBar = document.querySelector('.progress-fill');
+            const crValue = parseFloat(crElement.textContent);
+            
+            if (crValue >= 200) {
+                crElement.className = 'stat-value health-good';
+                progressBar.className = 'progress-fill cr-excellent';
+            } else if (crValue >= 150) {
+                crElement.className = 'stat-value health-good';
+                progressBar.className = 'progress-fill cr-good';
+            } else if (crValue >= 130) {
+                crElement.className = 'stat-value health-warning';
+                progressBar.className = 'progress-fill cr-warning';
+            } else {
+                crElement.className = 'stat-value health-danger';
+                progressBar.className = 'progress-fill cr-danger';
+            }
+        }
+
+        // Theme toggle functionality
+        function toggleTheme() {
+            const body = document.body;
+            const themeButton = document.querySelector('.theme-toggle');
+            
+            if (body.classList.contains('light-theme')) {
+                body.classList.remove('light-theme');
+                themeButton.innerHTML = '🌙 DARK';
+                localStorage.setItem('theme', 'dark');
+            } else {
+                body.classList.add('light-theme');
+                themeButton.innerHTML = '☀️ LIGHT';
+                localStorage.setItem('theme', 'light');
+            }
+        }
+
+        // Load saved theme
+        function loadTheme() {
+            const savedTheme = localStorage.getItem('theme');
+            const themeButton = document.querySelector('.theme-toggle');
+            
+            if (savedTheme === 'light') {
+                document.body.classList.add('light-theme');
+                themeButton.innerHTML = '☀️ LIGHT';
+            } else {
+                themeButton.innerHTML = '🌙 DARK';
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            loadTheme();
+            updateCRIndicator();
+            // Update prices every 5 seconds
+            setInterval(updatePrices, 5000);
+        });
+
+        // Add event listeners for real-time calculations
+        document.getElementById('mintAmount')?.addEventListener('input', function() {
+            const amount = parseFloat(this.value) || 0;
+            const price = 2445.75;
+            const fee = (amount * price * 0.005);
+            const requiredCollateral = amount * price * 1.5;
+            
+            // Update the info display
+            const infoDiv = this.parentElement.nextElementSibling;
+            if (infoDiv) {
+                infoDiv.innerHTML = `
+                    • Mint Fee: 0.5% ($${fee.toFixed(2)})<br>
+                    • New CR after mint: ${((12500 / (7340.25 + amount * price)) * 100).toFixed(1)}%<br>
+                    • Required collateral: $${requiredCollateral.toFixed(2)}
+                `;
+            }
+        });
+    </script>
+</body>
+</html>
