@@ -25,10 +25,11 @@ module unxversal::lending {
 
     // Synthetics integration
     use switchboard::aggregator::Aggregator;
-    use unxversal::oracle::{OracleConfig, OracleRegistry, get_price_for_symbol, get_price_scaled_1e6};
+    use unxversal::oracle::{OracleConfig, OracleRegistry, get_price_scaled_1e6};
     use unxversal::treasury::{Treasury, BotRewardsTreasury};
     use unxversal::unxv::UNXV;
     use unxversal::synthetics::{Self as Synth, SynthRegistry, CollateralVault, CollateralConfig};
+    use unxversal::synthetics::{SynthLendingReceipt};
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     // Remove hardcoded USDC; lending remains generic and integrates with chosen collateral C
 
@@ -126,7 +127,7 @@ module unxversal::lending {
         prices: Table<String, u64>,
     }
 
-    public entry fun new_price_set(ctx: &mut TxContext) {
+    public fun new_price_set(ctx: &mut TxContext) {
         let ps = PriceSet { id: object::new(ctx), prices: table::new<String, u64>(ctx) };
         transfer::public_transfer(ps, ctx.sender());
     }
@@ -590,18 +591,18 @@ module unxversal::lending {
     /*******************************
     * Admin – manage allow-list & params
     *******************************/
-    public entry fun grant_admin(_daddy: &LendingDaddyCap, reg: &mut LendingRegistry, _admin_reg: &AdminRegistry, new_admin: address) {
+    public fun grant_admin(_daddy: &LendingDaddyCap, reg: &mut LendingRegistry, _admin_reg: &AdminRegistry, new_admin: address) {
         // mirror into legacy list and central admin registry during migration
         vec_set::insert(&mut reg.admin_addrs, new_admin);
         // Central AdminRegistry updated via separate governance flow
     }
 
-    public entry fun revoke_admin(_daddy: &LendingDaddyCap, reg: &mut LendingRegistry, _admin_reg: &AdminRegistry, bad: address) {
+    public fun revoke_admin(_daddy: &LendingDaddyCap, reg: &mut LendingRegistry, _admin_reg: &AdminRegistry, bad: address) {
         vec_set::remove(&mut reg.admin_addrs, &bad);
         // Central AdminRegistry updated via separate governance flow
     }
 
-    public entry fun add_supported_asset(
+    public fun add_supported_asset(
         _admin: &LendingAdminCap,
         reg: &mut LendingRegistry,
         admin_reg: &AdminRegistry,
@@ -624,7 +625,7 @@ module unxversal::lending {
         table::add(&mut reg.interest_rate_models, symbol, InterestRateModel { base_rate_bps: irm_base_bps, slope_bps: irm_slope_bps, optimal_utilization_bps: irm_opt_util_bps });
     }
 
-    public entry fun set_asset_params(
+    public fun set_asset_params(
         _admin: &LendingAdminCap,
         reg: &mut LendingRegistry,
         admin_reg: &AdminRegistry,
@@ -648,7 +649,7 @@ module unxversal::lending {
         a.liq_penalty_bps = liq_penalty_bps;
     }
 
-    public entry fun set_asset_caps(
+    public fun set_asset_caps(
         _admin: &LendingAdminCap,
         reg: &mut LendingRegistry,
         admin_reg: &AdminRegistry,
@@ -668,10 +669,10 @@ module unxversal::lending {
         a.max_tx_borrow_units = max_tx_borrow_units;
     }
 
-    public entry fun pause(_admin: &LendingAdminCap, reg: &mut LendingRegistry, admin_reg: &AdminRegistry, ctx: &TxContext) { assert_is_admin(reg, admin_reg, ctx.sender()); reg.paused = true; }
-    public entry fun resume(_admin: &LendingAdminCap, reg: &mut LendingRegistry, admin_reg: &AdminRegistry, ctx: &TxContext) { assert_is_admin(reg, admin_reg, ctx.sender()); reg.paused = false; }
+    public fun pause(_admin: &LendingAdminCap, reg: &mut LendingRegistry, admin_reg: &AdminRegistry, ctx: &TxContext) { assert_is_admin(reg, admin_reg, ctx.sender()); reg.paused = true; }
+    public fun resume(_admin: &LendingAdminCap, reg: &mut LendingRegistry, admin_reg: &AdminRegistry, ctx: &TxContext) { assert_is_admin(reg, admin_reg, ctx.sender()); reg.paused = false; }
 
-    public entry fun set_global_params(
+    public fun set_global_params(
         _admin: &LendingAdminCap,
         reg: &mut LendingRegistry,
         admin_reg: &AdminRegistry,
@@ -686,7 +687,7 @@ module unxversal::lending {
         gp.flash_loan_fee_bps = flash_loan_fee_bps;
     }
 
-    public entry fun set_points_and_splits(
+    public fun set_points_and_splits(
         _admin: &LendingAdminCap,
         reg: &mut LendingRegistry,
         admin_reg: &AdminRegistry,
@@ -707,7 +708,7 @@ module unxversal::lending {
     /*******************************
     * Pool lifecycle (admin-only)
     *******************************/
-    public entry fun create_pool<T>(_admin: &LendingAdminCap, reg: &mut LendingRegistry, admin_reg: &AdminRegistry, asset_symbol: String, publisher: &Publisher, ctx: &mut TxContext) {
+    public fun create_pool<T>(_admin: &LendingAdminCap, reg: &mut LendingRegistry, admin_reg: &AdminRegistry, asset_symbol: String, publisher: &Publisher, ctx: &mut TxContext) {
         assert_is_admin(reg, admin_reg, ctx.sender());
         assert!(!reg.paused, 1000);
         assert!(table::contains(&reg.supported_assets, clone_string(&asset_symbol)), E_UNKNOWN_ASSET);
@@ -742,7 +743,7 @@ module unxversal::lending {
     /*******************************
     * User Account lifecycle
     *******************************/
-    public entry fun open_account(ctx: &mut TxContext) {
+    public fun open_account(ctx: &mut TxContext) {
         let acct = UserAccount {
             id: object::new(ctx),
             owner: ctx.sender(),
@@ -759,7 +760,7 @@ module unxversal::lending {
     /*******************************
     * Core operations: supply / withdraw
     *******************************/
-    public entry fun supply<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, acct: &mut UserAccount, mut coins: Coin<T>, amount: u64, clock: &Clock, ctx: &mut TxContext) {
+    public fun supply<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, acct: &mut UserAccount, mut coins: Coin<T>, amount: u64, clock: &Clock, ctx: &mut TxContext) {
         assert!(!reg.paused, 1000);
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
         assert!(amount > 0, E_ZERO_AMOUNT);
@@ -794,7 +795,7 @@ module unxversal::lending {
         event::emit(AssetSupplied { user: ctx.sender(), asset: sym, amount, new_balance: new_units, timestamp: sui::clock::timestamp_ms(clock) });
     }
 
-    public entry fun withdraw<T>(
+    public fun withdraw<T>(
         reg: &LendingRegistry,
         pool: &mut LendingPool<T>,
         acct: &mut UserAccount,
@@ -849,7 +850,7 @@ module unxversal::lending {
     /*******************************
     * Core operations: borrow / repay
     *******************************/
-    public entry fun borrow<T>(
+    public fun borrow<T>(
         reg: &LendingRegistry,
         pool: &mut LendingPool<T>,
         acct: &mut UserAccount,
@@ -902,7 +903,7 @@ module unxversal::lending {
         // prices set is read-only; nothing to consume
     }
 
-    public entry fun repay<T>(_reg: &LendingRegistry, pool: &mut LendingPool<T>, acct: &mut UserAccount, payment: Coin<T>, clock: &Clock, ctx: &mut TxContext) {
+    public fun repay<T>(_reg: &LendingRegistry, pool: &mut LendingPool<T>, acct: &mut UserAccount, payment: Coin<T>, clock: &Clock, ctx: &mut TxContext) {
         assert!(acct.owner == ctx.sender(), E_NOT_OWNER);
         accrue_pool_interest(_reg, pool, clock, ctx);
         let amount = coin::value(&payment);
@@ -942,7 +943,7 @@ module unxversal::lending {
         (pool.total_borrows * 10_000) / denom
     }
 
-    public entry fun update_pool_rates<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, clock: &Clock, ctx: &TxContext) {
+    public fun update_pool_rates<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, clock: &Clock, ctx: &TxContext) {
         assert!(!reg.paused, 1000);
         let u_bps = utilization_bps(pool);
         // Gracefully handle missing IRM by falling back to zeros
@@ -962,7 +963,7 @@ module unxversal::lending {
     }
 
     /// Variant that also awards points via central registry for non-fee bot tasks
-    public entry fun update_pool_rates_with_points<T>(
+    public fun update_pool_rates_with_points<T>(
         reg: &LendingRegistry,
         pool: &mut LendingPool<T>,
         clock: &Clock,
@@ -973,7 +974,7 @@ module unxversal::lending {
         BotRewards::award_points(points, b"lending.update_pool_rates".to_string(), ctx.sender(), clock, ctx);
     }
 
-    public entry fun accrue_pool_interest<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, clock: &Clock, ctx: &TxContext) {
+    public fun accrue_pool_interest<T>(reg: &LendingRegistry, pool: &mut LendingPool<T>, clock: &Clock, ctx: &TxContext) {
         let now = sui::clock::timestamp_ms(clock);
         if (now <= pool.last_update_ms) { return };
         let dt = now - pool.last_update_ms;
@@ -1027,7 +1028,7 @@ module unxversal::lending {
     }
 
     /// Variant that also awards points via central registry for non-fee bot tasks
-    public entry fun accrue_pool_interest_with_points<T>(
+    public fun accrue_pool_interest_with_points<T>(
         reg: &LendingRegistry,
         pool: &mut LendingPool<T>,
         clock: &Clock,
@@ -1121,7 +1122,7 @@ module unxversal::lending {
     /*******************************
     * Liquidation (coins): liquidator repays debtor's debt asset and seizes collateral
     *******************************/
-    public entry fun liquidate_coin_position<Debt, Coll>(
+    public fun liquidate_coin_position<Debt, Coll>(
         reg: &LendingRegistry,
         debt_pool: &mut LendingPool<Debt>,
         coll_pool: &mut LendingPool<Coll>,
@@ -1247,7 +1248,7 @@ module unxversal::lending {
     /*******************************
     * Reserve skim to Treasury (collateral)
     *******************************/
-    public entry fun skim_reserves_to_treasury<C>(
+    public fun skim_reserves_to_treasury<C>(
         _reg: &LendingRegistry,
         pool: &mut LendingPool<C>,
         treasury: &mut Treasury<C>,
@@ -1279,7 +1280,7 @@ module unxversal::lending {
     /*******************************
     * Flash Loans – simple fee, same-tx repay enforced by API usage
     *******************************/
-    public entry fun initiate_flash_loan<T>(_reg: &LendingRegistry, pool: &mut LendingPool<T>, amount: u64, ctx: &mut TxContext) {
+    public fun initiate_flash_loan<T>(_reg: &LendingRegistry, pool: &mut LendingPool<T>, amount: u64, ctx: &mut TxContext) {
         assert!(amount > 0, E_ZERO_AMOUNT);
         let cash = BalanceMod::value(&pool.cash);
         assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
@@ -1290,7 +1291,7 @@ module unxversal::lending {
         transfer::public_transfer(out, ctx.sender());
     }
 
-    public entry fun repay_flash_loan<T>(
+    public fun repay_flash_loan<T>(
         _reg: &LendingRegistry,
         pool: &mut LendingPool<T>,
         mut principal: Coin<T>,
@@ -1329,7 +1330,7 @@ module unxversal::lending {
     /*******************************
     * Synthetic Flash Loans – mint & burn within same tx (hot potato)
     *******************************/
-    public entry fun initiate_synth_flash_loan<C>(
+    public fun initiate_synth_flash_loan<C>(
         _reg: &LendingRegistry,
         synth_reg: &mut SynthRegistry,
         cfg: &CollateralConfig<C>,
@@ -1365,7 +1366,7 @@ module unxversal::lending {
         SynthFlashLoan { symbol, amount_units, fee_units }
     }
 
-    public entry fun repay_synth_flash_loan<C>(
+    public fun repay_synth_flash_loan<C>(
         _reg: &LendingRegistry,
         synth_reg: &mut SynthRegistry,
         cfg: &CollateralConfig<C>,
@@ -1406,7 +1407,7 @@ module unxversal::lending {
     /*******************************
     * Synth liquidity and durable borrow/repay (vault-managed)
     *******************************/
-    public entry fun create_synth_market(
+    public fun create_synth_market(
         _admin: &LendingAdminCap,
         reg: &mut LendingRegistry,
         admin_reg: &AdminRegistry,
@@ -1422,7 +1423,7 @@ module unxversal::lending {
         // Display templates are registered in init()
     }
 
-    public entry fun supply_synth_liquidity<C>(
+    public fun supply_synth_liquidity<C>(
         reg: &mut LendingRegistry,
         market_symbol: String,
         pool_collateral: &mut LendingPool<C>,
@@ -1451,7 +1452,7 @@ module unxversal::lending {
         event::emit(SynthLiquiditySupplied { user: ctx.sender(), symbol: market_symbol, amount: amount, new_balance: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
-    public entry fun withdraw_synth_liquidity<C>(
+    public fun withdraw_synth_liquidity<C>(
         reg: &mut LendingRegistry,
         market_symbol: String,
         pool_collateral: &mut LendingPool<C>,
@@ -1482,7 +1483,7 @@ module unxversal::lending {
 
 
     /// Aggregate-checked borrow: DEPRECATED – multi-asset price vectors removed. Use single-asset borrow path.
-    public entry fun borrow_synth_multi<C>(
+    public fun borrow_synth_multi<C>(
         _synth_reg: &mut SynthRegistry,
         _cfg: &CollateralConfig<C>,
         // aggregate inputs
@@ -1519,7 +1520,7 @@ module unxversal::lending {
         vector::destroy_empty<Coin<UNXV>>(_unxv_payment);
     }
 
-    public entry fun repay_synth<C>(
+    public fun repay_synth<C>(
         synth_reg: &mut SynthRegistry,
         cfg: &CollateralConfig<C>,
         clock: &Clock,
@@ -1564,10 +1565,22 @@ module unxversal::lending {
         event::emit(SynthRepaid { user: ctx.sender(), symbol, units, remaining_borrow_units: newb, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
+    /// Apply synth deltas emitted by synthetics for lending-managed vaults, then consume the receipt.
+    public fun apply_synth_receipt(
+        _reg: &mut LendingRegistry,
+        _acct: &mut UserAccount,
+        _receipt: SynthLendingReceipt,
+        _ctx: &mut TxContext
+    ) {
+        // In Phase 1, accounting is handled in borrow/repay_synth. This entry exists to satisfy
+        // same-tx consumption of receipts and provide a future hook. For now, just consume.
+        Synth::consume_lending_receipt(_receipt);
+    }
+
     /*******************************
     * Accrual for synth borrows (simple linear accrual on call)
     *******************************/
-    public entry fun accrue_synth_market(
+    public fun accrue_synth_market(
         reg: &mut LendingRegistry,
         symbol: String,
         apr_bps: u64,
@@ -1595,7 +1608,7 @@ module unxversal::lending {
     }
 
     /// Variant that also awards points via central registry for non-fee bot tasks
-    public entry fun accrue_synth_market_with_points(
+    public fun accrue_synth_market_with_points(
         reg: &mut LendingRegistry,
         symbol: String,
         apr_bps: u64,
@@ -1611,7 +1624,7 @@ module unxversal::lending {
     /*******************************
     * Liquidation for synth borrows (vault-based): repay units and seize collateral from market
     *******************************/
-    public entry fun liquidate_synth<C>(
+    public fun liquidate_synth<C>(
         reg: &mut LendingRegistry,
         synth_reg: &mut SynthRegistry,
         cfg: &CollateralConfig<C>,
