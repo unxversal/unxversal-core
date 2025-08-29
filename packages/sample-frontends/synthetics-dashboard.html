@@ -32,31 +32,13 @@
             justify-content: space-between;
             padding: 0 20px;
             flex-shrink: 0;
+            border-bottom: 1px solid #333;
         }
 
         .logo {
             font-size: 18px;
             font-weight: bold;
             color: #ffffff;
-        }
-
-        .header-center {
-            display: flex;
-            align-items: center;
-            gap: 30px;
-        }
-
-        .market-ticker {
-            display: flex;
-            align-items: center;
-            gap: 20px;
-            font-size: 12px;
-        }
-
-        .ticker-item {
-            display: flex;
-            align-items: center;
-            gap: 5px;
         }
 
         .price-up { color: #00ff00; }
@@ -360,8 +342,8 @@
         }
 
         .buy-btn {
-            background: #00ff00;
-            color: #000;
+            background: #ffffff;
+            color: #000000;
         }
 
         .sell-btn {
@@ -505,6 +487,7 @@
 
         body.light-theme .header {
             background: #f5f5f5;
+            border-bottom: 1px solid #ddd;
         }
 
         body.light-theme .logo {
@@ -638,31 +621,18 @@
         body.light-theme .cr-warning {
             background: #000000;
         }
+
+        body.light-theme .buy-btn {
+            background: #000000;
+            color: #ffffff;
+        }
     </style>
 </head>
 <body>
     <!-- Header -->
     <div class="header">
         <div class="logo">UNXVERSAL SYNTHETICS</div>
-        <div class="header-center">
-            <div class="market-ticker">
-                <div class="ticker-item">
-                    <span>sETH</span>
-                    <span class="price-up">$2,445.75</span>
-                    <span class="price-up">+2.34%</span>
-                </div>
-                <div class="ticker-item">
-                    <span>sBTC</span>
-                    <span class="price-down">$99,650.00</span>
-                    <span class="price-down">-1.45%</span>
-                </div>
-                <div class="ticker-item">
-                    <span>sSOL</span>
-                    <span class="price-up">$245.67</span>
-                    <span class="price-up">+5.78%</span>
-                </div>
-            </div>
-        </div>
+
         <div class="header-right">
             <div class="wallet-balance">
                 Balance: <span class="balance-amount">2,450.67 SUI</span>
