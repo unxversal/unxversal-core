@@ -1758,6 +1758,61 @@ module unxversal::synthetics {
         } else { 0 }
     }
 
+    /// Liquidation ordering and allocation helpers (unit-based, price-agnostic)
+    /// Returns a new vector of symbols ordered by descending debt units (largest first).
+    public fun get_liquidation_order_by_units<C>(vault: &CollateralVault<C>): vector<String> {
+        let work_syms = clone_string_vec(&vault.debt_symbols);
+        let mut units = vector::empty<u64>();
+        let mut i = 0; let n = vector::length(&work_syms);
+        while (i < n) {
+            let s = *vector::borrow(&work_syms, i);
+            let du = if (table::contains(&vault.synthetic_debt, clone_string(&s))) { *table::borrow(&vault.synthetic_debt, clone_string(&s)) } else { 0 };
+            vector::push_back(&mut units, du);
+            i = i + 1;
+        };
+        // Selection-like sort by units desc
+        let mut ordered = vector::empty<String>();
+        let mut k = 0;
+        while (k < n) {
+            let mut best_v: u64 = 0; let mut best_i: u64 = 0; let mut found = false;
+            let mut j = 0;
+            while (j < n) {
+                let vj = *vector::borrow(&units, j);
+                if (vj > best_v) { best_v = vj; best_i = j; found = true; };
+                j = j + 1;
+            };
+            if (!found || best_v == 0) { break };
+            let top_sym = vector::borrow(&work_syms, best_i);
+            vector::push_back(&mut ordered, clone_string(top_sym));
+            // mark consumed: set units at best_i to 0
+            let mut new_units = vector::empty<u64>();
+            let mut t = 0; while (t < n) { let cur = *vector::borrow(&units, t); if (t == best_i) { vector::push_back(&mut new_units, 0); } else { vector::push_back(&mut new_units, cur); }; t = t + 1; };
+            units = new_units;
+            k = k + 1;
+        };
+        ordered
+    }
+
+    /// Compute a simple collateral allocation share for a given symbol based on unit proportions.
+    /// allocation ≈ total_collateral * (debt_units(symbol) / sum_debt_units(all))
+    fun allocated_collateral_by_units<C>(vault: &CollateralVault<C>, symbol: &String): u64 {
+        let mut sum_units: u64 = 0;
+        let mut units_tgt: u64 = 0;
+        let work_syms = &vault.debt_symbols;
+        let mut i = 0; let n = vector::length(work_syms);
+        while (i < n) {
+            let s = *vector::borrow(work_syms, i);
+            let du = if (table::contains(&vault.synthetic_debt, clone_string(&s))) { *table::borrow(&vault.synthetic_debt, clone_string(&s)) } else { 0 };
+            sum_units = sum_units + du;
+            if (eq_string(&s, symbol)) { units_tgt = du; };
+            i = i + 1;
+        };
+        if (sum_units == 0) { return 0 };
+        let total_coll = balance::value(&vault.collateral) as u128;
+        let alloc_u128: u128 = (total_coll * (units_tgt as u128)) / (sum_units as u128);
+        clamp_u128_to_u64(alloc_u128)
+    }
+
     /// Vault-to-vault collateral transfer (settlement helper)
     public fun transfer_between_vaults<C>(
         _cfg: &CollateralConfig<C>,
@@ -1869,22 +1924,58 @@ module unxversal::synthetics {
         ctx: &mut TxContext
     ) {
         assert!(!registry.paused, 1000);
+        // Enforce unit-based liquidation ordering: must target the largest-units debt first (if any)
+        let order = get_liquidation_order_by_units(vault);
+        if (vector::length(&order) > 0) {
+            let top = vector::borrow(&order, 0);
+            assert!(eq_string(top, &synthetic_symbol), E_INVALID_ORDER);
+        };
         // Check health
         let (ratio, _) = check_vault_health(vault, registry, clock, oracle_cfg, price, &synthetic_symbol);
         assert!(ratio <= registry.global_params.liquidation_threshold, E_VAULT_NOT_HEALTHY);
 
-        // Determine repay (cap to outstanding debt)
+        // Determine repay: cap to outstanding debt and to allocation share for this symbol
         let outstanding = if (table::contains(&vault.synthetic_debt, clone_string(&synthetic_symbol))) { *table::borrow(&vault.synthetic_debt, clone_string(&synthetic_symbol)) } else { 0 };
-        let repay = if (repay_amount > outstanding) { outstanding } else { repay_amount };
+        let price_u64_pre = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
+        let liq_pen_bps_pre = {
+            let a_pre = table::borrow(&registry.synthetics, clone_string(&synthetic_symbol));
+            if (a_pre.liquidation_penalty_bps > 0) { a_pre.liquidation_penalty_bps } else { registry.global_params.liquidation_penalty }
+        };
+        let alloc_cap = allocated_collateral_by_units(vault, &synthetic_symbol);
+        // Also cap liquidation to only what is needed to reach the target min collateral ratio for this synth
+        let min_req_bps_pre = {
+            let a_cr = table::borrow(&registry.synthetics, clone_string(&synthetic_symbol));
+            if (a_cr.min_collateral_ratio > 0) { a_cr.min_collateral_ratio } else { registry.global_params.min_collateral_ratio }
+        };
+        let cv_u128: u128 = (balance::value(&vault.collateral) as u128);
+        let d_u128: u128 = (outstanding as u128);
+        let p_u128: u128 = (price_u64_pre as u128);
+        let rmin_u128: u128 = (min_req_bps_pre as u128);
+        let a_num_u128: u128 = 10_000u128 + (liq_pen_bps_pre as u128);
+        let num_target: u128 = (10_000u128 * cv_u128);
+        let rhs_target: u128 = d_u128 * p_u128 * rmin_u128;
+        let mut max_repay_by_target_u64: u64 = 0;
+        if (num_target > rhs_target) {
+            let denom_target: u128 = p_u128 * (a_num_u128 - rmin_u128);
+            if (denom_target > 0) {
+                let rmax_u128: u128 = (num_target - rhs_target) / denom_target;
+                max_repay_by_target_u64 = clamp_u128_to_u64(rmax_u128);
+            };
+        };
+        // Max repay allowed by allocation: allocation >= repay * price * (1 + pen_bps/10k)
+        let denom: u128 = (price_u64_pre as u128) * (10_000u128 + (liq_pen_bps_pre as u128));
+        let max_repay_by_alloc_u128: u128 = if (denom > 0) { ((alloc_cap as u128) * 10_000u128) / denom } else { 0 };
+        let max_repay_by_alloc = clamp_u128_to_u64(max_repay_by_alloc_u128);
+        let mut repay = repay_amount;
+        if (repay > outstanding) { repay = outstanding; };
+        if (repay > max_repay_by_alloc) { repay = max_repay_by_alloc; };
+        if (repay > max_repay_by_target_u64) { repay = max_repay_by_target_u64; };
         assert!(repay > 0, E_INVALID_ORDER);
 
         // Price in micro-USD units and penalty
-        let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
+        let price_u64 = price_u64_pre;
         let notional_u128: u128 = (repay as u128) * (price_u64 as u128);
-        let liq_pen_bps = {
-            let a = table::borrow(&registry.synthetics, clone_string(&synthetic_symbol));
-            if (a.liquidation_penalty_bps > 0) { a.liquidation_penalty_bps } else { registry.global_params.liquidation_penalty }
-        };
+        let liq_pen_bps = liq_pen_bps_pre;
         let penalty_u128: u128 = (notional_u128 * (liq_pen_bps as u128)) / 10_000u128;
         let penalty = clamp_u128_to_u64(penalty_u128);
         let seize_u128: u128 = notional_u128 + (penalty as u128);
@@ -1904,7 +1995,10 @@ module unxversal::synthetics {
 
         // Seize collateral and split bot reward
         let available = balance::value(&vault.collateral);
-        let seize_capped = if (seize <= available) { seize } else { available };
+        // Also cap by the allocation for this symbol
+        let alloc_cap2 = allocated_collateral_by_units(vault, &synthetic_symbol);
+        let seize_capped_avail = if (seize <= available) { seize } else { available };
+        let seize_capped = if (seize_capped_avail <= alloc_cap2) { seize_capped_avail } else { alloc_cap2 };
         let mut seized_coin = {
             let seized_bal = balance::split(&mut vault.collateral, seize_capped);
             coin::from_balance(seized_bal, ctx)
