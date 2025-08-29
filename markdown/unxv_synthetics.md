@@ -11,10 +11,10 @@ Collateralized synthetic assets with a central `SynthRegistry` for governance an
 
 ### Core Flows
 - Listing: `create_synthetic_asset` registers an asset with per-asset overrides.
-- Collateralization: `create_vault`, `deposit_collateral`, `withdraw_*` with CCR checks.
-- Mint/Burn: `mint_synthetic`, `burn_synthetic` with UNXV discount fee support; multi-asset variants.
+- Collateralization: `create_vault`, `deposit_collateral`, `withdraw_collateral` with CCR checks.
+- Mint/Burn: `mint_synthetic`, `burn_synthetic` with UNXV discount fee support.
 - Stability: `accrue_stability` prorates per elapsed time against USD debt value.
-- Liquidation: `liquidate_vault` and `liquidate_vault_multi` seize collateral with bot reward split.
+- Liquidation: `liquidate_vault` seizes collateral with bot reward split.
 - Orderbook: `place_limit_order`, `cancel_order`, `match_orders` to trade exposure between vaults.
 
 ### Fees
