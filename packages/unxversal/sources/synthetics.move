@@ -358,7 +358,7 @@ module unxversal::synthetics {
 
     /// Orderbook-related events
     public struct OrderbookOrderPlaced has copy, drop {
-        order_id: ID,
+        order_id: u128,
         owner: address,
         symbol: String,
         side: u8,
@@ -370,14 +370,14 @@ module unxversal::synthetics {
     }
 
     public struct OrderbookOrderCancelled has copy, drop { 
-        order_id: ID, 
+        order_id: u128, 
         owner: address, 
         timestamp: u64 
     }
 
     public struct OrderMatched has copy, drop {
-        buy_order_id: ID,
-        sell_order_id: ID,
+        buy_order_id: u128,
+        sell_order_id: u128,
         symbol: String,
         price: u64,
         size: u64,
@@ -391,6 +391,72 @@ module unxversal::synthetics {
         taker: address,
         maker: address,
         market: String,
+        timestamp: u64,
+    }
+
+    public struct FeeCollected has copy, drop {
+        amount: u64,
+        payer: address,
+        market: String,
+        reason: String,
+        timestamp: u64,
+    }
+
+    /// Additional CLOB/escrow lifecycle events
+    public struct BondPosted has copy, drop {
+        order_id: u128,
+        market: String,
+        maker: address,
+        amount: u64,
+        timestamp: u64,
+    }
+
+    public struct BondToppedUp has copy, drop {
+        order_id: u128,
+        market: String,
+        maker: address,
+        amount: u64,
+        timestamp: u64,
+    }
+
+    public struct BondRefunded has copy, drop {
+        order_id: u128,
+        market: String,
+        maker: address,
+        amount: u64,
+        timestamp: u64,
+    }
+
+    public struct BondReleased has copy, drop {
+        order_id: u128,
+        market: String,
+        maker: address,
+        amount: u64,
+        timestamp: u64,
+    }
+
+    public struct BondSlashed has copy, drop {
+        order_id: u128,
+        market: String,
+        keeper: address,
+        slash_amount: u64,
+        keeper_reward: u64,
+        timestamp: u64,
+    }
+
+    public struct MakerClaimed has copy, drop {
+        order_id: u128,
+        market: String,
+        maker: address,
+        amount: u64,
+        timestamp: u64,
+    }
+
+    public struct OrderExpiredSwept has copy, drop {
+        order_id: u128,
+        market: String,
+        pending_swept: u64,
+        keeper: address,
         timestamp: u64,
     }
 
@@ -424,10 +490,6 @@ module unxversal::synthetics {
         debt_symbols: vector<String>,
         last_update_ms: u64,
     }
-
-
-
-
 
     /// Marker object that binds the chosen collateral coin type C
     public struct CollateralConfig<phantom C> has key, store { id: UID }
@@ -473,6 +535,7 @@ module unxversal::synthetics {
         min_size: u64,
         book: ClobBook,
         makers: Table<u128, ID>,
+        maker_addrs: Table<u128, address>,
         maker_sides: Table<u128, u8>,
         claimed_units: Table<u128, u64>,
     }
@@ -496,7 +559,6 @@ module unxversal::synthetics {
         };
         transfer::share_object(escrow);
     }
-
 
     /// Place with escrow: taker collateral payments are accrued into escrow for maker claims (buyer taker only)
     public fun place_synth_limit_with_escrow<C: store>(
@@ -522,7 +584,7 @@ module unxversal::synthetics {
         let _asset = table::borrow(&registry.synthetics, clone_string(&sym));
         assert!(maker_vault.owner == ctx.sender(), E_NOT_OWNER);
 
-        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        let now = sui::clock::timestamp_ms(clock);
         let plan = Book::compute_fill_plan(&market.book, taker_is_bid, price, size_units, 0, expiry_ms, now);
 
         let mut i = 0u64;
@@ -574,9 +636,19 @@ module unxversal::synthetics {
             };
             let fee_after = if (discount_applied) { trade_fee - discount_collateral } else { trade_fee };
             if (fee_after > 0) {
-                let fee_bal = balance::split(&mut maker_vault.collateral, fee_after);
+                let rebate_bps = registry.global_params.maker_rebate_bps;
+                let rebate_amt = (fee_after * rebate_bps) / 10_000;
+                let mut fee_bal = balance::split(&mut maker_vault.collateral, fee_after);
+                if (rebate_amt > 0) {
+                    let maker_addr = if (table::contains(&market.maker_addrs, maker_id)) { *table::borrow(&market.maker_addrs, maker_id) } else { maker_vault.owner };
+                    let rb = balance::split(&mut fee_bal, rebate_amt);
+                    let rb_coin = coin::from_balance(rb, ctx);
+                    transfer::public_transfer(rb_coin, maker_addr);
+                    event::emit(MakerRebatePaid { amount: rebate_amt, taker: maker_vault.owner, maker: maker_addr, market: clone_string(&market.symbol), timestamp: sui::clock::timestamp_ms(clock) });
+                };
                 let fee_coin = coin::from_balance(fee_bal, ctx);
                 TreasuryMod::deposit_collateral(treasury, fee_coin, b"synth_trade".to_string(), maker_vault.owner, ctx);
+                event::emit(FeeCollected { amount: fee_after - rebate_amt, payer: maker_vault.owner, market: clone_string(&market.symbol), reason: b"synth_trade".to_string(), timestamp: sui::clock::timestamp_ms(clock) });
             };
 
             i = i + 1;
@@ -587,6 +659,7 @@ module unxversal::synthetics {
             let oid = *option::borrow(&maybe_id);
             let side: u8 = if (taker_is_bid) { 0 } else { 1 };
             table::add(&mut market.makers, oid, object::id(maker_vault));
+            table::add(&mut market.maker_addrs, oid, maker_vault.owner);
             table::add(&mut market.maker_sides, oid, side);
             table::add(&mut market.claimed_units, oid, 0);
             // Post maker bond on escrow for GC slashing
@@ -597,11 +670,27 @@ module unxversal::synthetics {
                 if (table::contains(&escrow.bonds, oid)) {
                     let bref = table::borrow_mut(&mut escrow.bonds, oid);
                     balance::join(bref, bond_bal);
+                    event::emit(BondToppedUp { order_id: oid, market: clone_string(&market.symbol), maker: maker_vault.owner, amount: bond_amt, timestamp: now });
                 } else {
                     table::add(&mut escrow.bonds, oid, bond_bal);
+                    event::emit(BondPosted { order_id: oid, market: clone_string(&market.symbol), maker: maker_vault.owner, amount: bond_amt, timestamp: now });
                 };
             };
             event::emit(OrderPlaced { order_id: oid, symbol: clone_string(&market.symbol), side, price, size: size_units, maker: maker_vault.owner, timestamp: now });
+            // Emit unified orderbook placed event (with u128 id)
+            let (filled_units_evt, total_units_evt) = Book::order_progress(&market.book, oid);
+            let remaining_evt = if (total_units_evt >= filled_units_evt) { total_units_evt - filled_units_evt } else { 0 };
+            event::emit(OrderbookOrderPlaced {
+                order_id: oid,
+                owner: maker_vault.owner,
+                symbol: clone_string(&market.symbol),
+                side,
+                price,
+                size: size_units,
+                remaining: remaining_evt,
+                created_at_ms: now,
+                expiry_ms,
+            });
         };
 
         if (vector::length(&unxv_payment) > 0) {
@@ -663,6 +752,7 @@ module unxversal::synthetics {
                 if (pay > 0) {
                     let out_bal = balance::split(bal_ref, pay);
                     balance::join(&mut maker_vault.collateral, out_bal);
+                    event::emit(MakerClaimed { order_id, market: clone_string(&market.symbol), maker: maker_vault.owner, amount: pay, timestamp: sui::tx_context::epoch_timestamp_ms(_ctx) });
                 };
             }
         };
@@ -670,6 +760,7 @@ module unxversal::synthetics {
         if (!Book::has_order(&market.book, order_id) && table::contains(&escrow.bonds, order_id)) {
             let bond_bal = table::remove(&mut escrow.bonds, order_id);
             balance::join(&mut maker_vault.collateral, bond_bal);
+            event::emit(BondReleased { order_id, market: clone_string(&market.symbol), maker: maker_vault.owner, amount: 0, timestamp: sui::tx_context::epoch_timestamp_ms(_ctx) });
         };
         // Update claimed units even if no delta so bond release logic can progress
         if (table::contains(&market.claimed_units, order_id)) { let _ = table::remove(&mut market.claimed_units, order_id); };
@@ -699,15 +790,19 @@ module unxversal::synthetics {
             let vid = *table::borrow(&market.makers, order_id);
             assert!(vid == object::id(maker_vault) && maker_vault.owner == ctx.sender(), E_NOT_OWNER);
             let _ = table::remove(&mut market.makers, order_id);
+            if (table::contains(&market.maker_addrs, order_id)) { let _ = table::remove(&mut market.maker_addrs, order_id); };
             if (table::contains(&market.maker_sides, order_id)) { let _ = table::remove(&mut market.maker_sides, order_id); };
             if (table::contains(&market.claimed_units, order_id)) { let _ = table::remove(&mut market.claimed_units, order_id); };
             if (table::contains(&escrow.bonds, order_id)) {
                 let bond = table::remove(&mut escrow.bonds, order_id);
+                let amt = balance::value(&bond);
                 balance::join(&mut maker_vault.collateral, bond);
+                event::emit(BondRefunded { order_id, market: clone_string(&market.symbol), maker: maker_vault.owner, amount: amt, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
             };
         } else { assert!(false, E_INVALID_ORDER); };
         Book::cancel_order_by_id(&mut market.book, order_id);
         event::emit(OrderCanceled { order_id, symbol: clone_string(&market.symbol), maker: maker_vault.owner, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(OrderbookOrderCancelled { order_id, owner: maker_vault.owner, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /// Reduce order quantity; adjust escrowed maker bond to new remaining notional.
@@ -741,6 +836,7 @@ module unxversal::synthetics {
                     let bref = table::borrow_mut(&mut escrow.bonds, order_id);
                     balance::join(bref, add_bal);
                 } else { table::add(&mut escrow.bonds, order_id, add_bal); };
+                event::emit(BondToppedUp { order_id, market: clone_string(&market.symbol), maker: maker_vault.owner, amount: top_up, timestamp: now_ts });
             }
         } else if (current_bond > target_bond) {
             let refund = current_bond - target_bond;
@@ -748,6 +844,7 @@ module unxversal::synthetics {
                 let bref = table::borrow_mut(&mut escrow.bonds, order_id);
                 let out = balance::split(bref, refund);
                 balance::join(&mut maker_vault.collateral, out);
+                event::emit(BondRefunded { order_id, market: clone_string(&market.symbol), maker: maker_vault.owner, amount: refund, timestamp: now_ts });
             }
         };
         event::emit(OrderModified { order_id, symbol: clone_string(&market.symbol), new_quantity, maker: maker_vault.owner, timestamp: sui::tx_context::epoch_timestamp_ms(_ctx) });
@@ -765,7 +862,7 @@ module unxversal::synthetics {
         ctx: &mut TxContext
     ) {
         assert!(!registry.paused, 1000);
-        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        let now = sui::clock::timestamp_ms(clock);
         let mut steps = 0;
         while (steps < max_steps) {
             let (has_ask, ask_id) = Book::best_ask_id(&market.book, now);
@@ -784,6 +881,19 @@ module unxversal::synthetics {
             assert!(qty > 0, E_BAD_PRICE);
             Book::commit_maker_fill(&mut market.book, ask_id, true, trade_price, qty, now);
             Book::commit_maker_fill(&mut market.book, bid_id, false, trade_price, qty, now);
+            // Emit matched event with maker addresses when known
+            let buyer_addr = if (table::contains(&market.maker_addrs, bid_id)) { *table::borrow(&market.maker_addrs, bid_id) } else { ctx.sender() };
+            let seller_addr = if (table::contains(&market.maker_addrs, ask_id)) { *table::borrow(&market.maker_addrs, ask_id) } else { ctx.sender() };
+            event::emit(OrderMatched {
+                buy_order_id: bid_id,
+                sell_order_id: ask_id,
+                symbol: clone_string(&market.symbol),
+                price: trade_price,
+                size: qty,
+                buyer: buyer_addr,
+                seller: seller_addr,
+                timestamp: now,
+            });
             steps = steps + 1;
         };
         BotRewards::award_points(points, b"synthetics.match_step_auto".to_string(), ctx.sender(), clock, ctx);
@@ -802,7 +912,6 @@ module unxversal::synthetics {
         assert!(!registry.paused, 1000);
         // Remove from book using helper and clean metadata
         let removed_ids = Book::remove_expired_collect(&mut market.book, now_ts, max_removals);
-        let mut total_penalty: u64 = 0;
         let mut i = 0; let n = vector::length(&removed_ids);
         while (i < n) {
             let oid = removed_ids[i];
@@ -810,7 +919,6 @@ module unxversal::synthetics {
             if (table::contains(&escrow.bonds, oid)) {
                 let bref = table::borrow_mut(&mut escrow.bonds, oid);
                 let bval = balance::value(bref);
-                total_penalty = total_penalty + bval;
                 // Move to a temp coin for split
                 let mut coin_all = coin::from_balance(balance::split(bref, bval), ctx);
                 // Compute reward/remainder
@@ -820,9 +928,25 @@ module unxversal::synthetics {
                     transfer::public_transfer(to_keeper, ctx.sender());
                 };
                 TreasuryMod::deposit_collateral(treasury, coin_all, b"synth_gc_slash".to_string(), ctx.sender(), ctx);
+                event::emit(BondSlashed { order_id: oid, market: clone_string(&market.symbol), keeper: ctx.sender(), slash_amount: bval, keeper_reward: reward, timestamp: now_ts });
+            };
+            // Sweep any pending escrow to treasury to avoid stranded balances
+            if (table::contains(&escrow.pending, oid)) {
+                let pref = table::borrow_mut(&mut escrow.pending, oid);
+                let pval = balance::value(pref);
+                if (pval > 0) {
+                    let pcoin = coin::from_balance(balance::split(pref, pval), ctx);
+                    TreasuryMod::deposit_collateral(treasury, pcoin, b"synth_gc_pending_sweep".to_string(), ctx.sender(), ctx);
+                };
+                // Remove the (now likely zero) balance and move it as a coin so it is not dropped
+                let leftover_bal = table::remove(&mut escrow.pending, oid);
+                let leftover_coin = coin::from_balance(leftover_bal, ctx);
+                transfer::public_transfer(leftover_coin, ctx.sender());
+                event::emit(OrderExpiredSwept { order_id: oid, market: clone_string(&market.symbol), pending_swept: pval, keeper: ctx.sender(), timestamp: now_ts });
             };
             // Clean metadata
             if (table::contains(&market.makers, oid)) { let _ = table::remove(&mut market.makers, oid); };
+            if (table::contains(&market.maker_addrs, oid)) { let _ = table::remove(&mut market.maker_addrs, oid); };
             if (table::contains(&market.maker_sides, oid)) { let _ = table::remove(&mut market.maker_sides, oid); };
             if (table::contains(&market.claimed_units, oid)) { let _ = table::remove(&mut market.claimed_units, oid); };
             i = i + 1;
@@ -908,9 +1032,10 @@ module unxversal::synthetics {
         // Auto-create a CLOB market and escrow for this synth (single canonical market per symbol)
         let book = Book::empty(DEFAULT_TICK_SIZE, DEFAULT_LOT_SIZE, DEFAULT_MIN_SIZE, ctx);
         let makers = table::new<u128, ID>(ctx);
+        let maker_addrs = table::new<u128, address>(ctx);
         let maker_sides = table::new<u128, u8>(ctx);
         let claimed_units = table::new<u128, u64>(ctx);
-        let mkt = SynthMarket { id: object::new(ctx), symbol: clone_string(&asset_symbol), tick_size: DEFAULT_TICK_SIZE, lot_size: DEFAULT_LOT_SIZE, min_size: DEFAULT_MIN_SIZE, book: book, makers, maker_sides, claimed_units };
+        let mkt = SynthMarket { id: object::new(ctx), symbol: clone_string(&asset_symbol), tick_size: DEFAULT_TICK_SIZE, lot_size: DEFAULT_LOT_SIZE, min_size: DEFAULT_MIN_SIZE, book: book, makers, maker_addrs, maker_sides, claimed_units };
         // Create and share escrow bound to this market
         init_synth_escrow_for_market<C>(&mkt, ctx);
         // Share market
@@ -1076,9 +1201,10 @@ module unxversal::synthetics {
     ): SynthMarket {
         let book = Book::empty(tick, lot, min, ctx);
         let makers = table::new<u128, ID>(ctx);
+        let maker_addrs = table::new<u128, address>(ctx);
         let maker_sides = table::new<u128, u8>(ctx);
         let claimed_units = table::new<u128, u64>(ctx);
-        SynthMarket { id: object::new(ctx), symbol, tick_size: tick, lot_size: lot, min_size: min, book, makers, maker_sides, claimed_units }
+        SynthMarket { id: object::new(ctx), symbol, tick_size: tick, lot_size: lot, min_size: min, book, makers, maker_addrs, maker_sides, claimed_units }
     }
 
     #[test_only]
@@ -1162,6 +1288,7 @@ module unxversal::synthetics {
                 let fee_bal = balance::split(&mut maker_vault.collateral, fee_after);
                 let fee_coin = coin::from_balance(fee_bal, ctx);
                 TreasuryMod::deposit_collateral(treasury, fee_coin, b"synth_trade".to_string(), maker_vault.owner, ctx);
+                event::emit(FeeCollected { amount: fee_after, payer: maker_vault.owner, market: clone_string(&market.symbol), reason: b"synth_trade".to_string(), timestamp: sui::clock::timestamp_ms(clock) });
             };
 
             i = i + 1;
@@ -1172,6 +1299,7 @@ module unxversal::synthetics {
             let oid = *option::borrow(&maybe_id);
             let side: u8 = if (taker_is_bid) { 0 } else { 1 };
             table::add(&mut market.makers, oid, object::id(maker_vault));
+            table::add(&mut market.maker_addrs, oid, maker_vault.owner);
             table::add(&mut market.maker_sides, oid, side);
             table::add(&mut market.claimed_units, oid, 0);
             // Post maker bond similar to main escrow placement path so tests observe bond > 0
@@ -1341,12 +1469,13 @@ module unxversal::synthetics {
     ) {
         // owner-only for deposits on shared vault
         assert!(vault.owner == ctx.sender(), E_NOT_OWNER);
+        let value_in = coin::value(&coins_in);
         let bal_in = coin::into_balance(coins_in);
         balance::join(&mut vault.collateral, bal_in);
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
         event::emit(CollateralDeposited { 
             vault_id: object::id(vault), 
-            amount: balance::value(&vault.collateral), 
+            amount: value_in, 
             depositor: ctx.sender(), 
             timestamp: sui::tx_context::epoch_timestamp_ms(ctx) 
         });
@@ -1457,7 +1586,7 @@ module unxversal::synthetics {
         price: &Aggregator,
         oracle_cfg: &OracleConfig,
         synthetic_symbol: String,
-        ctx: &mut TxContext
+        _ctx: &mut TxContext
     ) {
         // If no debt, nothing to accrue
         let k_acc = clone_string(&synthetic_symbol);
@@ -1466,7 +1595,7 @@ module unxversal::synthetics {
         if (debt_units == 0) { return };
 
         // Compute elapsed time since last update
-        let now_ms = sui::tx_context::epoch_timestamp_ms(ctx);
+        let now_ms = sui::clock::timestamp_ms(clock);
         let last_ms = vault.last_update_ms;
         if (now_ms <= last_ms) { return };
         let elapsed_ms = now_ms - last_ms;
@@ -1611,6 +1740,7 @@ module unxversal::synthetics {
             let fee_bal = balance::split(&mut vault.collateral, fee_to_collect);
             let fee_coin = coin::from_balance(fee_bal, ctx);
             TreasuryMod::deposit_collateral(treasury, fee_coin, b"mint".to_string(), ctx.sender(), ctx);
+            event::emit(FeeCollected { amount: fee_to_collect, payer: ctx.sender(), market: clone_string(&synthetic_symbol), reason: b"mint".to_string(), timestamp: sui::clock::timestamp_ms(clock) });
         };
         // fee details are recorded in treasury; external FeeCollected removed here
 
@@ -1710,6 +1840,7 @@ module unxversal::synthetics {
             let fee_bal = balance::split(&mut vault.collateral, fee_to_collect);
             let fee_coin = coin::from_balance(fee_bal, ctx);
             TreasuryMod::deposit_collateral(treasury, fee_coin, b"burn".to_string(), ctx.sender(), ctx);
+            event::emit(FeeCollected { amount: fee_to_collect, payer: ctx.sender(), market: clone_string(&synthetic_symbol), reason: b"burn".to_string(), timestamp: sui::clock::timestamp_ms(clock) });
         };
         // fee details are recorded in treasury; external FeeCollected removed here
 
@@ -1727,7 +1858,7 @@ module unxversal::synthetics {
             collateral_withdrawn: 0,
             burner: ctx.sender(),
             new_collateral_ratio: ratio_after,
-            timestamp: sui::tx_context::epoch_timestamp_ms(ctx),
+            timestamp: sui::clock::timestamp_ms(clock),
         });
 
         // Drain and refund any leftover UNXV coins and destroy the empty vector
@@ -1885,6 +2016,16 @@ module unxversal::synthetics {
         }
     }
 
+    // Test-only updater for GlobalParams
+    #[test_only]
+    public fun update_global_params(
+        registry: &mut SynthRegistry,
+        new_params: GlobalParams,
+        _ctx: &TxContext
+    ) {
+        registry.global_params = new_params;
+    }
+
     // Test-only getter for vault owner
     #[test_only]
     public fun vault_owner<C>(v: &CollateralVault<C>): address { v.owner }
@@ -2014,7 +2155,7 @@ module unxversal::synthetics {
         // Mirror burn behavior on liquidation: reduce global total_supply
         let aset = table::borrow_mut(&mut registry.synthetics, clone_string(&synthetic_symbol));
         aset.total_supply = aset.total_supply - repay;
-        if (new_debt == 0) { remove_symbol_if_present(&mut vault.debt_symbols, &synthetic_symbol); };
+        // symbol removal already done above when new_debt == 0
 
         // Seize collateral and split bot reward
         let available = balance::value(&vault.collateral);

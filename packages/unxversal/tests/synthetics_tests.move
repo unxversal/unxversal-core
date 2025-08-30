@@ -330,15 +330,16 @@ module unxversal::synthetics_tests {
         Syn::deposit_collateral<TestBaseUSD>(&mut vb, sui::coin::mint_for_testing<TestBaseUSD>(1_000_000, ctx), ctx);
         Syn::deposit_collateral<TestBaseUSD>(&mut vs, sui::coin::mint_for_testing<TestBaseUSD>(1_000_000, ctx), ctx);
 
-        // Create a market via listing (implicit in create_synthetic_asset in prod; test uses helper already listed)
-        // Place maker ask and taker bid through the escrowed path
+        // Create a single market and escrow; then place maker and taker on the same book
+        let mut market: Syn::SynthMarket = Syn::new_market_for_testing(string::utf8(b"sUSD"), 1, 1, 1, ctx);
+        let mut escrow: Syn::SynthEscrow<TestBaseUSD> = Syn::new_escrow_for_testing<TestBaseUSD>(&market, ctx);
         let tre_before = Tre::tre_balance_collateral_for_testing<TestBaseUSD>(&tre);
         let ocfg_mo = Oracle::new_config_for_testing(ctx);
-        // Maker: seller vault posts a sell order at price 10 for size 100
         let expiry = 0;
-        Syn::place_synth_limit_with_escrow_baseusd_pkg<TestBaseUSD>(&mut reg, &mut Syn::new_market_for_testing(string::utf8(b"sUSD"), 1, 1, 1, ctx), &mut Syn::new_escrow_for_testing<TestBaseUSD>(&Syn::new_market_for_testing(string::utf8(b"sUSD"), 1, 1, 1, ctx), ctx), &clk, &ocfg_mo, &agg, &agg, /*taker_is_bid=*/false, 10, 100, expiry, &mut vs, vector::empty<Coin<UNXV>>(), &mut tre, ctx);
+        // Maker: seller vault posts a sell order at price 10 for size 100
+        Syn::place_synth_limit_with_escrow_baseusd_pkg<TestBaseUSD>(&mut reg, &mut market, &mut escrow, &clk, &ocfg_mo, &agg, &agg, /*taker_is_bid=*/false, 10, 100, expiry, &mut vs, vector::empty<Coin<UNXV>>(), &mut tre, ctx);
         // Taker: buyer vault lifts the ask with a bid at price 10 for size 100
-        Syn::place_synth_limit_with_escrow_baseusd_pkg<TestBaseUSD>(&mut reg, &mut Syn::new_market_for_testing(string::utf8(b"sUSD"), 1, 1, 1, ctx), &mut Syn::new_escrow_for_testing<TestBaseUSD>(&Syn::new_market_for_testing(string::utf8(b"sUSD"), 1, 1, 1, ctx), ctx), &clk, &ocfg_mo, &agg, &agg, /*taker_is_bid=*/true, 10, 100, expiry, &mut vb, vector::empty<Coin<UNXV>>(), &mut tre, ctx);
+        Syn::place_synth_limit_with_escrow_baseusd_pkg<TestBaseUSD>(&mut reg, &mut market, &mut escrow, &clk, &ocfg_mo, &agg, &agg, /*taker_is_bid=*/true, 10, 100, expiry, &mut vb, vector::empty<Coin<UNXV>>(), &mut tre, ctx);
         let tre_after = Tre::tre_balance_collateral_for_testing<TestBaseUSD>(&tre);
         // Trade fee = notional * 0.5% = 100 * 10 * 0.005 = 5
         let notional = 100 * 10;
@@ -477,7 +478,7 @@ module unxversal::synthetics_tests {
         let params = Syn::new_global_params_for_testing(100, 30_000, 500, 100, 200, 1000, 50, 30, 2000, 0, 100, 10);
         Syn::update_global_params(&mut reg, params, ctx);
         let mut vault: CollateralVault<TestBaseUSD> = Syn::create_vault_for_testing<TestBaseUSD>(&cfg, &reg, ctx);
-        Syn::deposit_collateral<TestBaseUSD>(&cfg, &mut vault, sui::coin::mint_for_testing<TestBaseUSD>(1_000_000, ctx), ctx);
+        Syn::deposit_collateral<TestBaseUSD>(&mut vault, sui::coin::mint_for_testing<TestBaseUSD>(1_000_000, ctx), ctx);
         let ocfg = Oracle::new_config_for_testing(ctx);
         Syn::mint_synthetic<TestBaseUSD>(&cfg, &mut vault, &mut reg, &clk, &ocfg, &agg, string::utf8(b"sUSD"), 10, vector::empty<Coin<UNXV>>(), &agg, &mut tre, ctx);
         // Repay > outstanding (e.g., 9999) – function should clamp to 10
@@ -664,9 +665,7 @@ module unxversal::synthetics_discount_and_clob_tests {
         let clk = clock::create_for_testing(ctx);
         let admin_reg = admin::new_admin_registry_for_testing(ctx);
         BR::set_epoch_config(&admin_reg, &mut points, 0, 1_000, ctx);
-        BR::set_weight(&admin_reg, &mut points, string::utf8(b"synthetics.init_synth_market"), 10, ctx);
         BR::set_weight(&admin_reg, &mut points, string::utf8(b"synthetics.match_step_auto"), 10, ctx);
-        BR::set_weight(&admin_reg, &mut points, string::utf8(b"synthetics.gc_step"), 10, ctx);
 
         // Setup registry and market
         let mut reg = Syn::new_registry_for_testing(ctx);
@@ -691,15 +690,10 @@ module unxversal::synthetics_discount_and_clob_tests {
         vector::push_back(&mut vec_unxv, coin_unxv);
         Tre::deposit_unxv_with_rewards_for_epoch<TestBaseUSD>(&mut tre, &mut bot, epoch, vec_unxv, b"points_epoch_fund".to_string(), owner, ctx);
 
-        // 1) init_synth_market_with_points
-        Syn::init_synth_market_with_points(&reg, string::utf8(b"sUSD"), 1, 1, 1, &mut points, &clk, ctx);
-
-        // 2) match_step_auto_with_points (no orders; still awards points)
-        let ocfg_pts = Oracle::new_config_for_testing(ctx);
-        Syn::match_step_auto_with_points<TestBaseUSD>(&mut points, &clk, &reg, &mut market, &clk, &ocfg_pts, &agg, &agg, 1, 0, 1_000_000_000, &mut tre, ctx);
-
-        // 3) gc_step_with_points (no expirations; still awards points)
-        Syn::gc_step_with_points<TestBaseUSD>(&mut points, &clk, &reg, &mut market, &mut escrow, &mut tre, 0, 0, ctx);
+        // 1) match_step_auto_with_points (no orders; still awards points)
+        Syn::match_step_auto_with_points(&mut points, &clk, &reg, &mut market, 1, 0, 1_000_000_000, ctx);
+        // 2) gc sweep (no points awarded by gc in current design)
+        Syn::gc_step_with_points<TestBaseUSD>(&reg, &mut market, &mut escrow, &mut tre, 0, 0, ctx);
 
         // Claim rewards for this epoch and assert UNXV epoch reserves decrease to zero
         BR::claim_rewards_for_epoch<TestBaseUSD>(&mut points, &mut bot, epoch, ctx);
@@ -717,7 +711,7 @@ module unxversal::synthetics_discount_and_clob_tests {
         sui::transfer::public_share_object(escrow);
         sui::transfer::public_share_object(cap);
         sui::transfer::public_share_object(cfg_pts);
-        sui::transfer::public_share_object(ocfg_pts);
+        // ocfg_pts removed from use; nothing to share here
         clock::destroy_for_testing(clk);
         test_scenario::end(scen);
     }
@@ -826,11 +820,8 @@ module unxversal::synthetics_discount_and_clob_tests {
         let oid2_opt = Syn::place_with_escrow_return_id<TestBaseUSD>(&mut reg, &mut market, &mut escrow, &clk, &ocfg, &agg, &agg, /*taker_is_bid=*/false, /*price=*/10, /*size=*/50, /*expiry=*/1, &mut v_maker, vector::empty<Coin<UNXV>>(), &mut tre, ctx);
         assert!(option::is_some(&oid2_opt));
         let tre_before = Tre::tre_balance_collateral_for_testing<TestBaseUSD>(&tre);
-        // Use points variant now that gc_step is removed
-        let mut points_for_gc = unxversal::bot_rewards::new_points_registry_for_testing(ctx);
-        let clk_gc = clock::create_for_testing(ctx);
-        Syn::gc_step_with_points<TestBaseUSD>(&mut points_for_gc, &clk_gc, &reg, &mut market, &mut escrow, &mut tre, /*now_ts=*/2, /*max_removals=*/1000, ctx);
-        clock::destroy_for_testing(clk_gc);
+        // GC sweep expired orders and slash bonds (no points awarded here)
+        Syn::gc_step_with_points<TestBaseUSD>(&reg, &mut market, &mut escrow, &mut tre, /*now_ts=*/2, /*max_removals=*/1000, ctx);
         let tre_after = Tre::tre_balance_collateral_for_testing<TestBaseUSD>(&tre);
         assert!(tre_after >= tre_before);
 
