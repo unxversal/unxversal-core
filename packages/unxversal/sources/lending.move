@@ -67,7 +67,7 @@ module unxversal::lending {
         // P1: bot points and split configs
         points_update_rates: u64,  // points awarded on update_pool_rates
         points_accrue_pool: u64,   // points awarded on accrue_pool_interest
-        points_accrue_synth: u64,  // points awarded on accrue_synth_market
+        points_accrue_synth: u64,  // points awarded on accrue_synth_market (unused after synth removal)
         liq_bot_treasury_bps: u64, // portion of liquidation bonus routed to Treasury (0 = off)
         // Permissionless pools config – global defaults
         perm_pool_fee_units: u64,          // required fee (in asset units) to create a pool
@@ -110,19 +110,9 @@ module unxversal::lending {
         interest_rate_models: Table<String, InterestRateModel>,
         global_params: GlobalParams,
         admin_addrs: VecSet<address>,
-        synth_markets: Table<String, SynthMarket>,
         paused: bool,
     }
 
-    /// Minimal per-synthetic market config/stats (Phase 1)
-    public struct SynthMarket has store {
-        symbol: String,
-        reserve_factor_bps: u64,
-        total_borrow_units: u64,
-
-        reserve_units: u64,
-        last_update_ms: u64,
-    }
 
     /*******************************
     * PriceSet – oracle-validated, per-tx price container (micro-USD)
@@ -171,14 +161,13 @@ module unxversal::lending {
     public struct SynthFlashLoanRepaid has copy, drop { symbol: String, amount_units: u64, fee_units: u64, repayer: address, timestamp: u64 }
     public struct RateUpdated has copy, drop { asset: String, utilization_bps: u64, borrow_rate_bps: u64, supply_rate_bps: u64, timestamp: u64 }
     public struct InterestAccrued has copy, drop { asset: String, dt_ms: u64, new_borrow_index: u64, new_supply_index: u64, delta_borrows: u64, reserves_added: u64, timestamp: u64 }
-    public struct SynthAccrued has copy, drop { symbol: String, delta_units: u64, reserve_units: u64, timestamp: u64 }
     public struct BotPointsAwarded has copy, drop { task: String, points: u64, actor: address, timestamp: u64 }
-    public struct SynthLiquidated has copy, drop { symbol: String, repay_units: u64, collateral_seized: u64, bot_reward: u64, liquidator: address, timestamp: u64 }
     public struct PermissionlessPoolFeePaid has copy, drop { asset: String, fee_units: u64, payer: address, timestamp: u64 }
     public struct PermissionlessPoolCreated has copy, drop { asset: String, pool_id: ID, initial_deposit: u64, creator: address, timestamp: u64 }
     public struct SynthFlashFeeDeposited has copy, drop { symbol: String, fee_units: u64, payer: address, timestamp: u64 }
     public struct PermissionlessPoolUNXVDiscountPaid has copy, drop { payer: address, timestamp: u64 }
-    public struct SynthLiquidationSplit has copy, drop { symbol: String, seized_total: u64, to_treasury: u64, to_liquidator: u64, liquidator: address, timestamp: u64 }
+    public struct PoolSupplyFloorOverrideSet has copy, drop { asset: String, new_floor_bps: u64, setter: address, timestamp: u64 }
+    public struct ReservesSkimmed has copy, drop { asset: String, amount: u64, treasury_id: ID, caller: address, timestamp: u64 }
     public struct AccrualClampApplied has copy, drop { asset: String, dt_ms_original: u64, dt_ms_used: u64, timestamp: u64 }
 
     /// Pair type for returning symbol/feed lists without tuple type arguments
@@ -346,7 +335,6 @@ module unxversal::lending {
             interest_rate_models: table::new<String, InterestRateModel>(ctx),
             global_params: gp,
             admin_addrs: admins,
-            synth_markets: table::new<String, SynthMarket>(ctx),
             paused: false,
         };
         transfer::share_object(reg);
@@ -396,7 +384,6 @@ module unxversal::lending {
             interest_rate_models: table::new<String, InterestRateModel>(ctx),
             global_params: gp,
             admin_addrs: admins,
-            synth_markets: table::new<String, SynthMarket>(ctx),
             paused: false,
         }
     }
@@ -488,11 +475,7 @@ module unxversal::lending {
     #[test_only]
     public fun scaled_from_units_for_testing(u: u64, idx: u64): u64 { scaled_from_units(u, idx) }
 
-    #[test_only]
-    public fun add_synth_market_for_testing(reg: &mut LendingRegistry, symbol: String, reserve_factor_bps: u64, clock: &Clock) {
-        let m = SynthMarket { symbol: clone_string(&symbol), reserve_factor_bps, total_borrow_units: 0, reserve_units: 0, last_update_ms: sui::clock::timestamp_ms(clock) };
-        table::add(&mut reg.synth_markets, symbol, m);
-    }
+    // removed: add_synth_market_for_testing
 
     #[test_only]
     public fun set_asset_caps_admin_for_testing(
@@ -664,6 +647,7 @@ module unxversal::lending {
         _admin: &LendingAdminCap,
         reg: &mut LendingRegistry,
         admin_reg: &AdminRegistry,
+        clock: &Clock,
         pool: &mut LendingPool<T>,
         bps: u64,
         ctx: &TxContext
@@ -671,7 +655,7 @@ module unxversal::lending {
         assert_is_admin(reg, admin_reg, ctx.sender());
         assert!(!reg.paused, 1000);
         pool.supply_floor_bps_override = bps;
-        // no event needed; RateUpdated will surface when next updated/accrued
+        event::emit(PoolSupplyFloorOverrideSet { asset: clone_string(&pool.asset), new_floor_bps: bps, setter: ctx.sender(), timestamp: sui::clock::timestamp_ms(clock) });
     }
 
     public fun set_asset_caps(
@@ -1398,6 +1382,7 @@ module unxversal::lending {
             ctx
         );
         pool.total_reserves = pool.total_reserves - amount;
+        event::emit(ReservesSkimmed { asset: clone_string(&pool.asset), amount, treasury_id: object::id(treasury), caller: ctx.sender(), timestamp: sui::clock::timestamp_ms(clock) });
     }
 
     /*******************************

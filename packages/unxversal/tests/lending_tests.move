@@ -566,31 +566,23 @@ module unxversal::lending_more_tests {
     }
 
     #[test]
-    fun synth_integration_supply_withdraw_borrow_repay_accrue() {
+    fun coin_integration_supply_withdraw_borrow_repay() {
         let owner = @0x78;
         let mut scen = test_scenario::begin(owner);
         let ctx = scen.ctx();
         let mut reg: LendingRegistry = Lend::new_registry_for_testing(ctx);
-        let ctmp = clock::create_for_testing(ctx);
-        Lend::add_synth_market_for_testing(&mut reg, string::utf8(b"sUSD"), 1_000, &ctmp);
         let mut pool: LendingPool<TestBaseUSD> = Lend::new_pool_for_testing<TestBaseUSD>(string::utf8(b"BASE"), ctx);
         let mut acct: UserAccount = Lend::new_user_account_for_testing(ctx);
         let clk = clock::create_for_testing(ctx);
-        // supply synth liquidity via BASE collateral
-        Lend::supply_synth_liquidity<TestBaseUSD>(&mut reg, string::utf8(b"sUSD"), &mut pool, &mut acct, coin::mint_for_testing<TestBaseUSD>(1_000, ctx), 1_000, ctx);
-        // withdraw
-        Lend::withdraw_synth_liquidity<TestBaseUSD>(&mut reg, string::utf8(b"sUSD"), &mut pool, &mut acct, 200, ctx);
-        // skip borrow_synth_multi in this test; covered by synthetics tests and not needed here
-        // skip repay_synth here; this integration test focuses on liquidity ops
-        // accrue_synth_market
-        let admin_reg2 = unxversal::admin::new_admin_registry_for_testing(ctx);
-        Lend::accrue_synth_market(&mut reg, string::utf8(b"sUSD"), 1_000, &clk, &admin_reg2, ctx);
+        // supply BASE to pool
+        Lend::supply<TestBaseUSD>(&reg, &mut pool, &mut acct, coin::mint_for_testing<TestBaseUSD>(1_000, ctx), 1_000, &clk, ctx);
+        // borrow and repay BASE
+        Lend::borrow<TestBaseUSD>(&reg, &mut pool, &mut acct, 200, &unxversal::oracle::new_registry_for_testing(ctx), &unxversal::oracle::new_oracle_config_for_testing(ctx), &clk, &unxversal::oracle::new_aggregator_for_testing(ctx), vector::empty<String>(), &Lend::new_price_set_for_testing(ctx), vector::empty<u64>(), vector::empty<u64>(), ctx);
+        Lend::repay<TestBaseUSD>(&reg, &mut pool, &mut acct, coin::mint_for_testing<TestBaseUSD>(200, ctx), &clk, ctx);
         // cleanup
         sui::transfer::public_share_object(reg);
         sui::transfer::public_share_object(pool);
         sui::transfer::public_share_object(acct);
-        sui::transfer::public_share_object(admin_reg2);
-        clock::destroy_for_testing(ctmp);
         clock::destroy_for_testing(clk);
         test_scenario::end(scen);
     }
