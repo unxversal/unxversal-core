@@ -178,7 +178,6 @@ module unxversal::synthetics {
 
     const E_ORACLE_MISMATCH: u64 = 11;
     const E_ZERO_AMOUNT: u64 = 12;
-    const E_VAULT_MANAGED: u64 = 13; // Operation requires lending-sync path for managed vaults
 
     /// One‑Time Witness (OTW)
     /// Guarantees `init` executes exactly once when the package is published.
@@ -424,29 +423,24 @@ module unxversal::synthetics {
         /// Helper list to enumerate symbols with non‑zero debt
         debt_symbols: vector<String>,
         last_update_ms: u64,
-        /// When true, this vault must synchronize synth changes with Lending in the same tx
-        managed_by_lending: bool,
     }
 
-    /// Delta emitted by synthetics for Lending to mirror into its accounting
-    public struct SynthLendingDelta has store {
-        symbol: String,
-        units: u64,
-        is_mint: bool,
-    }
 
-    /// Non-droppable receipt that must be consumed by Lending in the same tx when a vault is managed
-    public struct SynthLendingReceipt has store {
-        vault_id: ID,
-        owner: address,
-        deltas: vector<SynthLendingDelta>,
-    }
 
-    /// Package-scoped destroy function so only modules in this package (e.g., lending) can consume the receipt
-    public(package) fun consume_lending_receipt(_r: SynthLendingReceipt) { /* move by value destroys */ }
+
 
     /// Marker object that binds the chosen collateral coin type C
     public struct CollateralConfig<phantom C> has key, store { id: UID }
+
+    /// Package-visible function for lending module to seize collateral during liquidation
+    public(package) fun seize_collateral<C>(vault: &mut CollateralVault<C>, amount: u64): Balance<C> {
+        balance::split(&mut vault.collateral, amount)
+    }
+
+    /// Package-visible function for lending module to get collateral value
+    public(package) fun get_collateral_value<C>(vault: &CollateralVault<C>): u64 {
+        balance::value(&vault.collateral)
+    }
 
     fun assert_cfg_matches<C>(registry: &SynthRegistry, cfg: &CollateralConfig<C>) {
         assert!(registry.collateral_set, E_COLLATERAL_NOT_SET);
@@ -1024,7 +1018,7 @@ module unxversal::synthetics {
             synthetic_debt: debt_table,
             debt_symbols: debt_syms,
             last_update_ms: sui::tx_context::epoch_timestamp_ms(ctx),
-            managed_by_lending: false,
+
         };
         let vid = object::id(&vault);
         transfer::share_object(vault);
@@ -1053,7 +1047,7 @@ module unxversal::synthetics {
             synthetic_debt: debt_table,
             debt_symbols: debt_syms,
             last_update_ms: sui::tx_context::epoch_timestamp_ms(ctx),
-            managed_by_lending: false,
+
         };
         vault
     }
@@ -1534,8 +1528,7 @@ module unxversal::synthetics {
         treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
-        // Managed vaults must use the with_receipt path to force same-tx Lending sync
-        assert!(!vault.managed_by_lending, E_VAULT_MANAGED);
+
         assert!(!registry.paused, 1000);
         assert!(amount > 0, E_ZERO_AMOUNT);
         assert_cfg_matches(registry, cfg);
@@ -1659,8 +1652,7 @@ module unxversal::synthetics {
         treasury: &mut Treasury<C>,
         ctx: &mut TxContext
     ) {
-        // Managed vaults must use the with_receipt path to force same-tx Lending sync
-        assert!(!vault.managed_by_lending, E_VAULT_MANAGED);
+
         assert!(!registry.paused, 1000);
         assert!(amount > 0, E_ZERO_AMOUNT);
         assert_cfg_matches(registry, cfg);
@@ -1746,171 +1738,13 @@ module unxversal::synthetics {
         };
         vector::destroy_empty(unxv_payment);
 
-        // Auto-unbind managed vaults when all debt is cleared
-        if (vector::length(&vault.debt_symbols) == 0) { vault.managed_by_lending = false; };
+
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
     }
 
-    /// Managed path: mint and return a receipt for Lending to apply in the same tx. Auto-binds the vault on first use.
-    public fun mint_synthetic_with_receipt<C>(
-        cfg: &CollateralConfig<C>,
-        vault: &mut CollateralVault<C>,
-        registry: &mut SynthRegistry,
-        clock: &Clock,
-        oracle_cfg: &OracleConfig,
-        price: &Aggregator,
-        synthetic_symbol: String,
-        amount: u64,
-        unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &Aggregator,
-        treasury: &mut Treasury<C>,
-        ctx: &mut TxContext
-    ): SynthLendingReceipt {
-        assert!(!registry.paused, 1000);
-        assert_cfg_matches(registry, cfg);
-        if (!vault.managed_by_lending) { vault.managed_by_lending = true; };
-        // Use internal to avoid managed guard
-        mint_synthetic_internal<C>(vault, registry, clock, oracle_cfg, price, clone_string(&synthetic_symbol), amount, ctx);
-        // Re-run fee collection path identical to public mint for UNXV discount and collateral fee
-        // Fetch price for fee calc
-        let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
-        let asset = table::borrow_mut(&mut registry.synthetics, clone_string(&synthetic_symbol));
-        let mint_bps = if (asset.mint_fee_bps > 0) { asset.mint_fee_bps } else { registry.global_params.mint_fee };
-        let notional_u128: u128 = (amount as u128) * (price_u64 as u128);
-        let base_fee = clamp_u128_to_u64((notional_u128 * (mint_bps as u128)) / 10_000u128);
-        let discount_collateral = (base_fee * registry.global_params.unxv_discount_bps) / 10_000;
-        let mut discount_applied = false;
-        let mut up = unxv_payment;
-        if (discount_collateral > 0 && vector::length(&up) > 0) {
-            let price_unxv_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &b"UNXV".to_string(), unxv_price);
-            if (price_unxv_u64 > 0) {
-                let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
-                let mut merged = coin::zero<UNXV>(ctx);
-                let mut i = 0; let m = vector::length(&up);
-                while (i < m) { let c = vector::pop_back(&mut up); coin::join(&mut merged, c); i = i + 1; };
-                let have = coin::value(&merged);
-                if (have >= unxv_needed) {
-                    let exact = coin::split(&mut merged, unxv_needed, ctx);
-                    let mut vecu = vector::empty<Coin<UNXV>>(); vector::push_back(&mut vecu, exact);
-                    TreasuryMod::deposit_unxv(treasury, vecu, b"mint".to_string(), vault.owner, ctx);
-                    transfer::public_transfer(merged, vault.owner);
-                    discount_applied = true;
-                } else { transfer::public_transfer(merged, vault.owner); }
-            }
-        };
-        let mut fee_to_collect = if (discount_applied && base_fee > discount_collateral) { base_fee - discount_collateral } else { if (discount_applied) { 0 } else { base_fee } };
-        let available_coll = balance::value(&vault.collateral);
-        if (fee_to_collect > available_coll) { fee_to_collect = available_coll; };
-        if (fee_to_collect > 0) {
-            let fee_bal = balance::split(&mut vault.collateral, fee_to_collect);
-            let fee_coin = coin::from_balance(fee_bal, ctx);
-            TreasuryMod::deposit_collateral(treasury, fee_coin, b"mint".to_string(), ctx.sender(), ctx);
-        };
-        vector::destroy_empty(up);
-        // Emit mint event similar to public path
-        let px = get_price_scaled_1e6(clock, oracle_cfg, price);
-        let coll_val = balance::value(&vault.collateral) as u128;
-        let debt_units = if (table::contains(&vault.synthetic_debt, clone_string(&synthetic_symbol))) { *table::borrow(&vault.synthetic_debt, clone_string(&synthetic_symbol)) } else { 0 };
-        let debt_val = (debt_units as u128) * (px as u128);
-        let new_collateral_ratio = if (debt_val == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64((coll_val * 10_000u128) / debt_val) };
-        event::emit(SyntheticMinted { vault_id: object::id(vault), synthetic_type: clone_string(&synthetic_symbol), amount_minted: amount, collateral_deposit: 0, minter: ctx.sender(), new_collateral_ratio, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        // Build receipt
-        let mut deltas = vector::empty<SynthLendingDelta>();
-        vector::push_back(&mut deltas, SynthLendingDelta { symbol: clone_string(&synthetic_symbol), units: amount, is_mint: true });
-        SynthLendingReceipt { vault_id: object::id(vault), owner: vault.owner, deltas }
-    }
 
-    /// Managed path: burn and return a receipt for Lending to apply in the same tx. Auto-unbinds when all debt is cleared.
-    public fun burn_synthetic_with_receipt<C>(
-        cfg: &CollateralConfig<C>,
-        vault: &mut CollateralVault<C>,
-        registry: &mut SynthRegistry,
-        clock: &Clock,
-        oracle_cfg: &OracleConfig,
-        price: &Aggregator,
-        synthetic_symbol: String,
-        amount: u64,
-        unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &Aggregator,
-        treasury: &mut Treasury<C>,
-        ctx: &mut TxContext
-    ): SynthLendingReceipt {
-        assert!(!registry.paused, 1000);
-        assert_cfg_matches(registry, cfg);
-        if (!vault.managed_by_lending) { vault.managed_by_lending = true; };
-        // Use public burn path guards by calling internal to avoid managed guard, then replicate fee path
-        // Update debt and supply
-        // First adjust debt/supply (mirrors burn_synthetic logic up to fee and events)
-        let debt_table = &mut vault.synthetic_debt;
-        assert!(table::contains(debt_table, clone_string(&synthetic_symbol)), E_UNKNOWN_ASSET);
-        let old_debt = *table::borrow(debt_table, clone_string(&synthetic_symbol));
-        assert!(amount <= old_debt, 2000);
-        let new_debt = old_debt - amount;
-        let _ = table::remove(debt_table, clone_string(&synthetic_symbol));
-        table::add(debt_table, clone_string(&synthetic_symbol), new_debt);
-        if (new_debt == 0) { remove_symbol_if_present(&mut vault.debt_symbols, &synthetic_symbol); };
-        let price_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &synthetic_symbol, price);
-        let asset = table::borrow_mut(&mut registry.synthetics, clone_string(&synthetic_symbol));
-        asset.total_supply = asset.total_supply - amount;
-        // Fees identical to public burn path
-        let base_value = amount * price_u64;
-        let burn_bps = if (asset.burn_fee_bps > 0) { asset.burn_fee_bps } else { registry.global_params.burn_fee };
-        let base_fee = (base_value * burn_bps) / 10_000;
-        let discount_collateral = (base_fee * registry.global_params.unxv_discount_bps) / 10_000;
-        let mut discount_applied = false;
-        let mut up = unxv_payment;
-        if (discount_collateral > 0 && vector::length(&up) > 0) {
-            let price_unxv_u64 = assert_and_get_price_for_symbol(clock, oracle_cfg, registry, &b"UNXV".to_string(), unxv_price);
-            if (price_unxv_u64 > 0) {
-                let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
-                let mut merged = coin::zero<UNXV>(ctx);
-                let mut i = 0; let m = vector::length(&up);
-                while (i < m) { let c = vector::pop_back(&mut up); coin::join(&mut merged, c); i = i + 1; };
-                let have = coin::value(&merged);
-                if (have >= unxv_needed) {
-                    let exact = coin::split(&mut merged, unxv_needed, ctx);
-                    let mut vecu = vector::empty<Coin<UNXV>>(); vector::push_back(&mut vecu, exact);
-                    TreasuryMod::deposit_unxv(treasury, vecu, b"burn".to_string(), vault.owner, ctx);
-                    transfer::public_transfer(merged, vault.owner);
-                    discount_applied = true;
-                } else { transfer::public_transfer(merged, vault.owner); }
-            }
-        };
-        
-        let mut fee_to_collect = if (discount_applied) { base_fee - discount_collateral } else { base_fee };
-        let available_coll = balance::value(&vault.collateral);
-        if (fee_to_collect > available_coll) { fee_to_collect = available_coll; };
-        if (fee_to_collect > 0) {
-            let fee_bal = balance::split(&mut vault.collateral, fee_to_collect);
-            let fee_coin = coin::from_balance(fee_bal, ctx);
-            TreasuryMod::deposit_collateral(treasury, fee_coin, b"burn".to_string(), ctx.sender(), ctx);
-        };
-        vector::destroy_empty(up);
-        // Post-burn ratio and event
-        let px_now = get_price_scaled_1e6(clock, oracle_cfg, price);
-        let coll_val = balance::value(&vault.collateral) as u128;
-        let debt_now = *table::borrow(&vault.synthetic_debt, clone_string(&synthetic_symbol));
-        let debt_val = (debt_now as u128) * (px_now as u128);
-        let ratio_after = if (debt_val == 0) { U64_MAX_LITERAL } else { clamp_u128_to_u64((coll_val * 10_000u128) / debt_val) };
-        event::emit(SyntheticBurned { vault_id: object::id(vault), synthetic_type: clone_string(&synthetic_symbol), amount_burned: amount, collateral_withdrawn: 0, burner: ctx.sender(), new_collateral_ratio: ratio_after, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        if (vector::length(&vault.debt_symbols) == 0) { vault.managed_by_lending = false; };
-        vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
-        // Build receipt
-        let mut deltas = vector::empty<SynthLendingDelta>();
-        vector::push_back(&mut deltas, SynthLendingDelta { symbol: clone_string(&synthetic_symbol), units: amount, is_mint: false });
-        SynthLendingReceipt { vault_id: object::id(vault), owner: vault.owner, deltas }
-    }
 
-    /// Merge two receipts (helper for PTBs combining multiple actions)
-    public fun merge_synth_receipts(a: SynthLendingReceipt, b: SynthLendingReceipt): SynthLendingReceipt {
-        // Destructure to move fields without requiring copy
-        let SynthLendingReceipt { vault_id: va, owner: oa, deltas: mut da } = a;
-        let SynthLendingReceipt { vault_id: vb, owner: ob, deltas: mut db } = b;
-        assert!(va == vb && oa == ob, E_INVALID_ORDER);
-        let mut i = 0; let n = vector::length(&db);
-        while (i < n) { let d = vector::pop_back(&mut db); vector::push_back(&mut da, d); i = i + 1; };
-        SynthLendingReceipt { vault_id: vb, owner: ob, deltas: da }
-    }
+
 
     /// Phase‑2 – vault health helpers
     /// returns (ratio_bps, is_liquidatable)
