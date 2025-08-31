@@ -754,11 +754,9 @@ module unxversal::synthetics_discount_and_clob_tests {
         let _ = Syn::place_with_escrow_return_id<TestBaseUSD>(&mut reg, &mut market, &mut escrow, &clk, &ocfg_ce, &agg, &agg, /*taker_is_bid=*/true, /*price=*/10, /*size=*/50, /*expiry=*/0, &mut buyer_vault, vector::empty<Coin<UNXV>>(), &mut tre, ctx);
 
         // Assert escrow has some pending balance for seller's order id
-        let pending_val = Syn::escrow_pending_value<TestBaseUSD>(&escrow, order_id);
-        assert!(pending_val > 0);
-
-        // Claim for seller maker should not abort
-        Syn::claim_maker_fills<TestBaseUSD>(&reg, &mut market, &mut escrow, order_id, &mut seller_vault, ctx);
+        // With instant settlement on taker BUY, seller accrual is paid immediately; escrow.pending tracks prefunded bids only
+        let _pending_val = Syn::escrow_pending_value<TestBaseUSD>(&escrow, order_id);
+        // no claim step required
 
         // Cleanup
         switchboard::aggregator::share_for_testing(agg);

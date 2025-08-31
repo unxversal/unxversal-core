@@ -1494,8 +1494,8 @@ module unxversal::lending {
         let symbol = loan_symbol;
         let amount_units = loan_amount_units;
         let fee_units = loan_fee_units;
-        let total_burn = amount_units + fee_units;
-        // burn exactly amount + fee units from the vault exposure
+        // burn exactly the borrowed amount units from the vault exposure; fee is paid in coin C below
+        let total_burn = amount_units;
         Synth::burn_synthetic(
             cfg,
             vault,
