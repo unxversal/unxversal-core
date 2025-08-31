@@ -571,18 +571,42 @@ module unxversal::lending_more_tests {
         let mut scen = test_scenario::begin(owner);
         let ctx = scen.ctx();
         let mut reg: LendingRegistry = Lend::new_registry_for_testing(ctx);
+        // Add supported asset for BASE to configure caps/IRM and enable health checks
+        Lend::add_supported_asset_for_testing(&mut reg, string::utf8(b"BASE"), true, true, 0, 8_000, 8_500, 500, 200, 0, 10000);
+
         let mut pool: LendingPool<TestBaseUSD> = Lend::new_pool_for_testing<TestBaseUSD>(string::utf8(b"BASE"), ctx);
         let mut acct: UserAccount = Lend::new_user_account_for_testing(ctx);
         let clk = clock::create_for_testing(ctx);
         // supply BASE to pool
         Lend::supply<TestBaseUSD>(&reg, &mut pool, &mut acct, coin::mint_for_testing<TestBaseUSD>(1_000, ctx), 1_000, &clk, ctx);
+
+        // Prepare oracle and price set for borrow/health guards
+        let ocfg = Oracle::new_config_for_testing(ctx);
+        let mut oreg = Oracle::new_registry_for_testing(ctx);
+        let mut agg = switchboard::aggregator::new_aggregator(switchboard::aggregator::example_queue_id(), string::utf8(b"BASE_px"), owner, vector::empty<u8>(), 1, 10_000_000, 0, 1, 0, ctx);
+        switchboard::aggregator::set_current_value(&mut agg, switchboard::decimal::new(1_000_000, false), 1, 1, 1, switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false), switchboard::decimal::new(0, false));
+        let mut ps = Lend::new_price_set_for_testing(ctx);
+        let admin_reg = unxversal::admin::new_admin_registry_for_testing(ctx);
+        Oracle::set_feed(&admin_reg, &mut oreg, string::utf8(b"BASE"), &agg, ctx);
+        Lend::record_symbol_price(&oreg, &ocfg, &clk, string::utf8(b"BASE"), &agg, &mut ps);
+        let mut syms: vector<string::String> = vector::empty<string::String>(); vector::push_back(&mut syms, string::utf8(b"BASE"));
+        let (_, _, _, _, sidx, bidx) = Lend::pool_values_for_testing<TestBaseUSD>(&pool);
+        let mut sidxs: vector<u64> = vector::empty<u64>(); vector::push_back(&mut sidxs, sidx);
+        let mut bidxs: vector<u64> = vector::empty<u64>(); vector::push_back(&mut bidxs, bidx);
+
         // borrow and repay BASE
-        Lend::borrow<TestBaseUSD>(&reg, &mut pool, &mut acct, 200, &unxversal::oracle::new_registry_for_testing(ctx), &unxversal::oracle::new_oracle_config_for_testing(ctx), &clk, &unxversal::oracle::new_aggregator_for_testing(ctx), vector::empty<String>(), &Lend::new_price_set_for_testing(ctx), vector::empty<u64>(), vector::empty<u64>(), ctx);
+        Lend::borrow<TestBaseUSD>(&reg, &mut pool, &mut acct, 200, &oreg, &ocfg, &clk, &agg, syms, &ps, sidxs, bidxs, ctx);
         Lend::repay<TestBaseUSD>(&reg, &mut pool, &mut acct, coin::mint_for_testing<TestBaseUSD>(200, ctx), &clk, ctx);
+        // cleanup test-only constructs
+        switchboard::aggregator::share_for_testing(agg);
+        sui::transfer::public_share_object(admin_reg);
         // cleanup
         sui::transfer::public_share_object(reg);
         sui::transfer::public_share_object(pool);
         sui::transfer::public_share_object(acct);
+        sui::transfer::public_share_object(ps);
+        sui::transfer::public_share_object(oreg);
+        sui::transfer::public_share_object(ocfg);
         clock::destroy_for_testing(clk);
         test_scenario::end(scen);
     }
