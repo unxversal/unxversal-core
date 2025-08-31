@@ -32,6 +32,18 @@ export const SyntheticsSchema = z.object({
   }).default({}),
 });
 
+export const LendingSchema = z.object({
+  packageId: z.string().min(2).optional(),
+  module: z.string().default('lending'),
+  registryId: z.string().optional(),
+  oracleRegistryId: z.string().optional(),
+  oracleConfigId: z.string().optional(),
+  pools: z.record(z.string(), z.object({
+    poolId: z.string(),
+    asset: z.string(),
+  })).default({}),
+}).default({ module: 'lending', pools: {} });
+
 export const ConfigSchema = z.object({
   rpcUrl: z.string().min(3).default(process.env['SUI_RPC_URL'] || 'https://fullnode.testnet.sui.io:443'),
   network: z.enum(['localnet', 'devnet', 'testnet', 'mainnet']).default('testnet'),
@@ -42,6 +54,7 @@ export const ConfigSchema = z.object({
     address: z.string().optional(),
   }).default({}),
   synthetics: SyntheticsSchema.default({ module: 'synthetics', markets: {}, aggregators: {}, vaultIds: [], admin: {} }),
+  lending: LendingSchema,
   indexer: z.object({
     backfillSinceMs: z.number().optional(),
     windowDays: z.number().default(7),
@@ -92,6 +105,10 @@ export function mergeConfig(a: Partial<AppConfig>, b: Partial<AppConfig>): AppCo
     synthetics: {
       ...(a.synthetics || {}),
       ...(b.synthetics || {}),
+    },
+    lending: {
+      ...(a as any).lending || {},
+      ...(b as any).lending || {},
     },
   });
 }

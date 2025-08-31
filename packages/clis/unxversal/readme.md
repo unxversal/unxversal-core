@@ -65,6 +65,9 @@ The TUI settings writes `~/.unxversal/config.json`. Fields:
   - markets: { [symbol]: { marketId, escrowId } }
   - aggregators: { [symbol]: aggregatorId }
   - vaultIds: string[]
+- lending:
+  - packageId, registryId, oracleRegistryId, oracleConfigId
+  - pools: { [assetSymbol]: { poolId, asset } }
 
 ## RPC Best Practices
 
@@ -77,3 +80,397 @@ The TUI settings writes `~/.unxversal/config.json`. Fields:
 npm run dev    # TypeScript watch build
 npm run build  # Compile to dist
 ```
+
+## Database Schemas
+
+Below are the tables created by the indexers. Primary keys and common indexes are indicated.
+
+### Synthetics
+
+```
+Table: synthetic_events
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| tx_digest           | text         | PK part   |
+| event_seq           | text         | PK part   |
+| type                | text         |           |
+| timestamp_ms        | bigint       |           |
+| parsed_json         | jsonb        |           |
++---------------------+--------------+-----------+
+PK: (tx_digest, event_seq)
+```
+
+```
+Table: orders
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| order_id            | text         | PK        |
+| symbol              | text         | IDX       |
+| side                | smallint     |           |
+| price               | bigint       |           |
+| size                | bigint       |           |
+| remaining           | bigint       |           |
+| owner               | text         |           |
+| created_at_ms       | bigint       |           |
+| expiry_ms           | bigint       |           |
+| status              | text         | IDX       |
++---------------------+--------------+-----------+
+PK: order_id
+IDX: (symbol), (status)
+```
+
+```
+Table: maker_bonds
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| order_id            | text         | PK        |
+| bond                | bigint       |           |
+| updated_at_ms       | bigint       |           |
++---------------------+--------------+-----------+
+PK: order_id
+```
+
+```
+Table: fees
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| tx_digest           | text         | PK part   |
+| event_seq           | text         | PK part   |
+| amount              | bigint       |           |
+| payer               | text         |           |
+| market              | text         |           |
+| reason              | text         |           |
+| timestamp_ms        | bigint       | IDX       |
++---------------------+--------------+-----------+
+PK: (tx_digest, event_seq)
+IDX: (timestamp_ms)
+```
+
+```
+Table: rebates
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| tx_digest           | text         | PK part   |
+| event_seq           | text         | PK part   |
+| amount              | bigint       |           |
+| taker               | text         |           |
+| maker               | text         |           |
+| market              | text         |           |
+| timestamp_ms        | bigint       | IDX       |
++---------------------+--------------+-----------+
+PK: (tx_digest, event_seq)
+IDX: (timestamp_ms)
+```
+
+```
+Table: maker_claims
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| tx_digest           | text         | PK part   |
+| event_seq           | text         | PK part   |
+| order_id            | text         |           |
+| market              | text         |           |
+| maker               | text         |           |
+| amount              | bigint       |           |
+| timestamp_ms        | bigint       | IDX       |
++---------------------+--------------+-----------+
+PK: (tx_digest, event_seq)
+IDX: (timestamp_ms)
+```
+
+```
+Table: vaults
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| vault_id            | text         | PK        |
+| owner               | text         | IDX       |
+| last_update_ms      | bigint       |           |
+| collateral          | bigint       |           |
++---------------------+--------------+-----------+
+PK: vault_id
+IDX: (owner)
+```
+
+```
+Table: vault_debts
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| vault_id            | text         | PK part   |
+| symbol              | text         | PK part   |
+| units               | bigint       |           |
++---------------------+--------------+-----------+
+PK: (vault_id, symbol)
+IDX: (symbol)
+```
+
+```
+Table: collateral_flows
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| tx_digest           | text         | PK part   |
+| event_seq           | text         | PK part   |
+| vault_id            | text         |           |
+| amount              | bigint       |           |
+| kind                | text         |           |
+| actor               | text         |           |
+| timestamp_ms        | bigint       | IDX       |
++---------------------+--------------+-----------+
+PK: (tx_digest, event_seq)
+IDX: (timestamp_ms)
+```
+
+```
+Table: liquidations
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| tx_digest           | text         | PK part   |
+| event_seq           | text         | PK part   |
+| vault_id            | text         |           |
+| liquidator          | text         |           |
+| liquidated_amount   | bigint       |           |
+| collateral_seized   | bigint       |           |
+| liquidation_penalty | bigint       |           |
+| synthetic_type      | text         |           |
+| timestamp_ms        | bigint       | IDX       |
++---------------------+--------------+-----------+
+PK: (tx_digest, event_seq)
+IDX: (timestamp_ms)
+```
+
+```
+Table: params_updates
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| tx_digest           | text         | PK part   |
+| event_seq           | text         | PK part   |
+| updater             | text         |           |
+| timestamp_ms        | bigint       |           |
++---------------------+--------------+-----------+
+PK: (tx_digest, event_seq)
+```
+
+```
+Table: pause_toggles
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| tx_digest           | text         | PK part   |
+| event_seq           | text         | PK part   |
+| new_state           | boolean      |           |
+| by_addr             | text         |           |
+| timestamp_ms        | bigint       |           |
++---------------------+--------------+-----------+
+PK: (tx_digest, event_seq)
+```
+
+```
+Table: synthetics_assets
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| symbol              | text         | PK        |
+| name                | text         |           |
+| decimals            | int          |           |
+| created_at_ms       | bigint       |           |
++---------------------+--------------+-----------+
+PK: symbol
+```
+
+```
+Table: synthetics_info
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| symbol              | text         | PK        |
+| created_at_ms       | bigint       |           |
++---------------------+--------------+-----------+
+PK: symbol
+```
+
+```
+Table: cursors
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| id                  | text         | PK        |
+| tx_digest           | text         |           |
+| event_seq           | text         |           |
++---------------------+--------------+-----------+
+PK: id
+```
+
+### Lending
+
+```
+Table: lending_events
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| tx_digest           | text         | PK part   |
+| event_seq           | text         | PK part   |
+| type                | text         |           |
+| timestamp_ms        | bigint       |           |
+| parsed_json         | jsonb        |           |
++---------------------+--------------+-----------+
+PK: (tx_digest, event_seq)
+```
+
+```
+Table: lending_accounts
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| account_id          | text         | PK        |
+| owner               | text         |           |
+| last_update_ms      | bigint       |           |
++---------------------+--------------+-----------+
+PK: account_id
+```
+
+```
+Table: lending_pools
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| pool_id             | text         | PK        |
+| asset               | text         |           |
+| total_supply        | bigint       |           |
+| total_borrows       | bigint       |           |
+| total_reserves      | bigint       |           |
+| last_update_ms      | bigint       |           |
++---------------------+--------------+-----------+
+PK: pool_id
+```
+
+```
+Table: lending_balances
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| account_id          | text         | PK part   |
+| asset               | text         | PK part   |
+| supply_scaled       | bigint       |           |
+| borrow_scaled       | bigint       |           |
++---------------------+--------------+-----------+
+PK: (account_id, asset)
+```
+
+```
+Table: lending_fees
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| tx_digest           | text         | PK part   |
+| event_seq           | text         | PK part   |
+| asset               | text         |           |
+| amount              | bigint       |           |
+| timestamp_ms        | bigint       |           |
++---------------------+--------------+-----------+
+PK: (tx_digest, event_seq)
+```
+
+```
+Table: cursors
++---------------------+--------------+-----------+
+| Column              | Type         | Notes     |
++---------------------+--------------+-----------+
+| id                  | text         | PK        |
+| tx_digest           | text         |           |
+| event_seq           | text         |           |
++---------------------+--------------+-----------+
+PK: id
+```
+
+## HTTP Endpoints (List)
+
+// Core
+/health (GET)
+/status (GET)
+/config (GET)
+/config (PUT)
+/settings/wallet (POST)
+/settings/network (POST)
+
+// Indexer (synthetics)
+/indexer/synth/health (GET)
+/indexer/synth/start (POST)
+/indexer/synth/stop (POST)
+/indexer/synth/cursor (GET)
+/indexer/synth/backfill (POST)
+
+// Indexer (lending)
+/indexer/lend/health (GET)
+/indexer/lend/start (POST)
+/indexer/lend/stop (POST)
+/indexer/lend/cursor (GET)
+/indexer/lend/backfill (POST)
+
+// Bots (synthetics)
+/bots/synth/health (GET)
+/bots/synth/start (POST)
+/bots/synth/stop (POST)
+/bots/synth/config (PATCH)
+
+// Bots (lending)
+/bots/lend/health (GET)
+/bots/lend/start (POST)
+/bots/lend/stop (POST)
+
+// Synthetics (markets)
+/synthetics/markets (GET)
+/synthetics/markets/:symbol (GET)
+/synthetics/markets/:symbol/match (POST)
+/synthetics/markets/:symbol/gc (POST)
+
+// Synthetics (data)
+/synthetics/orders (GET)
+/synthetics/vaults (GET)
+/synthetics/liquidations (GET)
+/synthetics/fees (GET)
+/synthetics/rebates (GET)
+/synthetics/candles/:market (GET)
+
+// Synthetics (PTBs)
+/synth/orders (POST)
+/synth/orders/:orderId/modify (POST)
+/synth/orders/:orderId/cancel (POST)
+/synth/orders/:orderId/claim (POST)
+/synth/vaults (POST)
+/synth/vaults/:id/deposit (POST)
+/synth/vaults/:id/withdraw (POST)
+/synth/vaults/:id/mint (POST)
+/synth/vaults/:id/burn (POST)
+/synth/vaults/:id/liquidate (POST)
+
+// Oracles
+/synth/oracles (GET)
+/synth/oracles/:symbol/price (GET)
+
+// Lending (data)
+/lending/pools (GET)
+/lending/pools/:poolId (GET)
+/lending/accounts/:accountId (GET)
+/lending/fees (GET)
+/lending/candles/:asset (GET)
+
+// Lending (PTBs)
+/lending/accounts (POST)
+/lending/accounts/:accountId/supply (POST)
+/lending/accounts/:accountId/withdraw (POST)
+/lending/accounts/:accountId/borrow (POST)
+/lending/accounts/:accountId/repay (POST)
+/lending/pools/:poolId/update-rates (POST)
+/lending/pools/:poolId/accrue (POST)
+
+For detailed schemas and live try-it-out, visit Swagger UI at `/docs`.
