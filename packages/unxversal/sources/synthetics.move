@@ -1,11 +1,11 @@
-/// Module: **unxversal_synthetics** — Phase‑1
+/// Module: **unxversal_synthetics** — Cash‑settled v2
 /// ------------------------------------------------------------
 /// * Bootstraps the core **SynthRegistry** shared object
 /// * Establishes the **DaddyCap → admin‑address allow‑list** authority pattern
 /// * Provides basic governance (grant/revoke admin, global‑params update, pause)
 ///
-/// > Later phases will extend this module with asset‑listing, vaults,
-/// > mint/burn logic, liquidation flows, DeepBook integration, etc.
+/// > The cash‑settled design uses instruments (no minted supply), vaults,
+/// > liquidation flows, and DEX integration for permissionless matching.
 module unxversal::synthetics {
     /// Imports & std aliases
     use sui::package;                      // claim Publisher via OTW
@@ -19,13 +19,16 @@ module unxversal::synthetics {
     use sui::coin::{Self as coin, Coin};   // coin helpers (merge/split/zero/value)
     use sui::balance::{Self as balance, Balance};
     use sui::vec_set::{Self as vec_set, VecSet};
+    use sui::object::{Self as object, UID, ID};
+    use sui::transfer;
+    use std::option;
     
     
     use switchboard::aggregator::{Self as sb_agg, Aggregator};
-    use unxversal::oracle::{Self as OracleMod, OracleConfig};
+    use unxversal::oracle::OracleConfig;
     use unxversal::treasury::{Self as TreasuryMod, Treasury};
     use unxversal::unxv::UNXV;
-    // Legacy CLOB imports removed in V2
+    
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     // bot_rewards not used in V2
 
@@ -120,36 +123,9 @@ module unxversal::synthetics {
 
     // Scale helpers for decimals-aware notional/debt calculations (unused helper removed)
 
-    // Legacy debt_value_micro_usd removed
+    
 
-    // Vector<u8> equality by bytes (for oracle feed hash binding)
-    fun eq_vec_u8(a: &vector<u8>, b: &vector<u8>): bool {
-        let la = vector::length(a);
-        let lb = vector::length(b);
-        if (la != lb) { return false };
-        let mut i = 0;
-        while (i < la) {
-            if (*vector::borrow(a, i) != *vector::borrow(b, i)) { return false };
-            i = i + 1;
-        };
-        true
-    }
-
-    // Strict price read for a symbol: enforce aggregator feed binding to registry mapping
-    fun assert_and_get_price_for_symbol(
-        clock: &Clock,
-        cfg: &OracleConfig,
-        registry: &SynthRegistry,
-        symbol: &String,
-        agg: &Aggregator
-    ): u64 {
-        let k = clone_string(symbol);
-        assert!(table::contains(&registry.oracle_feeds, k), E_PRICE_FEED_MISSING);
-        let expected = table::borrow(&registry.oracle_feeds, clone_string(symbol));
-        let actual = sb_agg::feed_hash(agg);
-        assert!(eq_vec_u8(&actual, expected), E_ORACLE_MISMATCH);
-        OracleMod::get_price_scaled_1e6(cfg, clock, agg)
-    }
+    
 
     
     /// Error codes (0‑99 reserved for general)
@@ -164,14 +140,15 @@ module unxversal::synthetics {
     const E_COLLATERAL_NOT_SET: u64 = 9;
     const E_WRONG_COLLATERAL_CFG: u64 = 10;
 
-    const E_ORACLE_MISMATCH: u64 = 11;
+    // removed unused: E_ORACLE_MISMATCH
     const E_ZERO_AMOUNT: u64 = 12;
-    const E_PRICE_FEED_MISSING: u64 = 13;  // No bound oracle feed for symbol
+    // removed unused: E_PRICE_FEED_MISSING
     const E_NEED_PRICE_FEEDS: u64 = 14;    // Operation requires live prices for open positions
     const E_MM_NOT_BREACHED: u64 = 15;     // Liquidation attempted when MM not breached
     const E_TRADE_FUNC_DEPRECATED: u64 = 16; // Old trade function disabled
     const E_PRICE_VECTOR_MISMATCH: u64 = 17; // symbols/prices length mismatch
     const E_MISSING_FEED_FOR_SYMBOL: u64 = 18; // No aggregator/price provided for a required symbol
+    const E_TREASURY_NOT_BOUND: u64 = 19;      // Registry treasury not bound yet
 
     /// One‑Time Witness (OTW)
     /// Guarantees `init` executes exactly once when the package is published.
@@ -183,57 +160,17 @@ module unxversal::synthetics {
 
     /// Global‑parameter struct (basis‑points units for ratios/fees)
     public struct GlobalParams has store, drop {
-        /// Minimum collateral‑ratio across the system (e.g. **150% = 1500 bps**)
-        min_collateral_ratio: u64,
-        /// Threshold below which liquidation can be triggered (**1200 bps**)
-        liquidation_threshold: u64,
-        /// Penalty applied to seized collateral (**500 bps = 5%**)
-        liquidation_penalty: u64,
-        /// Maximum number of synthetic asset types the registry will accept
-        max_synthetics: u64,
-        /// Annual stability fee (interest) charged on outstanding debt (bps)
-        stability_fee: u64,
-        /// % of liquidation proceeds awarded to bots (e.g. **1 000 bps = 10%**)
+        /// % of liquidation proceeds awarded to bots (bps)
         bot_split: u64,
-        /// One‑off fee charged on mint operations (bps)
-        mint_fee: u64,
-        /// One‑off fee charged on burn operations (bps)
-        burn_fee: u64,
         /// Discount applied when paying fees in UNXV (bps)
         unxv_discount_bps: u64,
-        /// Maker rebate on taker fees (bps)
-        maker_rebate_bps: u64,
-        /// GC reward on expired order cleanup (bps of a nominal unit; currently unused in Synth CLOB)
-        gc_reward_bps: u64,
-        /// Required bond (bps of notional) that a maker must post on order injection. Slashed on expiry.
-        maker_bond_bps: u64,
+        /// Maximum number of synthetic instrument types the registry will accept
+        max_synthetics: u64,
     }
 
     // CLOB sizing constants removed in V2
 
-    /// Synthetic‑asset object definition
-    public struct SyntheticAsset has store {
-        name: String,
-        symbol: String,
-        decimals: u8,
-        pyth_feed_id: vector<u8>,
-        min_collateral_ratio: u64,
-        total_supply: u64,
-        is_active: bool,
-        created_at: u64,
-        // Optional per-asset overrides (0 => use global)
-        stability_fee_bps: u64,
-        liquidation_threshold_bps: u64,
-        liquidation_penalty_bps: u64,
-        mint_fee_bps: u64,
-        burn_fee_bps: u64,
-    }
-
-    /// Keyed per-asset info wrapper to enable Display for SyntheticAsset
-    public struct SyntheticAssetInfo has key, store {
-        id: UID,
-        asset: SyntheticAsset,
-    }
+    
 
     /// V2 Risk parameters per instrument (cash-settled, no minted supply)
     public struct RiskParams has store, drop {
@@ -279,11 +216,9 @@ module unxversal::synthetics {
     public struct SynthRegistry has key, store {
         /// UID so we can share the object on-chain.
         id: UID,
-        /// Map **symbol → SyntheticAsset** definitions.
-        synthetics: Table<String, SyntheticAsset>,
         /// V2: Map **symbol → Instrument** definitions (cash-settled exposure)
         instruments: Table<String, Instrument>,
-        /// Map **symbol → Pyth feed bytes** for oracle lookup.
+        /// Map **symbol → Switchboard feed-hash bytes** for oracle lookup.
         oracle_feeds: Table<String, vector<u8>>,
         /// Listing helper – list of all listed synthetic symbols
         listed_symbols: vector<String>,
@@ -311,7 +246,7 @@ module unxversal::synthetics {
 
     
 
-    // Legacy order events removed
+    
 
     public struct EmergencyPauseToggled has copy, drop { 
         new_state: bool, 
@@ -339,18 +274,7 @@ module unxversal::synthetics {
         timestamp: u64 
     }
 
-    public struct SyntheticAssetCreated has copy, drop {
-        asset_name:   String,
-        asset_symbol: String,
-        pyth_feed_id: vector<u8>,
-        creator:      address,
-        timestamp:    u64,
-    }
-
-    public struct SyntheticAssetInfoCreated has copy, drop {
-        symbol: String,
-        timestamp: u64,
-    }
+    
 
     
 
@@ -447,22 +371,21 @@ module unxversal::synthetics {
 
     
 
-    // Legacy claim functions removed
+    
 
     
 
-    // Legacy cancel removed
+    
 
-    // Legacy modify removed
+    
 
-    // Legacy match step removed
+    
 
-    // Legacy GC step removed
+    
 
-    // Legacy match and GC step functions removed
+    
 
-    // No display for SyntheticAsset (lacks 'key')
-    /// Phase‑2 – Display helpers
+    /// Display helpers
     public fun init_vault_display<C>(publisher: &Publisher, ctx: &mut TxContext): display::Display<CollateralVault<C>> {
         let mut disp = display::new<CollateralVault<C>>(publisher, ctx);
         // Use concrete, non-placeholder templates from on-chain fields
@@ -475,112 +398,11 @@ module unxversal::synthetics {
         disp
     }
 
-    /// Phase‑2 – synthetic asset listing (admin‑only, legacy compatibility)
-    /// In cash-settled v2, this only registers metadata in `synthetics` and adds oracle feed mapping.
-    public fun create_synthetic_asset<C>(
-        reg_admin: &AdminRegistry,
-        registry: &mut SynthRegistry,
-        asset_name: String,
-        asset_symbol: String,
-        decimals: u8,
-        pyth_feed_id: vector<u8>,
-        min_coll_ratio: u64,
-        _cfg: &CollateralConfig<C>,
-        ctx: &mut TxContext
-    ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        let k = clone_string(&asset_symbol);
-        assert!(!table::contains(&registry.synthetics, clone_string(&k)), E_ASSET_EXISTS);
-        let asset = SyntheticAsset {
-            name: clone_string(&asset_name),
-            symbol: clone_string(&asset_symbol),
-            decimals,
-            pyth_feed_id: copy_vector_u8(&pyth_feed_id),
-            min_collateral_ratio: min_coll_ratio,
-            total_supply: 0,
-            is_active: true,
-            created_at: sui::tx_context::epoch_timestamp_ms(ctx),
-            stability_fee_bps: 0,
-            liquidation_threshold_bps: 0,
-            liquidation_penalty_bps: 0,
-            mint_fee_bps: 0,
-            burn_fee_bps: 0,
-        };
-        table::add(&mut registry.synthetics, clone_string(&asset_symbol), asset);
-        if (table::contains(&registry.oracle_feeds, clone_string(&asset_symbol))) { let _ = table::remove(&mut registry.oracle_feeds, clone_string(&asset_symbol)); };
-        table::add(&mut registry.oracle_feeds, clone_string(&asset_symbol), pyth_feed_id);
-        push_symbol_if_missing(&mut registry.listed_symbols, &asset_symbol);
-        registry.num_synthetics = registry.num_synthetics + 1;
-        event::emit(SyntheticAssetInfoCreated { symbol: clone_string(&asset_symbol), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-    }
+    
 
-    /// AdminRegistry-gated variant (migration bridge)
-    public fun set_asset_stability_fee_admin(
-        reg_admin: &AdminRegistry,
-        registry: &mut SynthRegistry,
-        symbol: String,
-        bps: u64,
-        ctx: &TxContext
-    ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        let k = clone_string(&symbol);
-        let asset = table::borrow_mut(&mut registry.synthetics, k);
-        asset.stability_fee_bps = bps;
-    }
+    // Legacy asset parameter setters removed in V2 cash-settled design
 
-    public fun set_asset_liquidation_threshold_admin(
-        reg_admin: &AdminRegistry,
-        registry: &mut SynthRegistry,
-        symbol: String,
-        bps: u64,
-        ctx: &TxContext
-    ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        let k = clone_string(&symbol);
-        let asset = table::borrow_mut(&mut registry.synthetics, k);
-        asset.liquidation_threshold_bps = bps;
-    }
-
-    public fun set_asset_liquidation_penalty_admin(
-        reg_admin: &AdminRegistry,
-        registry: &mut SynthRegistry,
-        symbol: String,
-        bps: u64,
-        ctx: &TxContext
-    ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        let k = clone_string(&symbol);
-        let asset = table::borrow_mut(&mut registry.synthetics, k);
-        asset.liquidation_penalty_bps = bps;
-    }
-
-    public fun set_asset_mint_fee_admin(
-        reg_admin: &AdminRegistry,
-        registry: &mut SynthRegistry,
-        symbol: String,
-        bps: u64,
-        ctx: &TxContext
-    ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        let k = clone_string(&symbol);
-        let asset = table::borrow_mut(&mut registry.synthetics, k);
-        asset.mint_fee_bps = bps;
-    }
-
-    public fun set_asset_burn_fee_admin(
-        reg_admin: &AdminRegistry,
-        registry: &mut SynthRegistry,
-        symbol: String,
-        bps: u64,
-        ctx: &TxContext
-    ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        let k = clone_string(&symbol);
-        let asset = table::borrow_mut(&mut registry.synthetics, k);
-        asset.burn_fee_bps = bps;
-    }
-
-    /// Phase‑2 – vault lifecycle
+    /// Vault lifecycle
     /// Anyone can open a fresh vault (zero‑collateral, zero‑debt).
     public fun create_vault<C>(
         cfg: &CollateralConfig<C>,
@@ -649,15 +471,15 @@ module unxversal::synthetics {
         table::add(&mut registry.oracle_feeds, symbol, copy_vector_u8(&fh));
     }
 
-    // Legacy test market constructor removed
+    
 
-    // Legacy new_escrow_for_testing removed
+    
 
-    // Legacy test place_with_escrow_return_id removed
+    
 
-    // Legacy escrow helper removed
+    
 
-    // Legacy escrow helper removed
+    
 
     /*******************************
      * Test-only Event Mirrors
@@ -696,9 +518,9 @@ module unxversal::synthetics {
         }
     }
 
-    // Legacy mint_synthetic_with_event_mirror removed
+    
 
-    // Legacy burn_synthetic_with_event_mirror removed
+    
 
     // Test-only accessors for EventMirror (fields are private outside module)
     #[test_only] public fun em_mint_count(m: &EventMirror): u64 { m.mint_count }
@@ -713,7 +535,7 @@ module unxversal::synthetics {
     #[test_only] public fun em_last_burn_new_cr(m: &EventMirror): u64 { m.last_burn_new_cr }
     #[test_only] public fun em_last_unxv_leftover(m: &EventMirror): u64 { m.last_unxv_leftover }
 
-    // Legacy escrow helper removed
+    
 
     #[test_only]
     public fun vault_collateral_value<C>(vault: &CollateralVault<C>): u64 { balance::value(&vault.collateral) }
@@ -782,6 +604,8 @@ module unxversal::synthetics {
         assert!(!registry.paused, 1000);
         assert!(vault.owner == ctx.sender(), E_NOT_OWNER);
         assert_cfg_matches(registry, cfg);
+        // Ensure price coverage for all open positions at non-zero prices
+        assert_prices_cover_all_positions(vault, &symbols, &prices);
         let (im_total, _, _) = compute_portfolio_im_mm_with_prices(vault, registry, &symbols, &prices);
         let coll_val = balance::value(&vault.collateral);
         assert!(coll_val >= im_total && amount <= (coll_val - im_total), E_VAULT_NOT_HEALTHY);
@@ -869,10 +693,31 @@ module unxversal::synthetics {
         (clamp_u128_to_u64(im_u128), clamp_u128_to_u64(mm_u128), clamp_u128_to_u64(notion_u128))
     }
 
+    /// Assert that the provided (symbols, prices) cover all open position symbols with non-zero prices.
+    public fun assert_prices_cover_all_positions<C>(
+        vault: &CollateralVault<C>,
+        symbols: &vector<String>,
+        prices: &vector<u64>
+    ) {
+        assert!(vector::length(symbols) == vector::length(prices), E_PRICE_VECTOR_MISMATCH);
+        let ps_len = vector::length(&vault.position_symbols);
+        let mut i = 0; while (i < ps_len) {
+            let sym = vector::borrow(&vault.position_symbols, i);
+            if (table::contains(&vault.positions, clone_string(sym))) {
+                let pos = table::borrow(&vault.positions, clone_string(sym));
+                if (pos.qty > 0) {
+                    let (p, ok) = find_price(symbols, prices, sym);
+                    assert!(ok && p > 0, E_MISSING_FEED_FOR_SYMBOL);
+                };
+            };
+            i = i + 1;
+        };
+    }
 
-    // Legacy mint_synthetic_internal removed
 
-    // Legacy burn_synthetic_internal removed
+    
+
+    
 
     /// Stability fee accrual is disabled in cash-settled v2 (no supply-bearing debt positions)
     public fun accrue_stability<C>(
@@ -885,17 +730,17 @@ module unxversal::synthetics {
         _ctx: &mut TxContext
     ) { }
 
-    // Legacy accrue_stability_with_points removed
     
-    // Legacy mint_synthetic removed
+    
+    
 
-    // Legacy burn_synthetic removed
-
-
-
+    
 
 
-    /// Phase‑2 – vault health helpers
+
+
+
+    /// Vault health helpers
     /// returns (ratio_bps, is_liquidatable)
     public fun check_vault_health<C>(
         vault: &CollateralVault<C>,
@@ -931,7 +776,7 @@ module unxversal::synthetics {
         (ratio_bps, collateral < maint)
     }
 
-    // Legacy allocation helper removed
+    
 
     /// Vault-to-vault collateral transfer (settlement helper)
     public fun transfer_between_vaults<C>(
@@ -953,44 +798,14 @@ module unxversal::synthetics {
     // Test-only helper to construct GlobalParams for update tests
     #[test_only]
     public fun new_global_params_for_testing(
-        min_collateral_ratio: u64,
-        liquidation_threshold: u64,
-        liquidation_penalty: u64,
         max_synthetics: u64,
-        stability_fee: u64,
         bot_split: u64,
-        mint_fee: u64,
-        burn_fee: u64,
-        unxv_discount_bps: u64,
-        maker_rebate_bps: u64,
-        gc_reward_bps: u64,
-        maker_bond_bps: u64
-    ): GlobalParams {
-        GlobalParams {
-            min_collateral_ratio,
-            liquidation_threshold,
-            liquidation_penalty,
-            max_synthetics,
-            stability_fee,
-            bot_split,
-            mint_fee,
-            burn_fee,
-            unxv_discount_bps,
-            maker_rebate_bps,
-            gc_reward_bps,
-            maker_bond_bps,
-        }
-    }
+        unxv_discount_bps: u64
+    ): GlobalParams { GlobalParams { bot_split, unxv_discount_bps, max_synthetics } }
 
     // Test-only updater for GlobalParams
     #[test_only]
-    public fun update_global_params(
-        registry: &mut SynthRegistry,
-        new_params: GlobalParams,
-        _ctx: &TxContext
-    ) {
-        registry.global_params = new_params;
-    }
+    public fun update_global_params(registry: &mut SynthRegistry, new_params: GlobalParams, _ctx: &TxContext) { registry.global_params = new_params }
 
     // Test-only getter for vault owner
     #[test_only]
@@ -1003,11 +818,16 @@ module unxversal::synthetics {
     /// List all listed synthetic symbols
     public fun list_synthetics(registry: &SynthRegistry): vector<String> { clone_string_vec(&registry.listed_symbols) }
 
-    /// Get read-only reference to a listed synthetic asset
-    public fun get_synthetic(registry: &SynthRegistry, symbol: &String): &SyntheticAsset { table::borrow(&registry.synthetics, clone_string(symbol)) }
+    
 
     /// V2: Get read-only reference to an instrument
     public fun get_instrument(registry: &SynthRegistry, symbol: &String): &Instrument { table::borrow(&registry.instruments, clone_string(symbol)) }
+
+    /// Get instrument sizing params (min_size, lot_size, tick_size)
+    public fun get_instrument_sizes(registry: &SynthRegistry, symbol: &String): (u64, u64, u64) {
+        let inst = table::borrow(&registry.instruments, clone_string(symbol));
+        (inst.min_size, inst.lot_size, inst.tick_size)
+    }
 
     /// Get oracle feed id bytes for a symbol (empty if missing)
     public fun get_oracle_feed_bytes(registry: &SynthRegistry, symbol: &String): vector<u8> {
@@ -1015,10 +835,10 @@ module unxversal::synthetics {
         if (table::contains(&registry.oracle_feeds, k)) { copy_vector_u8(table::borrow(&registry.oracle_feeds, clone_string(symbol))) } else { b"".to_string().into_bytes() }
     }
 
-    // removed: rank_vault_liquidation_order (unused after multi removal)
+    
 
-    /// Compute collateral/debt values for a vault and return ratio bps
-    public fun get_vault_values<C>(
+    /// Compute collateral/debt values for a vault using last marks and return ratio bps (diagnostic)
+    public fun get_vault_values_last_mark<C>(
         vault: &CollateralVault<C>,
         registry: &SynthRegistry,
         _clock: &Clock,
@@ -1077,7 +897,7 @@ module unxversal::synthetics {
     }
 
     /// Convenience: compute portfolio values using caller-supplied live prices
-    public fun get_portfolio_live<C>(
+    public fun get_portfolio_with_prices<C>(
         vault: &CollateralVault<C>,
         registry: &SynthRegistry,
         _clock: &Clock,
@@ -1126,8 +946,9 @@ module unxversal::synthetics {
         fill_price_u64: u64,
         mut unxv_payment: vector<Coin<UNXV>>,
         ctx: &mut TxContext
-    ) {
+    ): (u64, u64, u64) {
         assert!(!registry.paused, 1000);
+        assert!(registry.treasury_id == object::id(treasury), E_TREASURY_NOT_BOUND);
         assert!(vault.owner == ctx.sender(), E_NOT_OWNER);
         assert!(qty > 0, E_ZERO_AMOUNT);
         assert_cfg_matches(registry, cfg);
@@ -1218,19 +1039,165 @@ module unxversal::synthetics {
             }
         };
 
-        // Apply realized PnL to collateral immediately (zero-trust)
-        if (realized_loss > 0) {
-            let bal_loss = balance::split(&mut vault.collateral, realized_loss);
-            let coin_loss = coin::from_balance(bal_loss, ctx);
-            TreasuryMod::deposit_collateral(treasury, coin_loss, b"trade_loss".to_string(), vault.owner, ctx);
-            event::emit(CollateralLossDebited { amount: realized_loss, reason: b"trade_loss".to_string(), owner: vault.owner, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        // Do not settle realized PnL here. Return values for DEX to net-settle between vaults.
+
+        // Fees in collateral with optional UNXV discount
+        let fee_bps = inst.fee_bps;
+        let notional_u128: u128 = (qty as u128) * (fill_price_u64 as u128);
+        let base_fee = clamp_u128_to_u64((notional_u128 * (fee_bps as u128)) / 10_000u128);
+        let discount_collateral = (base_fee * registry.global_params.unxv_discount_bps) / 10_000;
+        let mut fee_after = base_fee;
+        if (discount_collateral > 0 && vector::length(&unxv_payment) > 0) {
+            let (price_unxv_u64, ok_unxv) = find_price(&live_symbols, &live_prices, &b"UNXV".to_string());
+            assert!(ok_unxv && price_unxv_u64 > 0, E_PRICE_VECTOR_MISMATCH);
+            if (ok_unxv && price_unxv_u64 > 0) {
+                let unxv_needed = (discount_collateral + price_unxv_u64 - 1) / price_unxv_u64;
+                let mut merged = coin::zero<UNXV>(ctx);
+                let mut i = 0; let m = vector::length(&unxv_payment);
+                while (i < m) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut merged, c); i = i + 1; };
+                let have = coin::value(&merged);
+                if (have >= unxv_needed) {
+                    let exact = coin::split(&mut merged, unxv_needed, ctx);
+                    let mut vecu = vector::empty<Coin<UNXV>>();
+                    vector::push_back(&mut vecu, exact);
+                    TreasuryMod::deposit_unxv(treasury, vecu, b"trade".to_string(), vault.owner, ctx);
+                    transfer::public_transfer(merged, vault.owner);
+                    if (base_fee > discount_collateral) { fee_after = base_fee - discount_collateral; } else { fee_after = 0; }
+                } else { transfer::public_transfer(merged, vault.owner); }
+            }
         };
-        if (realized_gain > 0) {
-            // Protocol requires settlement coin from counterparty/venue
-            // For now, treat fee_after as separate; realized gain must be delivered via external transfer path
-            // Here we assert that realized gain settlement is not handled implicitly
-            let _ = realized_gain; // reserved for explicit settlement in DEX layer
+        if (vector::length(&unxv_payment) > 0) { let mut leftover = coin::zero<UNXV>(ctx); while (vector::length(&unxv_payment) > 0) { let c = vector::pop_back(&mut unxv_payment); coin::join(&mut leftover, c); }; transfer::public_transfer(leftover, vault.owner); };
+        vector::destroy_empty(unxv_payment);
+
+        if (fee_after > 0) {
+            let fee_bal = balance::split(&mut vault.collateral, fee_after);
+            let fee_coin = coin::from_balance(fee_bal, ctx);
+            TreasuryMod::deposit_collateral(treasury, fee_coin, b"trade".to_string(), vault.owner, ctx);
+            event::emit(FeeCollected { amount: fee_after, payer: vault.owner, market: clone_string(&symbol), reason: b"trade".to_string(), timestamp: sui::clock::timestamp_ms(clock) });
         };
+
+        event::emit(PositionTrade { symbol: clone_string(&symbol), side, qty, price: fill_price_u64, realized_gain, realized_loss, fee_paid: fee_after, owner: vault.owner, timestamp: now });
+        vault.last_update_ms = now;
+
+        // Post-trade IM check using provided live prices; also enforce instrument-level caps
+        let (im_after, _, notion_after) = compute_portfolio_im_mm_with_prices(vault, registry, &live_symbols, &live_prices);
+        let collateral_after_raw = balance::value(&vault.collateral);
+        // Adjust collateral for pending PnL (not yet settled on-chain) for safety check only
+        let mut coll_after_adj_u128: u128 = (collateral_after_raw as u128);
+        if (realized_gain > 0) { coll_after_adj_u128 = coll_after_adj_u128 + (realized_gain as u128); };
+        if (realized_loss > 0) { if (coll_after_adj_u128 > (realized_loss as u128)) { coll_after_adj_u128 = coll_after_adj_u128 - (realized_loss as u128); } else { coll_after_adj_u128 = 0u128; } };
+        let collateral_after_adj = clamp_u128_to_u64(coll_after_adj_u128);
+        assert!(collateral_after_adj >= im_after, E_VAULT_NOT_HEALTHY);
+        // Portfolio max leverage and per-instrument concentration
+        let max_lev_bps = inst.max_leverage_bps;
+        assert!(notion_after <= ((collateral_after_adj as u128) * (max_lev_bps as u128) / 10_000u128) as u64, E_VAULT_NOT_HEALTHY);
+        // Concentration: ensure this instrument's notional share is within cap (use live price when provided)
+        let (px_candidate, ok_px) = find_price(&live_symbols, &live_prices, &symbol);
+        let px_here = if (ok_px && px_candidate > 0) { px_candidate } else { fill_price_u64 };
+        let pos_here = table::borrow(&vault.positions, clone_string(&symbol));
+        let notion_here: u128 = (pos_here.qty as u128) * (px_here as u128);
+        let conc_cap_bps = inst.max_concentration_bps;
+        assert!(notion_here <= ((collateral_after_adj as u128) * (conc_cap_bps as u128) / 10_000u128) as u128, E_VAULT_NOT_HEALTHY);
+        (realized_gain, realized_loss, fee_after)
+    }
+
+    /// Package-visible variant for DEX settlement (permissionless matching path)
+    /// Same behavior as apply_fill but without owner-only assertion. Must be called from DEX with full
+    /// invariants enforced and price-vector coverage.
+    public(package) fun apply_fill_pkg<C: store>(
+        cfg: &CollateralConfig<C>,
+        registry: &mut SynthRegistry,
+        treasury: &mut Treasury<C>,
+        clock: &Clock,
+        _oracle_cfg: &OracleConfig,
+        live_symbols: vector<String>,
+        live_prices: vector<u64>,
+        vault: &mut CollateralVault<C>,
+        symbol: String,
+        side: u8,
+        qty: u64,
+        fill_price_u64: u64,
+        mut unxv_payment: vector<Coin<UNXV>>,
+        ctx: &mut TxContext
+    ): (u64, u64, u64) {
+        assert!(!registry.paused, 1000);
+        assert!(registry.treasury_id == object::id(treasury), E_TREASURY_NOT_BOUND);
+        assert!(qty > 0, E_ZERO_AMOUNT);
+        assert_cfg_matches(registry, cfg);
+        let inst = table::borrow(&registry.instruments, clone_string(&symbol));
+        assert!(qty >= inst.min_size, E_INVALID_ORDER);
+
+        let (im_before, _, _) = compute_portfolio_im_mm_with_prices(vault, registry, &live_symbols, &live_prices);
+        let collateral_before = balance::value(&vault.collateral);
+        assert!(collateral_before >= im_before, E_VAULT_NOT_HEALTHY);
+
+        let has_pos = table::contains(&vault.positions, clone_string(&symbol));
+        let now = sui::clock::timestamp_ms(clock);
+        let mut realized_gain: u64 = 0;
+        let mut realized_loss: u64 = 0;
+
+        if (!has_pos) {
+            let pos = Position { side, qty, entry_px_u64: fill_price_u64, last_px_u64: fill_price_u64, created_at_ms: now, updated_at_ms: now };
+            table::add(&mut vault.positions, clone_string(&symbol), pos);
+            push_symbol_if_missing(&mut vault.position_symbols, &symbol);
+            event::emit(PositionOpened { symbol: clone_string(&symbol), side, qty, price: fill_price_u64, owner: vault.owner, timestamp: now });
+        } else {
+            let p = table::borrow_mut(&mut vault.positions, clone_string(&symbol));
+            if (p.qty > 0 && p.side == side) {
+                let old_notional: u128 = (p.qty as u128) * (p.entry_px_u64 as u128);
+                let add_notional: u128 = (qty as u128) * (fill_price_u64 as u128);
+                let new_qty = p.qty + qty;
+                let new_entry_u128 = (old_notional + add_notional) / (new_qty as u128);
+                p.qty = new_qty;
+                p.entry_px_u64 = clamp_u128_to_u64(new_entry_u128);
+                p.last_px_u64 = fill_price_u64;
+                p.updated_at_ms = now;
+                event::emit(PositionIncreased { symbol: clone_string(&symbol), side, qty, price: fill_price_u64, owner: vault.owner, timestamp: now });
+            } else {
+                let close_qty = if (qty <= p.qty) { qty } else { p.qty };
+                if (close_qty > 0) {
+                    if (p.side == 0) {
+                        if (fill_price_u64 >= p.entry_px_u64) {
+                            let diff = fill_price_u64 - p.entry_px_u64;
+                            realized_gain = realized_gain + (diff * close_qty);
+                        } else {
+                            let diff = p.entry_px_u64 - fill_price_u64;
+                            realized_loss = realized_loss + (diff * close_qty);
+                        }
+                    } else {
+                        if (p.entry_px_u64 >= fill_price_u64) {
+                            let diff = p.entry_px_u64 - fill_price_u64;
+                            realized_gain = realized_gain + (diff * close_qty);
+                        } else {
+                            let diff = fill_price_u64 - p.entry_px_u64;
+                            realized_loss = realized_loss + (diff * close_qty);
+                        }
+                    };
+                    p.qty = p.qty - close_qty;
+                    event::emit(PositionReduced { symbol: clone_string(&symbol), qty: close_qty, price: fill_price_u64, owner: vault.owner, timestamp: now });
+                };
+                let remain = if (qty > close_qty) { qty - close_qty } else { 0 };
+                if (p.qty == 0 && remain == 0) {
+                    let _ = table::remove(&mut vault.positions, clone_string(&symbol));
+                    remove_symbol_if_present(&mut vault.position_symbols, &symbol);
+                    event::emit(PositionClosed { symbol: clone_string(&symbol), owner: vault.owner, timestamp: now });
+                } else {
+                    if (p.qty == 0 && remain > 0) {
+                        p.side = side;
+                        p.qty = remain;
+                        p.entry_px_u64 = fill_price_u64;
+                        p.last_px_u64 = fill_price_u64;
+                        p.updated_at_ms = now;
+                        event::emit(PositionOpened { symbol: clone_string(&symbol), side, qty: remain, price: fill_price_u64, owner: vault.owner, timestamp: now });
+                    } else {
+                        p.last_px_u64 = fill_price_u64;
+                        p.updated_at_ms = now;
+                    }
+                }
+            }
+        };
+
+        // Return PnL to caller to perform net settlement between counterparties
 
         // Fees in collateral with optional UNXV discount
         let fee_bps = inst.fee_bps;
@@ -1269,19 +1236,22 @@ module unxversal::synthetics {
         event::emit(PositionTrade { symbol: clone_string(&symbol), side, qty, price: fill_price_u64, realized_gain, realized_loss, fee_paid: fee_after, owner: vault.owner, timestamp: now });
         vault.last_update_ms = now;
 
-        // Post-trade IM check using provided live prices; also enforce instrument-level caps
         let (im_after, _, notion_after) = compute_portfolio_im_mm_with_prices(vault, registry, &live_symbols, &live_prices);
-        let collateral_after = balance::value(&vault.collateral);
-        assert!(collateral_after >= im_after, E_VAULT_NOT_HEALTHY);
-        // Portfolio max leverage and per-instrument concentration
+        let collateral_after_raw = balance::value(&vault.collateral);
+        let mut coll_after_adj_u128: u128 = (collateral_after_raw as u128);
+        if (realized_gain > 0) { coll_after_adj_u128 = coll_after_adj_u128 + (realized_gain as u128); };
+        if (realized_loss > 0) { if (coll_after_adj_u128 > (realized_loss as u128)) { coll_after_adj_u128 = coll_after_adj_u128 - (realized_loss as u128); } else { coll_after_adj_u128 = 0u128; } };
+        let collateral_after_adj = clamp_u128_to_u64(coll_after_adj_u128);
+        assert!(collateral_after_adj >= im_after, E_VAULT_NOT_HEALTHY);
         let max_lev_bps = inst.max_leverage_bps;
-        assert!(notion_after <= ((collateral_after as u128) * (max_lev_bps as u128) / 10_000u128) as u64, E_VAULT_NOT_HEALTHY);
-        // Concentration: ensure this instrument's notional share is within cap
-        let mut px_here = fill_price_u64;
+        assert!(notion_after <= ((collateral_after_adj as u128) * (max_lev_bps as u128) / 10_000u128) as u64, E_VAULT_NOT_HEALTHY);
+        let (px_candidate, ok_px) = find_price(&live_symbols, &live_prices, &symbol);
+        let px_here = if (ok_px && px_candidate > 0) { px_candidate } else { fill_price_u64 };
         let pos_here = table::borrow(&vault.positions, clone_string(&symbol));
         let notion_here: u128 = (pos_here.qty as u128) * (px_here as u128);
         let conc_cap_bps = inst.max_concentration_bps;
-        assert!(notion_here <= ((collateral_after as u128) * (conc_cap_bps as u128) / 10_000u128) as u128, E_VAULT_NOT_HEALTHY);
+        assert!(notion_here <= ((collateral_after_adj as u128) * (conc_cap_bps as u128) / 10_000u128) as u128, E_VAULT_NOT_HEALTHY);
+        (realized_gain, realized_loss, fee_after)
     }
     /// Liquidation – seize collateral when ratio < threshold
     public fun liquidate_vault<C>(
@@ -1369,7 +1339,7 @@ module unxversal::synthetics {
         vault.last_update_ms = sui::tx_context::epoch_timestamp_ms(ctx);
     }
 
-    // removed: liquidate_vault_multi (unused)
+    
 
     /// INIT – executed once on package publish
     fun init(otw: SYNTHETICS, ctx: &mut TxContext) {
@@ -1380,23 +1350,10 @@ module unxversal::synthetics {
         let publisher = package::claim(otw, ctx);
 
         // 3️⃣ Bootstrap default global parameters (tweak in upgrades)
-        let params = GlobalParams {
-            min_collateral_ratio: 1_500,      // 150%
-            liquidation_threshold: 1_200,     // 120%
-            liquidation_penalty: 500,         // 5%
-            max_synthetics: 100,
-            stability_fee: 200,               // 2% APY
-            bot_split: 1_000,                 // 10%
-            mint_fee: 50,                     // 0.5%
-            burn_fee: 30,                     // 0.3%
-            unxv_discount_bps: 2_000,         // 20% discount when paying with UNXV
-            maker_rebate_bps: 0,              // disabled by default
-            gc_reward_bps: 100,               // 1% of slashed bond to keeper
-            maker_bond_bps: 10,               // 0.10% bond of notional required
-        };
+        let params = GlobalParams { bot_split: 1_000, unxv_discount_bps: 2_000, max_synthetics: 100 };
 
         // 4️⃣ Create empty tables and admin allow‑list (deployer is first admin)
-        let syn_table = table::new<String, SyntheticAsset>(ctx);
+        // legacy 'synthetics' table removed in V2
         let feed_table = table::new<String, vector<u8>>(ctx);
         let instr_table = table::new<String, Instrument>(ctx);
         let listed_symbols = vector::empty<String>();
@@ -1408,7 +1365,7 @@ module unxversal::synthetics {
 
         let registry = SynthRegistry {
             id: object::new(ctx),
-            synthetics: syn_table,
+            // legacy field removed in V2
             instruments: instr_table,
             oracle_feeds: feed_table,
             listed_symbols,
@@ -1422,7 +1379,7 @@ module unxversal::synthetics {
         };
         transfer::share_object(registry);
 
-        // Legacy caps removed in favor of centralized AdminRegistry
+        
 
         // 7️⃣ Register Display metadata so wallets can render the registry nicely
         let mut disp = display::new<SynthRegistry>(&publisher, ctx);
@@ -1437,7 +1394,7 @@ module unxversal::synthetics {
         transfer::public_transfer(disp, ctx.sender());
 
         // 8️⃣ Register Display for Order objects (for wallet/explorer UX)
-        // 9️⃣ Register Display for SyntheticAssetInfo (keyed wrapper)
+        // legacy display registrations removed
 
         // Finally transfer publisher after all displays are initialized
 
@@ -1446,7 +1403,7 @@ module unxversal::synthetics {
         // OracleConfig display is registered within the oracle module to avoid dependency cycles.
     }
 
-    // Legacy admin cap flows removed in favor of centralized AdminRegistry
+    
 
     /// Bind the system to a specific collateral coin type C exactly once.
     /// Creates and shares a `CollateralConfig<C>` object and records its ID in the registry.
@@ -1500,7 +1457,7 @@ module unxversal::synthetics {
         event::emit(InstrumentListed { symbol: clone_string(&symbol), kind, fee_bps, im_bps, mm_bps, liq_penalty_bps, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
-    // Legacy admin function removed
+    
 
     /// Update the registry's treasury reference to the concrete `Treasury<C>` selected by governance.
     public fun set_registry_treasury_admin<C>(
@@ -1561,24 +1518,10 @@ module unxversal::synthetics {
     public fun new_registry_for_testing(ctx: &mut TxContext): SynthRegistry {
         SynthRegistry {
             id: object::new(ctx),
-            synthetics: table::new<String, SyntheticAsset>(ctx),
             instruments: table::new<String, Instrument>(ctx),
             oracle_feeds: table::new<String, vector<u8>>(ctx),
             listed_symbols: vector::empty<String>(),
-            global_params: GlobalParams {
-                min_collateral_ratio: 1_500,
-                liquidation_threshold: 1_200,
-                liquidation_penalty: 500,
-                max_synthetics: 100,
-                stability_fee: 200,
-                bot_split: 1_000,
-                mint_fee: 50,
-                burn_fee: 30,
-                unxv_discount_bps: 2_000,
-                maker_rebate_bps: 0,
-                gc_reward_bps: 100,
-                maker_bond_bps: 10,
-            },
+            global_params: GlobalParams { bot_split: 1_000, unxv_discount_bps: 2_000, max_synthetics: 100 },
             paused: false,
             treasury_id: object::id_from_address(ctx.sender()),
             num_synthetics: 0,
@@ -1596,32 +1539,5 @@ module unxversal::synthetics {
         cfg
     }
 
-    #[test_only]
-    public fun add_synthetic_for_testing(
-        registry: &mut SynthRegistry,
-        asset_name: String,
-        asset_symbol: String,
-        decimals: u8,
-        min_coll_ratio: u64,
-        ctx: &TxContext
-    ) {
-        let asset = SyntheticAsset {
-            name: clone_string(&asset_name),
-            symbol: clone_string(&asset_symbol),
-            decimals,
-            pyth_feed_id: b"".to_string().into_bytes(),
-            min_collateral_ratio: min_coll_ratio,
-            total_supply: 0,
-            is_active: true,
-            created_at: sui::tx_context::epoch_timestamp_ms(ctx),
-            stability_fee_bps: 0,
-            liquidation_threshold_bps: 0,
-            liquidation_penalty_bps: 0,
-            mint_fee_bps: 0,
-            burn_fee_bps: 0,
-        };
-        table::add(&mut registry.synthetics, clone_string(&asset_symbol), asset);
-        vector::push_back(&mut registry.listed_symbols, asset_symbol);
-        registry.num_synthetics = registry.num_synthetics + 1;
-    }
+    // legacy add_synthetic_for_testing removed in V2
 }

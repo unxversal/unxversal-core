@@ -10,10 +10,12 @@ module unxversal::dex {
     use sui::coin::{Self as coin, Coin};
     use sui::clock::Clock;
     use sui::event;
+    // object/UID/ID are available by default; no explicit alias needed
     use sui::table::{Self as table, Table};
     use sui::balance::{Self as balance, Balance};
     use unxversal::book::{Self as Book, Book as ClobBook, Fill};
     use unxversal::utils;
+    
     use std::string::String;
 
     // Collateral coin type is generic per market; no hard USDC dependency
@@ -24,6 +26,8 @@ module unxversal::dex {
     // Removed cross-module FeeCollected emission; fees are accounted in Treasury
     use unxversal::treasury::{Self as TreasuryMod, Treasury, BotRewardsTreasury};
     use unxversal::bot_rewards::{Self as BotRewards, BotPointsRegistry};
+    // Synthetics integration for cash-settled synthetic spot
+    use unxversal::synthetics::{Self as SynthMod, SynthRegistry, CollateralVault, CollateralConfig};
 
     fun assert_is_admin(admin_reg: &AdminRegistry, addr: address) { assert!(AdminMod::is_admin(admin_reg, addr), E_NOT_ADMIN); }
 
@@ -34,6 +38,7 @@ module unxversal::dex {
     const E_EXPIRED: u64 = 5;
     const E_NOT_CROSSED: u64 = 6;
     const E_BAD_BOUNDS: u64 = 7;
+    const E_BAD_TREASURY: u64 = 8;
     
 
     // Arithmetic safety helpers
@@ -94,6 +99,19 @@ module unxversal::dex {
         fee_paid: u64,
         unxv_discount_applied: bool,
         maker_rebate: u64,
+        timestamp: u64,
+    }
+
+    // Synthetic spot matched (cash-settled in vaults; fees charged by synthetics engine)
+    public struct SynthOrderMatched has copy, drop {
+        market: String,
+        symbol: String,
+        price: u64,
+        qty: u64,
+        taker_is_buyer: bool,
+        taker: address,
+        maker: address,
+        unxv_discount_applied: bool,
         timestamp: u64,
     }
 
@@ -181,8 +199,6 @@ module unxversal::dex {
         
     }
 
-    
-
     // AdminRegistry-gated variants (centralized admin)
     public fun set_trade_fee_bps_admin(reg_admin: &AdminRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); cfg.trade_fee_bps = bps; }
     public fun set_unxv_discount_bps_admin(reg_admin: &AdminRegistry, cfg: &mut DexConfig, bps: u64, ctx: &TxContext) { assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN); cfg.unxv_discount_bps = bps; }
@@ -238,15 +254,7 @@ module unxversal::dex {
     // Create a test-only DexEscrow for a given market
     #[test_only]
     public fun new_dex_escrow_for_testing<Base: store, C: store>(market: &DexMarket<Base, C>, ctx: &mut TxContext): DexEscrow<Base, C> {
-        DexEscrow<Base, C> {
-            id: object::new(ctx),
-            market_id: object::id(market),
-            pending_base: table::new<u128, balance::Balance<Base>>(ctx),
-            pending_collateral: table::new<u128, balance::Balance<C>>(ctx),
-            accrual_base: table::new<u128, balance::Balance<Base>>(ctx),
-            accrual_collateral: table::new<u128, balance::Balance<C>>(ctx),
-            bonds: table::new<u128, balance::Balance<C>>(ctx),
-        }
+        DexEscrow<Base, C> { id: object::new(ctx), market_id: object::id(market), pending_base: table::new<u128, balance::Balance<Base>>(ctx), pending_collateral: table::new<u128, balance::Balance<C>>(ctx), bonds: table::new<u128, balance::Balance<C>>(ctx) }
     }
 
     /*******************************
@@ -355,6 +363,7 @@ module unxversal::dex {
         ctx: &mut TxContext
     ) {
         assert!(!cfg.paused, E_PAUSED);
+        assert!(object::id(treasury) == cfg.treasury_id, E_BAD_TREASURY);
         let now = sui::clock::timestamp_ms(clock);
         if (buy.expiry_ms != 0) { assert!(now <= buy.expiry_ms, E_EXPIRED); };
         if (sell.expiry_ms != 0) { assert!(now <= sell.expiry_ms, E_EXPIRED); };
@@ -413,7 +422,9 @@ module unxversal::dex {
             }
         };
         let collateral_fee_to_collect_u128: u128 = if (discount_applied) { trade_fee_u128 - discount_collateral_u128 } else { trade_fee_u128 };
-        let maker_rebate_u128: u128 = (trade_fee_u128 * (cfg.maker_rebate_bps as u128)) / 10_000u128;
+        let maker_rebate_u128_raw: u128 = (trade_fee_u128 * (cfg.maker_rebate_bps as u128)) / 10_000u128;
+        // Cap maker rebate by the actual fee collected after discount
+        let maker_rebate_u128: u128 = if (maker_rebate_u128_raw <= collateral_fee_to_collect_u128) { maker_rebate_u128_raw } else { collateral_fee_to_collect_u128 };
         let collateral_net_to_seller_u128: u128 = if (collateral_fee_to_collect_u128 <= collateral_owed_u128) { collateral_owed_u128 - collateral_fee_to_collect_u128 } else { 0 };
         let collateral_net_to_seller = clamp_u128_to_u64(collateral_net_to_seller_u128);
         if (collateral_net_to_seller > 0) {
@@ -424,7 +435,7 @@ module unxversal::dex {
         let maker_rebate = clamp_u128_to_u64(maker_rebate_u128);
         if (collateral_fee_to_collect > 0) {
             let mut fee_coin_all = coin::split(&mut buy.escrow_collateral, collateral_fee_to_collect, ctx);
-            if (maker_rebate > 0 && maker_rebate < collateral_fee_to_collect) {
+            if (maker_rebate > 0) {
                 let to_maker = coin::split(&mut fee_coin_all, maker_rebate, ctx);
                 let maker_addr = if (taker_is_buyer) { sell.owner } else { buy.owner };
                 transfer::public_transfer(to_maker, maker_addr);
@@ -480,9 +491,9 @@ module unxversal::dex {
     }
 
     /*******************************
-    * Minimal on-chain CLOB hooks (scaffold)
-    * - Future work: define `DexMarket<Base, C>` with `ClobBook`, maker maps, bonds/escrow like synthetics
-    * - Expose place/cancel/modify, match_step_auto, gc_step (escrow-only model)
+    * On-chain CLOB hooks (escrow-based)
+    * - `DexMarket<Base, C>` uses `ClobBook` with maker maps, bonds/escrow
+    * - Exposes place/cancel/modify, match_step_auto, gc_step
     *******************************/
     public struct DexMarket<phantom Base, phantom C> has key, store {
         id: UID,
@@ -504,6 +515,35 @@ module unxversal::dex {
         bonds: Table<u128, Balance<C>>,                   // maker_id -> GC bond (in quote)
     }
 
+    // Synthetic order (cash-settled): owner vault trades exposure on "symbol"
+    public struct SynthOrder has key, store {
+        id: UID,
+        owner: address,
+        vault_id: ID,
+        symbol: String,
+        side: u8,                 // 0 = buy/long, 1 = sell/short
+        price: u64,
+        qty: u64,
+        created_at_ms: u64,
+        expiry_ms: u64,
+    }
+
+    // Placement event for public indexers and UIs
+    public struct SynthOrderPlaced has copy, drop {
+        order_id: ID,
+        owner: address,
+        vault_id: ID,
+        symbol: String,
+        side: u8,
+        price: u64,
+        qty: u64,
+        expiry_ms: u64,
+        timestamp: u64,
+    }
+
+    public struct SynthOrderCancelled has copy, drop { order_id: ID, owner: address, timestamp: u64 }
+    public struct SynthOrderExpired has copy, drop { order_id: ID, owner: address, timestamp: u64 }
+
     public fun init_dex_market<Base: store, C: store>(admin_reg: &AdminRegistry, base_symbol: String, quote_symbol: String, tick_size: u64, lot_size: u64, min_size: u64, clock: &Clock, ctx: &mut TxContext) {
         assert_is_admin(admin_reg, ctx.sender());
         let book = Book::empty(tick_size, lot_size, min_size, ctx);
@@ -515,6 +555,57 @@ module unxversal::dex {
         let idm = object::id(&mkt);
         transfer::share_object(mkt);
         event::emit(MarketCreated { market_id: idm, base: base_symbol, quote: quote_symbol, tick_size, lot_size, min_size, creator: ctx.sender(), timestamp: sui::clock::timestamp_ms(clock) });
+    }
+
+    // Place a synthetic limit order; vault-based cash-settled exposure
+    public fun place_synth_limit_order(
+        _cfg: &DexConfig,
+        symbol: String,
+        side: u8,
+        price: u64,
+        qty: u64,
+        expiry_ms: u64,
+        vault_id: ID,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): SynthOrder {
+        assert!(qty > 0, E_ZERO_AMOUNT);
+        let order = SynthOrder { id: object::new(ctx), owner: ctx.sender(), vault_id, symbol, side, price, qty, created_at_ms: sui::clock::timestamp_ms(clock), expiry_ms };
+        event::emit(SynthOrderPlaced { order_id: object::id(&order), owner: order.owner, vault_id, symbol: clone_string_internal(&order.symbol), side, price, qty, expiry_ms, timestamp: order.created_at_ms });
+        order
+    }
+
+    public fun cancel_synth_order(order: SynthOrder, _clock: &Clock, ctx: &TxContext) {
+        assert!(order.owner == ctx.sender(), E_NOT_ADMIN);
+        let SynthOrder { id, owner, vault_id: _, symbol: _, side: _, price: _, qty: _, created_at_ms: _, expiry_ms: _, } = order;
+        event::emit(SynthOrderCancelled { order_id: object::uid_to_inner(&id), owner, timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
+        object::delete(id);
+    }
+
+    /// Keeper helper: cancel expired synth order (owner not required)
+    public fun cancel_synth_if_expired(order: SynthOrder, clock: &Clock, _ctx: &TxContext) {
+        let now = sui::clock::timestamp_ms(clock);
+        assert!(order.expiry_ms != 0 && now > order.expiry_ms, E_EXPIRED);
+        let SynthOrder { id, owner, vault_id: _, symbol: _, side: _, price: _, qty: _, created_at_ms: _, expiry_ms: _, } = order;
+        event::emit(SynthOrderExpired { order_id: object::uid_to_inner(&id), owner, timestamp: now });
+        object::delete(id);
+    }
+
+    /// Place and share a synth order in one call (publicly matchable)
+    #[allow(lint(share_owned))]
+    public fun place_and_share_synth_order(
+        _cfg: &DexConfig,
+        symbol: String,
+        side: u8,
+        price: u64,
+        qty: u64,
+        expiry_ms: u64,
+        vault_id: ID,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let order = place_synth_limit_order(_cfg, symbol, side, price, qty, expiry_ms, vault_id, clock, ctx);
+        transfer::share_object(order);
     }
 
     public fun init_dex_escrow_for_market<Base: store, C: store>(market: &DexMarket<Base, C>, ctx: &mut TxContext) {
@@ -549,7 +640,8 @@ module unxversal::dex {
             let maker_id = Book::fill_maker_id(&f);
             let qty = Book::fill_base_qty(&f);
             // pay collateral to maker accrual
-            let notional = qty * price;
+            let notional_u128: u128 = (qty as u128) * (price as u128);
+            let notional = clamp_u128_to_u64(notional_u128);
             if (notional > 0) {
                 let coin_pay = coin::split(taker_collateral, notional, ctx);
                 let maker_addr = if (table::contains(&market.makers, maker_id)) { *table::borrow(&market.makers, maker_id) } else { ctx.sender() };
@@ -576,14 +668,16 @@ module unxversal::dex {
             // escrow collateral for remainder
             let (filled, total) = Book::order_progress(&market.book, oid);
             let rem = total - filled;
-            let need = rem * price;
+            let need_u128: u128 = (rem as u128) * (price as u128);
+            let need = clamp_u128_to_u64(need_u128);
             if (need > 0) {
                 let c = coin::split(taker_collateral, need, ctx);
                 let bal = coin::into_balance(c);
                 table::add(&mut escrow.pending_collateral, oid, bal);
             };
             // post bond
-            let bond_amt = (need * cfg.maker_bond_bps) / 10_000;
+            let bond_amt_u128: u128 = (need_u128 * (cfg.maker_bond_bps as u128)) / 10_000u128;
+            let bond_amt = clamp_u128_to_u64(bond_amt_u128);
             if (bond_amt > 0) {
                 let cb = coin::split(taker_collateral, bond_amt, ctx);
                 let bb = coin::into_balance(cb);
@@ -621,14 +715,13 @@ module unxversal::dex {
             let f: Fill = Book::fillplan_get_fill(&plan, i);
             let maker_id = Book::fill_maker_id(&f);
             let qty = Book::fill_base_qty(&f);
-            let notional = qty * price;
+            let notional_u128: u128 = (qty as u128) * (price as u128);
+            let notional = clamp_u128_to_u64(notional_u128);
             if (notional > 0) {
                 let coin_pay = coin::split(taker_collateral, notional, ctx);
                 let bal_pay = coin::into_balance(coin_pay);
-                if (table::contains(&escrow.accrual_collateral, maker_id)) {
-                    let b = table::borrow_mut(&mut escrow.accrual_collateral, maker_id);
-                    balance::join(b, bal_pay);
-                } else { table::add(&mut escrow.accrual_collateral, maker_id, bal_pay); };
+                // accrue into pending_collateral as immediate liability to takers
+                if (table::contains(&escrow.pending_collateral, maker_id)) { let b = table::borrow_mut(&mut escrow.pending_collateral, maker_id); balance::join(b, bal_pay); } else { table::add(&mut escrow.pending_collateral, maker_id, bal_pay); };
             };
             if (table::contains(&escrow.pending_base, maker_id)) {
                 let bbase = table::borrow_mut(&mut escrow.pending_base, maker_id);
@@ -685,7 +778,8 @@ module unxversal::dex {
             if (table::contains(&escrow.pending_collateral, maker_id)) {
                 let bcol = table::borrow_mut(&mut escrow.pending_collateral, maker_id);
                 let available = balance::value(bcol);
-                let need = qty * price;
+                let need_u128: u128 = (qty as u128) * (price as u128);
+                let need = clamp_u128_to_u64(need_u128);
                 let take = if (available >= need) { need } else { available };
                 if (take > 0) {
                     let bout = balance::split(bcol, take);
@@ -709,8 +803,9 @@ module unxversal::dex {
                 table::add(&mut escrow.pending_base, oid, bb);
             };
             // bond (use quote)
-            let need_quote = rem * price;
-            let bond_amt = (need_quote * cfg.maker_bond_bps) / 10_000;
+            let need_quote_u128: u128 = (rem as u128) * (price as u128);
+            let bond_amt_u128: u128 = (need_quote_u128 * (cfg.maker_bond_bps as u128)) / 10_000u128;
+            let bond_amt = clamp_u128_to_u64(bond_amt_u128);
             if (bond_amt > 0) {
                 // Without taker collateral coin, skip bond here; recommend admin to top-up via separate flow
             };
@@ -806,12 +901,14 @@ module unxversal::dex {
             if (qty > 0) {
                 let coin_pay = coin::split(taker_base, qty, ctx);
                 let bal_pay = coin::into_balance(coin_pay);
-                if (table::contains(&escrow.accrual_base, maker_id)) { let b = table::borrow_mut(&mut escrow.accrual_base, maker_id); balance::join(b, bal_pay); } else { table::add(&mut escrow.accrual_base, maker_id, bal_pay); };
+                // accrue into pending_base as immediate liability to takers
+                if (table::contains(&escrow.pending_base, maker_id)) { let b = table::borrow_mut(&mut escrow.pending_base, maker_id); balance::join(b, bal_pay); } else { table::add(&mut escrow.pending_base, maker_id, bal_pay); };
             };
             if (table::contains(&escrow.pending_collateral, maker_id)) {
                 let bcol = table::borrow_mut(&mut escrow.pending_collateral, maker_id);
                 let available = balance::value(bcol);
-                let need = qty * price;
+                let need_u128: u128 = (qty as u128) * (price as u128);
+                let need = clamp_u128_to_u64(need_u128);
                 let take = if (available >= need) { need } else { available };
                 if (take > 0) { let bout = balance::split(bcol, take); let coin_out = coin::from_balance(bout, ctx); transfer::public_transfer(coin_out, ctx.sender()); };
             };
@@ -941,6 +1038,7 @@ module unxversal::dex {
         ctx: &mut TxContext
     ) {
         assert!(!cfg.paused, E_PAUSED);
+        assert!(object::id(treasury) == cfg.treasury_id, E_BAD_TREASURY);
         let ids = Book::remove_expired_collect(&mut market.book, now_ts, max_removals);
         let mut i = 0u64; let n = vector::length(&ids);
         while (i < n) {
@@ -974,6 +1072,118 @@ module unxversal::dex {
     public fun order_buy_info<Base: store, C: store>(o: &CoinOrderBuy<Base, C>): (address, u64, u64, u64, u64, u64) { (o.owner, o.price, o.remaining_base, o.created_at_ms, o.expiry_ms, coin::value(&o.escrow_collateral)) }
 
     public fun order_sell_info<Base: store>(o: &CoinOrderSell<Base>): (address, u64, u64, u64, u64, u64) { (o.owner, o.price, o.remaining_base, o.created_at_ms, o.expiry_ms, coin::value(&o.escrow_base)) }
+
+    /*******************************
+    * Synthetic spot match (cash-settled in vaults)
+    *******************************/
+    public fun match_synth_orders<C: store>(
+        _cfg: &DexConfig,
+        reg_synth: &mut SynthRegistry,
+        treasury: &mut Treasury<C>,
+        clock: &Clock,
+        // For externally-invoked matches, require aggregators (zero-trust)
+        oracle_cfg: &OracleConfig,
+        live_symbols: vector<String>,
+        live_prices: vector<u64>,
+        cfg_collateral: &CollateralConfig<C>,
+        taker_vault: &mut CollateralVault<C>,
+        maker_vault: &mut CollateralVault<C>,
+        taker_order: &mut SynthOrder,
+        maker_order: &mut SynthOrder,
+        fill_price: u64,
+        fill_qty: u64,
+        mut taker_unxv_payment: vector<Coin<UNXV>>,
+        ctx: &mut TxContext
+    ) {
+        assert!(fill_qty > 0, E_ZERO_AMOUNT);
+        let now = sui::clock::timestamp_ms(clock);
+        if (taker_order.expiry_ms != 0) { assert!(now <= taker_order.expiry_ms, E_EXPIRED); };
+        if (maker_order.expiry_ms != 0) { assert!(now <= maker_order.expiry_ms, E_EXPIRED); };
+        // Crossed and invariant checks
+        assert!(taker_order.price >= maker_order.price, E_NOT_CROSSED);
+        // Same symbol and opposite sides
+        assert!(eq_string_internal(&taker_order.symbol, &maker_order.symbol), E_NOT_CROSSED);
+        assert!(taker_order.side != maker_order.side, E_NOT_CROSSED);
+        // Fill bounds
+        assert!(fill_price >= maker_order.price && fill_price <= taker_order.price, E_BAD_BOUNDS);
+        // Enforce tick/lot using sizes accessor from SynthRegistry
+        let (min_size, lot_size, tick_size) = SynthMod::get_instrument_sizes(reg_synth, &clone_string_internal(&taker_order.symbol));
+        assert!(fill_qty >= min_size, E_ZERO_AMOUNT);
+        if (lot_size > 0) { assert!(fill_qty % lot_size == 0, E_BAD_BOUNDS); };
+        if (tick_size > 0) { assert!(fill_price % tick_size == 0, E_BAD_BOUNDS); };
+        // Bind orders to provided vaults
+        assert!(object::id(taker_vault) == taker_order.vault_id, E_NOT_ADMIN);
+        assert!(object::id(maker_vault) == maker_order.vault_id, E_NOT_ADMIN);
+        let symbol = clone_string_internal(&taker_order.symbol);
+        let taker_is_buyer = (taker_order.side == 0);
+        // Verify price vector length and feed bindings exist
+        assert!(vector::length(&live_symbols) == vector::length(&live_prices), 9999);
+        let n = vector::length(&live_symbols);
+        let mut i = 0; while (i < n) { let sref = vector::borrow(&live_symbols, i); let _ = SynthMod::get_oracle_feed_bytes(reg_synth, sref); i = i + 1; };
+        SynthMod::assert_prices_cover_all_positions<C>(taker_vault, &live_symbols, &live_prices);
+        SynthMod::assert_prices_cover_all_positions<C>(maker_vault, &live_symbols, &live_prices);
+        // Taker leg (returns realized_gain, realized_loss, fee_paid)
+        let (tg, tl, _tf) = SynthMod::apply_fill_pkg<C>(
+            cfg_collateral,
+            reg_synth,
+            treasury,
+            clock,
+            /* oracle cfg passed through (ignored by price-vector path) */ oracle_cfg,
+            clone_vec_string(&live_symbols),
+            clone_vec_u64(&live_prices),
+            taker_vault,
+            clone_string_internal(&symbol),
+            taker_order.side,
+            fill_qty,
+            fill_price,
+            taker_unxv_payment,
+            ctx
+        );
+        // Maker leg (opposite side, empty UNXV vec)
+        let mut empty_unxv: vector<Coin<UNXV>> = vector::empty<Coin<UNXV>>();
+        let (mg, ml, _mf) = SynthMod::apply_fill_pkg<C>(
+            cfg_collateral,
+            reg_synth,
+            treasury,
+            clock,
+            /* oracle cfg passed through */ oracle_cfg,
+            live_symbols,
+            live_prices,
+            maker_vault,
+            symbol,
+            if (taker_is_buyer) { 1 } else { 0 },
+            fill_qty,
+            fill_price,
+            empty_unxv,
+            ctx
+        );
+        // Net-settle realized PnL between vaults conservatively: taker_gain <= maker_loss and maker_gain <= taker_loss in ideal case
+        let mut pay_from_taker: u64 = 0; let mut pay_to_taker: u64 = 0;
+        // Taker owes if taker_loss > maker_gain
+        if (tl > 0 || mg > 0) {
+            let owe = if (tl > mg) { tl - mg } else { 0 };
+            pay_from_taker = owe;
+        };
+        // Taker receives if taker_gain > maker_loss
+        if (tg > 0 || ml > 0) {
+            let due = if (tg > ml) { tg - ml } else { 0 };
+            pay_to_taker = due;
+        };
+        if (pay_from_taker > 0) { SynthMod::transfer_between_vaults<C>(cfg_collateral, taker_vault, maker_vault, pay_from_taker, ctx); };
+        if (pay_to_taker > 0) { SynthMod::transfer_between_vaults<C>(cfg_collateral, maker_vault, taker_vault, pay_to_taker, ctx); };
+        // Reduce order quantities
+        taker_order.qty = taker_order.qty - fill_qty;
+        maker_order.qty = maker_order.qty - fill_qty;
+        event::emit(SynthOrderMatched { market: b"SYNTH".to_string(), symbol: clone_string_internal(&taker_order.symbol), price: fill_price, qty: fill_qty, taker_is_buyer, taker: taker_order.owner, maker: maker_order.owner, unxv_discount_applied: false, timestamp: now });
+    }
+
+    // Remove dummy oracle config (synthetics ignores oracle cfg when prices are provided)
+
+    // Utilities for local clones
+    fun clone_string_internal(s: &String): String { let b = std::string::as_bytes(s); let mut out = vector::empty<u8>(); let mut i = 0; let n = vector::length(b); while (i < n) { vector::push_back(&mut out, *vector::borrow(b, i)); i = i + 1; }; std::string::utf8(out) }
+    fun clone_vec_string(v: &vector<String>): vector<String> { let mut out = vector::empty<String>(); let mut i = 0; let n = vector::length(v); while (i < n) { let s = vector::borrow(v, i); vector::push_back(&mut out, clone_string_internal(s)); i = i + 1; }; out }
+    fun clone_vec_u64(v: &vector<u64>): vector<u64> { let mut out = vector::empty<u64>(); let mut i = 0; let n = vector::length(v); while (i < n) { vector::push_back(&mut out, *vector::borrow(v, i)); i = i + 1; }; out }
+    fun eq_string_internal(a: &String, b: &String): bool { let ab = std::string::as_bytes(a); let bb = std::string::as_bytes(b); let la = vector::length(ab); let lb = vector::length(bb); if (la != lb) { return false }; let mut i = 0; while (i < la) { if (*vector::borrow(ab, i) != *vector::borrow(bb, i)) { return false }; i = i + 1; }; true }
 
 }
 

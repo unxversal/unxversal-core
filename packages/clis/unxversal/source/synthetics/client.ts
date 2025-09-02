@@ -65,7 +65,8 @@ export class SyntheticsClient {
     const tx = new Transaction();
     const bytes = this.bytesFrom(params.feedBytes);
     tx.moveCall({
-      target: `${cfg.synthetics.packageId}::synthetics::create_synthetic_asset`,
+      // deprecated in v2: create_synthetic_asset removed
+      target: `${cfg.synthetics.packageId}::synthetics::admin_list_instrument`,
       arguments: [
         tx.object(adminId),
         tx.object(registryId),

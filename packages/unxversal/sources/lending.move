@@ -1,11 +1,11 @@
 module unxversal::lending {
     /*******************************
-    * Unxversal Lending – Phase 1
-    * - Supports coin-based lending pools (generic T)
-    * - Permissioned asset/pool listing (admin-only)
+    * Unxversal Lending
+    * - Coin-based lending pools (generic T)
+    * - Admin-governed asset/pool listing
     * - User accounts track per-asset supply/borrow balances
-    * - Simple flash-loan primitive on a per-pool basis
-    * - Object Display registered for Registry, Pool, Account
+    * - Flash-loan primitive on a per-pool basis
+    * - Display metadata for Registry, Pool, Account
     *******************************/
 
     use sui::display;
@@ -22,12 +22,11 @@ module unxversal::lending {
     use sui::vec_set::{Self as vec_set, VecSet};
     use unxversal::bot_rewards::{Self as BotRewards, BotPointsRegistry};
 
-    // Synthetics integration
+    // Oracles & Treasury integration
     use switchboard::aggregator::Aggregator;
     use unxversal::oracle::{OracleConfig, OracleRegistry, get_price_scaled_1e6};
     use unxversal::treasury::{Treasury, BotRewardsTreasury};
     use unxversal::unxv::UNXV;
-    use unxversal::synthetics::{Self as Synth, SynthRegistry, CollateralVault, CollateralConfig};
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     // Remove hardcoded USDC; lending remains generic and integrates with chosen collateral C
 
@@ -67,7 +66,6 @@ module unxversal::lending {
         // P1: bot points and split configs
         points_update_rates: u64,  // points awarded on update_pool_rates
         points_accrue_pool: u64,   // points awarded on accrue_pool_interest
-        points_accrue_synth: u64,  // points awarded on accrue_synth_market (unused after synth removal)
         liq_bot_treasury_bps: u64, // portion of liquidation bonus routed to Treasury (0 = off)
         // Permissionless pools config – global defaults
         perm_pool_fee_units: u64,          // required fee (in asset units) to create a pool
@@ -122,20 +120,23 @@ module unxversal::lending {
         prices: Table<String, u64>,
     }
 
+    #[test_only]
     public fun new_price_set(ctx: &mut TxContext) {
         let ps = PriceSet { id: object::new(ctx), prices: table::new<String, u64>(ctx) };
         transfer::public_transfer(ps, ctx.sender());
     }
 
     public fun record_symbol_price(
-        _registry: &OracleRegistry,
+        registry: &OracleRegistry,
         cfg: &OracleConfig,
         clock: &Clock,
         symbol: String,
         agg: &Aggregator,
         ps: &mut PriceSet
     ) {
-        // Use staleness/positivity-checked read without requiring allow-list binding for tests
+        // ZERO-TRUST: ensure aggregator matches registry binding for symbol
+        assert!(unxversal::oracle::expected_feed_id(registry, &symbol) == sui::object::id(agg), E_BAD_PRICE);
+        // Use staleness/positivity-checked read
         let px = get_price_scaled_1e6(cfg, clock, agg);
         if (table::contains(&ps.prices, clone_string(&symbol))) {
             let _ = table::remove(&mut ps.prices, clone_string(&symbol));
@@ -157,18 +158,29 @@ module unxversal::lending {
     public struct DebtRepaid has copy, drop { user: address, asset: String, amount: u64, remaining_debt: u64, timestamp: u64 }
     public struct FlashLoanInitiated has copy, drop { asset: String, amount: u64, fee: u64, borrower: address, timestamp: u64 }
     public struct FlashLoanRepaid has copy, drop { asset: String, amount: u64, fee: u64, repayer: address, timestamp: u64 }
-    public struct SynthFlashLoanInitiated has copy, drop { symbol: String, amount_units: u64, fee_units: u64, borrower: address, timestamp: u64 }
-    public struct SynthFlashLoanRepaid has copy, drop { symbol: String, amount_units: u64, fee_units: u64, repayer: address, timestamp: u64 }
+    
     public struct RateUpdated has copy, drop { asset: String, utilization_bps: u64, borrow_rate_bps: u64, supply_rate_bps: u64, timestamp: u64 }
     public struct InterestAccrued has copy, drop { asset: String, dt_ms: u64, new_borrow_index: u64, new_supply_index: u64, delta_borrows: u64, reserves_added: u64, timestamp: u64 }
     public struct BotPointsAwarded has copy, drop { task: String, points: u64, actor: address, timestamp: u64 }
     public struct PermissionlessPoolFeePaid has copy, drop { asset: String, fee_units: u64, payer: address, timestamp: u64 }
     public struct PermissionlessPoolCreated has copy, drop { asset: String, pool_id: ID, initial_deposit: u64, creator: address, timestamp: u64 }
-    public struct SynthFlashFeeDeposited has copy, drop { symbol: String, fee_units: u64, payer: address, timestamp: u64 }
+    
     public struct PermissionlessPoolUNXVDiscountPaid has copy, drop { payer: address, timestamp: u64 }
     public struct PoolSupplyFloorOverrideSet has copy, drop { asset: String, new_floor_bps: u64, setter: address, timestamp: u64 }
     public struct ReservesSkimmed has copy, drop { asset: String, amount: u64, treasury_id: ID, caller: address, timestamp: u64 }
     public struct AccrualClampApplied has copy, drop { asset: String, dt_ms_original: u64, dt_ms_used: u64, timestamp: u64 }
+
+    // Liquidation lifecycle event
+    public struct PositionLiquidated has copy, drop {
+        debtor: address,
+        debt_asset: String,
+        coll_asset: String,
+        repay_amount: u64,
+        seize_units: u64,
+        treasury_units: u64,
+        liquidator: address,
+        timestamp: u64,
+    }
 
     /// Pair type for returning symbol/feed lists without tuple type arguments
     
@@ -309,9 +321,6 @@ module unxversal::lending {
 
     // Flash loan proof object removed; use explicit parameters in entry functions
 
-    // Hot potato for synthetic flash loans (no abilities) – must be consumed in same tx
-    public struct SynthFlashLoan has drop { symbol: String, amount_units: u64, fee_units: u64 }
-
     /*******************************
     * Admin helper
     *******************************/
@@ -324,7 +333,7 @@ module unxversal::lending {
         assert!(types::is_one_time_witness(&otw), 0);
         let publisher = package::claim(otw, ctx);
 
-        let gp = GlobalParams { reserve_factor_bps: 1000, flash_loan_fee_bps: 9, points_update_rates: 0, points_accrue_pool: 0, points_accrue_synth: 0, liq_bot_treasury_bps: 0, perm_pool_fee_units: 0, perm_pool_unxv_discount_bps: 0, perm_pool_min_deposit_units: 0, min_supply_apy_floor_bps: 0, max_accrual_dt_ms: 0 };
+        let gp = GlobalParams { reserve_factor_bps: 1000, flash_loan_fee_bps: 9, points_update_rates: 0, points_accrue_pool: 0, liq_bot_treasury_bps: 0, perm_pool_fee_units: 0, perm_pool_unxv_discount_bps: 0, perm_pool_min_deposit_units: 0, min_supply_apy_floor_bps: 0, max_accrual_dt_ms: 0 };
         let mut admins = vec_set::empty<address>();
         vec_set::insert(&mut admins, ctx.sender());
 
@@ -374,7 +383,7 @@ module unxversal::lending {
      *******************************/
     #[test_only]
     public fun new_registry_for_testing(ctx: &mut TxContext): LendingRegistry {
-        let gp = GlobalParams { reserve_factor_bps: 1_000, flash_loan_fee_bps: 9, points_update_rates: 0, points_accrue_pool: 0, points_accrue_synth: 0, liq_bot_treasury_bps: 0, perm_pool_fee_units: 0, perm_pool_unxv_discount_bps: 0, perm_pool_min_deposit_units: 0, min_supply_apy_floor_bps: 0, max_accrual_dt_ms: 0 };
+        let gp = GlobalParams { reserve_factor_bps: 1_000, flash_loan_fee_bps: 9, points_update_rates: 0, points_accrue_pool: 0, liq_bot_treasury_bps: 0, perm_pool_fee_units: 0, perm_pool_unxv_discount_bps: 0, perm_pool_min_deposit_units: 0, min_supply_apy_floor_bps: 0, max_accrual_dt_ms: 0 };
         let mut admins = vec_set::empty<address>();
         vec_set::insert(&mut admins, ctx.sender());
         LendingRegistry {
@@ -502,7 +511,6 @@ module unxversal::lending {
         admin_reg: &AdminRegistry,
         points_update_rates: u64,
         points_accrue_pool: u64,
-        points_accrue_synth: u64,
         liq_bot_treasury_bps: u64,
         ctx: &TxContext
     ) {
@@ -510,7 +518,6 @@ module unxversal::lending {
         assert!(!reg.paused, 1000);
         reg.global_params.points_update_rates = points_update_rates;
         reg.global_params.points_accrue_pool = points_accrue_pool;
-        reg.global_params.points_accrue_synth = points_accrue_synth;
         reg.global_params.liq_bot_treasury_bps = liq_bot_treasury_bps;
     }
 
@@ -710,7 +717,6 @@ module unxversal::lending {
         admin_reg: &AdminRegistry,
         points_update_rates: u64,
         points_accrue_pool: u64,
-        points_accrue_synth: u64,
         liq_bot_treasury_bps: u64,
         ctx: &TxContext
     ) {
@@ -718,7 +724,6 @@ module unxversal::lending {
         assert!(!reg.paused, 1000);
         reg.global_params.points_update_rates = points_update_rates;
         reg.global_params.points_accrue_pool = points_accrue_pool;
-        reg.global_params.points_accrue_synth = points_accrue_synth;
         reg.global_params.liq_bot_treasury_bps = liq_bot_treasury_bps;
     }
 
@@ -834,6 +839,8 @@ module unxversal::lending {
     * User Account lifecycle
     *******************************/
     public fun open_account(ctx: &mut TxContext) {
+        // Allow account creation regardless of pause to enable onboarding and recovery flows.
+        // Mutating pool/account balances remain gated by reg.paused checks elsewhere.
         let acct = UserAccount {
             id: object::new(ctx),
             owner: ctx.sender(),
@@ -895,7 +902,7 @@ module unxversal::lending {
         clock: &Clock,
         price_self: &Aggregator,
         symbols: vector<String>,
-        prices: &PriceSet,
+        live_aggs: vector<&Aggregator>,
         supply_indexes: vector<u64>,
         borrow_indexes: vector<u64>,
         ctx: &mut TxContext
@@ -924,7 +931,7 @@ module unxversal::lending {
             let a = table::borrow(&reg.supported_assets, clone_string(&sym));
             if (a.is_collateral) {
                 // compute current totals
-                let (tot_coll, tot_debt, _) = check_account_health_coins_bound(acct, reg, oracle_reg, oracle_cfg, clock, &symbols, prices, &supply_indexes, &borrow_indexes);
+                let (tot_coll, tot_debt, _) = check_account_health_coins_bound(acct, reg, oracle_reg, oracle_cfg, clock, &symbols, &live_aggs, &supply_indexes, &borrow_indexes);
                 let px_self = get_price_scaled_1e6(oracle_cfg, clock, price_self) as u128;
                 let reduce_cap = ((amount as u128) * px_self * (a.ltv_bps as u128)) / 10_000u128;
                 let new_capacity = if (tot_coll > reduce_cap) { tot_coll - reduce_cap } else { 0 };
@@ -950,7 +957,7 @@ module unxversal::lending {
         clock: &Clock,
         price_debt: &Aggregator,
         symbols: vector<String>,
-        prices: &PriceSet,
+        live_aggs: vector<&Aggregator>,
         supply_indexes: vector<u64>,
         borrow_indexes: vector<u64>,
         ctx: &mut TxContext
@@ -963,8 +970,8 @@ module unxversal::lending {
         let cash = BalanceMod::value(&pool.cash);
         assert!(cash >= amount, E_INSUFFICIENT_LIQUIDITY);
         // LTV guard: ensure new debt <= capacity
-        let cap = compute_ltv_capacity_usd_bound(acct, reg, oracle_reg, oracle_cfg, clock, &symbols, prices, &supply_indexes);
-        let (_, tot_debt, _) = check_account_health_coins_bound(acct, reg, oracle_reg, oracle_cfg, clock, &symbols, prices, &supply_indexes, &borrow_indexes);
+        let cap = compute_ltv_capacity_usd_bound(acct, reg, oracle_reg, oracle_cfg, clock, &symbols, &live_aggs, &supply_indexes);
+        let (_, tot_debt, _) = check_account_health_coins_bound(acct, reg, oracle_reg, oracle_cfg, clock, &symbols, &live_aggs, &supply_indexes, &borrow_indexes);
         let px = get_price_scaled_1e6(oracle_cfg, clock, price_debt) as u128;
         let new_debt = tot_debt + (amount as u128) * px;
         assert!(new_debt <= cap, E_VAULT_NOT_HEALTHY);
@@ -1152,16 +1159,16 @@ module unxversal::lending {
     public fun compute_ltv_capacity_usd_bound(
         acct: &UserAccount,
         reg: &LendingRegistry,
-        _oracle_reg: &OracleRegistry,
-        _oracle_cfg: &OracleConfig,
-        _clock: &Clock,
+        oracle_reg: &OracleRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
         symbols: &vector<String>,
-        prices: &PriceSet,
+        live_aggs: &vector<&Aggregator>,
         supply_indexes: &vector<u64>
     ): u128 {
+        assert!(vector::length(symbols) == vector::length(live_aggs), E_BAD_PRICE);
         let mut cap: u128 = 0;
-        let mut i = 0;
-        let n = vector::length(symbols);
+        let mut i = 0; let n = vector::length(symbols);
         while (i < n) {
             let sym_ref = vector::borrow(symbols, i);
             if (table::contains(&acct.supply_balances, clone_string(sym_ref)) && table::contains(&reg.supported_assets, clone_string(sym_ref))) {
@@ -1170,7 +1177,9 @@ module unxversal::lending {
                     let scaled_supply = *table::borrow(&acct.supply_balances, clone_string(sym_ref));
                     let idx_supply = *vector::borrow(supply_indexes, i);
                     let units = units_from_scaled(scaled_supply, idx_supply) as u128;
-                    let px = (get_symbol_price_from_set(prices, sym_ref) as u128);
+                    let agg = *vector::borrow(live_aggs, i);
+                    assert!(unxversal::oracle::expected_feed_id(oracle_reg, sym_ref) == sui::object::id(agg), E_BAD_PRICE);
+                    let px = (get_price_scaled_1e6(oracle_cfg, clock, agg) as u128);
                     cap = cap + (units * px * (a.ltv_bps as u128)) / 10_000u128;
                 }
             };
@@ -1185,21 +1194,23 @@ module unxversal::lending {
     public fun check_account_health_coins_bound(
         acct: &UserAccount,
         reg: &LendingRegistry,
-        _oracle_reg: &OracleRegistry,
-        _oracle_cfg: &OracleConfig,
-        _clock: &Clock,
+        oracle_reg: &OracleRegistry,
+        oracle_cfg: &OracleConfig,
+        clock: &Clock,
         symbols: &vector<String>,
-        prices: &PriceSet,
+        live_aggs: &vector<&Aggregator>,
         supply_indexes: &vector<u64>,
         borrow_indexes: &vector<u64>
     ): (u128, u128, bool) {
+        assert!(vector::length(symbols) == vector::length(live_aggs), E_BAD_PRICE);
         let mut total_coll: u128 = 0;
         let mut total_debt: u128 = 0;
-        let mut i = 0;
-        let n = vector::length(symbols);
+        let mut i = 0; let n = vector::length(symbols);
         while (i < n) {
             let sym_ref = vector::borrow(symbols, i);
-            let px = (get_symbol_price_from_set(prices, sym_ref) as u128);
+            let agg = *vector::borrow(live_aggs, i);
+            assert!(unxversal::oracle::expected_feed_id(oracle_reg, sym_ref) == sui::object::id(agg), E_BAD_PRICE);
+            let px = (get_price_scaled_1e6(oracle_cfg, clock, agg) as u128);
             if (table::contains(&acct.supply_balances, clone_string(sym_ref))) {
                 let scaled_supply = *table::borrow(&acct.supply_balances, clone_string(sym_ref));
                 let idx_supply = *vector::borrow(supply_indexes, i);
@@ -1242,7 +1253,7 @@ module unxversal::lending {
         mut payment: Coin<Debt>,
         repay_amount: u64,
         symbols: vector<String>,
-        prices: &PriceSet,
+        live_aggs: vector<&Aggregator>,
         supply_indexes: vector<u64>,
         borrow_indexes: vector<u64>,
         treasury: &mut Treasury<Coll>,
@@ -1281,9 +1292,10 @@ module unxversal::lending {
         assert!(repay_amount <= cur_debt_units, E_OVER_REPAY);
         // Enforce liquidation priority: target debt must be top-ranked by value
         // build price vector from PriceSet for ranking
+        assert!(vector::length(&symbols) == vector::length(&live_aggs), E_BAD_PRICE);
         let mut pxs: vector<u64> = vector::empty<u64>();
         let mut i = 0; let n = vector::length(&symbols);
-        while (i < n) { let s_ref = vector::borrow(&symbols, i); let p = get_symbol_price_from_set(prices, s_ref); vector::push_back(&mut pxs, p); i = i + 1; };
+        while (i < n) { let s_ref = vector::borrow(&symbols, i); let agg = *vector::borrow(&live_aggs, i); assert!(unxversal::oracle::expected_feed_id(oracle_reg, s_ref) == sui::object::id(agg), E_BAD_PRICE); let p = get_price_scaled_1e6(oracle_cfg, clock, agg); vector::push_back(&mut pxs, p); i = i + 1; };
         let ranked = rank_coin_debt_order(debtor, &symbols, &pxs, &borrow_indexes);
         if (vector::length(&ranked) > 0) {
             let top = vector::borrow(&ranked, 0);
@@ -1349,6 +1361,7 @@ module unxversal::lending {
             );
         };
         transfer::public_transfer(coin_all, ctx.sender());
+        event::emit(PositionLiquidated { debtor: debtor.owner, debt_asset: debt_sym, coll_asset: coll_sym, repay_amount, seize_units: seize_u64, treasury_units: tre_units_u64, liquidator: ctx.sender(), timestamp: sui::clock::timestamp_ms(clock) });
         // prices set is read-only; nothing to consume
     }
 
@@ -1435,92 +1448,7 @@ module unxversal::lending {
         event::emit(FlashLoanRepaid { asset: proof_asset, amount: proof_amount, fee: proof_fee, repayer: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
-    /*******************************
-    * Synthetic Flash Loans – mint & burn within same tx (hot potato)
-    *******************************/
-    public fun initiate_synth_flash_loan<C>(
-        _reg: &LendingRegistry,
-        synth_reg: &mut SynthRegistry,
-        cfg: &CollateralConfig<C>,
-        _oracle_cfg: &OracleConfig,
-        clock: &Clock,
-        price_info: &Aggregator,
-        vault: &mut CollateralVault<C>,
-        symbol: String,
-        amount_units: u64,
-        unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &Aggregator,
-        treasury: &mut Treasury<C>,
-        ctx: &mut TxContext
-    ): SynthFlashLoan {
-        assert!(amount_units > 0, E_ZERO_AMOUNT);
-        // mint debt units to the borrower's vault (exposure)
-        Synth::mint_synthetic(
-            cfg,
-            vault,
-            synth_reg,
-            clock,
-            _oracle_cfg,
-            price_info,
-            clone_string(&symbol),
-            amount_units,
-            unxv_payment,
-            unxv_price,
-            treasury,
-            ctx
-        );
-        let fee_units = (amount_units * _reg.global_params.flash_loan_fee_bps) / 10_000;
-        event::emit(SynthFlashLoanInitiated { symbol: clone_string(&symbol), amount_units, fee_units, borrower: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-        SynthFlashLoan { symbol, amount_units, fee_units }
-    }
-
-    public fun repay_synth_flash_loan<C>(
-        _reg: &LendingRegistry,
-        synth_reg: &mut SynthRegistry,
-        cfg: &CollateralConfig<C>,
-        _oracle_cfg: &OracleConfig,
-        clock: &Clock,
-        price_info: &Aggregator,
-        vault: &mut CollateralVault<C>,
-        loan_amount_units: u64,
-        loan_fee_units: u64,
-        loan_symbol: String,
-        unxv_payment: vector<Coin<UNXV>>,
-        unxv_price: &Aggregator,
-        treasury: &mut Treasury<C>,
-        mut fee_payment: Coin<C>,
-        ctx: &mut TxContext
-    ) {
-        let symbol = loan_symbol;
-        let amount_units = loan_amount_units;
-        let fee_units = loan_fee_units;
-        // burn exactly the borrowed amount units from the vault exposure; fee is paid in coin C below
-        let total_burn = amount_units;
-        Synth::burn_synthetic(
-            cfg,
-            vault,
-            synth_reg,
-            clock,
-            _oracle_cfg,
-            price_info,
-            clone_string(&symbol),
-            total_burn,
-            unxv_payment,
-            unxv_price,
-            treasury,
-            ctx
-        );
-        // Route a portion of the fee value to Treasury via deposit_collateral_ext
-        if (fee_units > 0) {
-            // Pay flash fee in admin-set collateral type C (global stable) provided by caller
-            let have_fee = coin::value(&fee_payment);
-            if (have_fee > 0) {
-                unxversal::treasury::deposit_collateral_ext<C>(treasury, fee_payment, b"synth_flash_fee".to_string(), ctx.sender(), ctx);
-                event::emit(SynthFlashFeeDeposited { symbol: clone_string(&symbol), fee_units, payer: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-            } else { coin::destroy_zero<C>(fee_payment); };
-        } else { coin::destroy_zero<C>(fee_payment); };
-        event::emit(SynthFlashLoanRepaid { symbol, amount_units, fee_units, repayer: ctx.sender(), timestamp: sui::tx_context::epoch_timestamp_ms(ctx) });
-    }
+    
 }
 
 
