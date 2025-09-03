@@ -454,6 +454,12 @@ public fun get_order(self: &Book, order_id: u128): Order {
     order_copy(order)
 }
 
+/// Public accessors for Order fields to support external integrations
+public fun order_id_of(order: &Order): u128 { order.order_id }
+public fun order_quantity_of(order: &Order): u64 { order.quantity }
+public fun order_filled_quantity_of(order: &Order): u64 { order.filled_quantity }
+public fun order_expire_ts_of(order: &Order): u64 { order.expire_timestamp }
+
 // === Internal matching ===
 fun match_against_book(self: &mut Book, taker: &mut Order, timestamp: u64) {
     let is_bid = is_bid(taker.order_id);

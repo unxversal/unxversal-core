@@ -19,18 +19,18 @@ module unxversal::options {
         balance::{Self as balance, Balance},
         event,
         table::{Self as table, Table},
-        transfer,
     };
+    
     use std::{
-        option::{Self as option, Option},
         string::{Self as string, String},
         hash,
     };
-    use unxversal::book::{Self as ubk, Book, FillPlan, Fill};
+    use unxversal::book::{Self as ubk, Book};
     use unxversal::utils as uutils;
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::fees::{Self as fees, FeeConfig, FeeVault};
     use unxversal::staking::{Self as staking, StakingPool};
+    use unxversal::unxv::UNXV;
     use unxversal::oracle::{Self as uoracle, OracleRegistry};
     use switchboard::aggregator::Aggregator;
 
@@ -40,11 +40,13 @@ module unxversal::options {
     const E_ZERO: u64 = 3;
     const E_EXPIRED: u64 = 4;
     const E_NOT_OWNER: u64 = 5;
-    const E_NOT_ASK: u64 = 6;
-    const E_NOT_BID: u64 = 7;
+    // removed unused E_NOT_ASK and E_NOT_BID
+    // const E_NOT_ASK: u64 = 6;
+    // const E_NOT_BID: u64 = 7;
     const E_COLLATERAL_MISMATCH: u64 = 8;
     const E_PAST_EXPIRY_EXERCISE: u64 = 9;
-    const E_NOT_ITM: u64 = 10;
+    // removed unused E_NOT_ITM
+    // const E_NOT_ITM: u64 = 10;
     const E_SERIES_EXISTS: u64 = 11;
 
     // Data
@@ -100,14 +102,14 @@ module unxversal::options {
     public struct Exercised has copy, drop { key: u128, exerciser: address, amount: u64, spot_1e6: u64 }
 
     // === Init ===
-    entry fun init_market<Base, Quote>(reg_admin: &AdminRegistry, ctx: &mut TxContext) {
+    public fun init_market<Base, Quote>(reg_admin: &AdminRegistry, ctx: &mut TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         let m = OptionsMarket<Base, Quote> { id: object::new(ctx), series: table::new<u128, SeriesState<Base, Quote>>(ctx) };
         transfer::share_object(m);
     }
 
     // === Admin: create series ===
-    entry fun create_option_series<Base, Quote>(
+    public fun create_option_series<Base, Quote>(
         reg_admin: &AdminRegistry,
         market: &mut OptionsMarket<Base, Quote>,
         expiry_ms: u64,
@@ -139,14 +141,14 @@ module unxversal::options {
     }
 
     // === Maker: place sell order with collateral locking ===
-    entry fun place_option_sell_order<Base, Quote>(
+    public fun place_option_sell_order<Base, Quote>(
         market: &mut OptionsMarket<Base, Quote>,
         key: u128,
         quantity: u64,
         limit_premium_quote: u64,
         expire_ts: u64,
-        collateral: Option<Coin<Base>>,        // for calls
-        collateral_q: Option<Coin<Quote>>,     // for puts
+        mut collateral: Option<Coin<Base>>,        // for calls
+        mut collateral_q: Option<Coin<Quote>>,     // for puts
         clock: &Clock,
         ctx: &mut TxContext,
     ) {
@@ -157,33 +159,39 @@ module unxversal::options {
         let is_call = ser.series.is_call;
         if (is_call) {
             assert!(option::is_some(&collateral) && option::is_none(&collateral_q), E_COLLATERAL_MISMATCH);
-            let base_in = option::extract(&mut { collateral });
+            let base_in = option::extract(&mut collateral);
             // require exact base equal to quantity
             assert!(coin::value(&base_in) == quantity, E_COLLATERAL_MISMATCH);
             let bal = coin::into_balance(base_in);
             ser.pooled_base.join(bal);
             // update writer info
             upsert_writer_base_lock(ser, ctx.sender(), quantity, true);
+            // consume options
+            option::destroy_none(collateral);
+            option::destroy_none(collateral_q);
         } else {
             assert!(option::is_none(&collateral) && option::is_some(&collateral_q), E_COLLATERAL_MISMATCH);
-            let q_in = option::extract(&mut { collateral_q });
+            let q_in = option::extract(&mut collateral_q);
             // require exact quote equal to strike * quantity
             let needed = mul_u64_u64(ser.series.strike_1e6, quantity);
             assert!(coin::value(&q_in) == needed, E_COLLATERAL_MISMATCH);
             let balq = coin::into_balance(q_in);
             ser.pooled_quote.join(balq);
             upsert_writer_quote_lock(ser, ctx.sender(), needed, true);
+            option::destroy_none(collateral);
+            option::destroy_none(collateral_q);
         };
 
         // insert ask into book
         let mut order = ubk::new_order(false, limit_premium_quote, 0, quantity, expire_ts);
         ubk::create_order(&mut ser.book, &mut order, clock.timestamp_ms());
-        table::add(&mut ser.owners, order.order_id, ctx.sender());
-        event::emit(OrderPlaced { key, order_id: order.order_id, maker: ctx.sender(), price: limit_premium_quote, quantity, is_bid: false, expire_ts });
+        let oid = ubk::order_id_of(&order);
+        table::add(&mut ser.owners, oid, ctx.sender());
+        event::emit(OrderPlaced { key, order_id: oid, maker: ctx.sender(), price: limit_premium_quote, quantity, is_bid: false, expire_ts });
     }
 
     // === Taker: buy order with matching and premium settlement ===
-    entry fun place_option_buy_order<Base, Quote>(
+    public fun place_option_buy_order<Base, Quote>(
         market: &mut OptionsMarket<Base, Quote>,
         key: u128,
         quantity: u64,
@@ -193,6 +201,7 @@ module unxversal::options {
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
+        mut fee_unxv_in: Option<Coin<UNXV>>,
         clock: &Clock,
         ctx: &mut TxContext,
     ): OptionPosition<Base, Quote> {
@@ -202,6 +211,9 @@ module unxversal::options {
         assert!(clock.timestamp_ms() < ser.series.expiry_ms && clock.timestamp_ms() <= expire_ts, E_EXPIRED);
         // plan fills against asks
         let plan = ubk::compute_fill_plan(&ser.book, true, limit_premium_quote, quantity, 0, expire_ts, clock.timestamp_ms());
+        let is_call_series = ser.series.is_call;
+        let pay_with_unxv = option::is_some(&fee_unxv_in);
+        let (taker_bps, _) = fees::apply_discounts(fees::dex_taker_fee_bps(cfg), fees::dex_maker_fee_bps(cfg), pay_with_unxv, staking_pool, ctx.sender(), cfg);
         let mut total_units: u64 = 0;
         let mut total_premium: u64 = 0;
         let fills_len = ubk::fillplan_num_fills(&plan);
@@ -213,26 +225,46 @@ module unxversal::options {
             let p = ubk::fill_price(&f);
             let prem = mul_u64_u64(p, qty);
             assert!(coin::value(&premium_budget_quote) >= prem, E_ZERO);
-            let pay = coin::split(&mut premium_budget_quote, prem, ctx);
-            // protocol fee on premium (input-token path) with optional UNXV discount omitted in taker buy; collector can call swap path if needed
-            fees::accrue_generic<Quote>(vault, coin::zero<Quote>(ctx), clock, ctx);
+            let mut pay = coin::split(&mut premium_budget_quote, prem, ctx);
+            // Apply taker protocol fee on premium
+            let fee_amt: u64 = ((prem as u128) * (taker_bps as u128) / (fees::bps_denom() as u128)) as u64;
+            if (!pay_with_unxv) {
+                if (fee_amt > 0) {
+                    let fee_coin = coin::split(&mut pay, fee_amt, ctx);
+                    fees::accrue_generic<Quote>(vault, fee_coin, clock, ctx);
+                };
+            };
             transfer::public_transfer(pay, maker);
             total_units = total_units + qty;
             total_premium = total_premium + prem;
             // book-keeping for writer: increase sold_units and reduce locked collateral if needed (locked remains for sold outstanding)
-            writer_add_sold(ser, maker, qty, ser.series.is_call);
+            writer_add_sold(ser, maker, qty, is_call_series);
             i = i + 1;
         };
-        if (total_units == 0) { return OptionPosition { id: object::new(ctx), key, amount: 0 } };
+        if (total_units == 0) {
+            // refund any provided UNXV fee coin and premium budget
+            if (option::is_some(&fee_unxv_in)) { let u = option::extract(&mut fee_unxv_in); sui::transfer::public_transfer(u, ctx.sender()); };
+            option::destroy_none(fee_unxv_in);
+            if (coin::value(&premium_budget_quote) > 0) { sui::transfer::public_transfer(premium_budget_quote, ctx.sender()); } else { coin::destroy_zero(premium_budget_quote); };
+            return OptionPosition { id: object::new(ctx), key, amount: 0 }
+        };
         // commit plan (no remainder injection)
         let _ = ubk::commit_fill_plan(&mut ser.book, plan, clock.timestamp_ms(), false);
         event::emit(Matched { key, taker: ctx.sender(), total_units, total_premium_quote: total_premium });
+        // If paying with UNXV, split and distribute the UNXV fees now
+        if (pay_with_unxv) {
+            let unxv = option::extract(&mut fee_unxv_in);
+            distribute_unxv_fee(cfg, vault, staking_pool, unxv, clock, ctx);
+        };
+        option::destroy_none(fee_unxv_in);
+        // refund any leftover premium budget to sender
+        if (coin::value(&premium_budget_quote) > 0) { sui::transfer::public_transfer(premium_budget_quote, ctx.sender()); } else { coin::destroy_zero(premium_budget_quote); };
         // create long position
         OptionPosition { id: object::new(ctx), key, amount: total_units }
     }
 
     // === Cancel order (maker only) ===
-    entry fun cancel_option_order<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, key: u128, order_id: u128, clock: &Clock, ctx: &mut TxContext) {
+    public fun cancel_option_order<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, key: u128, order_id: u128, clock: &Clock, ctx: &mut TxContext) {
         assert!(table::contains(&market.series, key), E_INVALID_SERIES);
         let ser = table::borrow_mut(&mut market.series, key);
         let owner = *table::borrow(&ser.owners, order_id);
@@ -240,23 +272,26 @@ module unxversal::options {
         let order = ubk::cancel_order(&mut ser.book, order_id);
         table::remove(&mut ser.owners, order_id);
         // unlock remaining collateral if ask
-        let (is_bid, _, _) = uutils::decode_order_id(order.order_id);
-        if (!is_bid) {
-            let rem = order.quantity - order.filled_quantity;
+        let (is_bid_side, _, _) = uutils::decode_order_id(ubk::order_id_of(&order));
+        if (!is_bid_side) {
+            let (filled, qty) = ubk::order_progress(&ser.book, ubk::order_id_of(&order));
+            let rem = qty - filled;
             if (rem > 0) { unlock_excess_collateral(ser, owner, rem, ctx); };
         };
-        event::emit(OrderCanceled { key, order_id, maker: owner, quantity: order.quantity });
+        event::emit(OrderCanceled { key, order_id, maker: owner, quantity: ubk::order_quantity_of(&order) });
         // silence unused parameter warning
         let _ = clock;
     }
 
     // === Exercise (physical) ===
-    entry fun exercise_option<Base, Quote>(
+    public fun exercise_option<Base, Quote>(
         market: &mut OptionsMarket<Base, Quote>,
         mut pos: OptionPosition<Base, Quote>,
         amount: u64,
         reg: &OracleRegistry,
         agg: &Aggregator,
+        mut pay_quote: Option<Coin<Quote>>, // required for calls
+        mut pay_base: Option<Coin<Base>>,   // required for puts
         clock: &Clock,
         ctx: &mut TxContext,
     ): (Option<Coin<Base>>, Option<Coin<Quote>>) { // (base_out, quote_out)
@@ -268,66 +303,114 @@ module unxversal::options {
         let strike = ser.series.strike_1e6;
         event::emit(Exercised { key: pos.key, exerciser: ctx.sender(), amount, spot_1e6 });
         if (ser.series.is_call) {
-            if (!(spot_1e6 > strike)) { return (option::none<Coin<Base>>(), option::none<Coin<Quote>>()) };
+            if (!(spot_1e6 > strike)) {
+                // Not ITM, refund any provided payment coins and return position
+                if (option::is_some(&pay_quote)) { let q = option::extract(&mut pay_quote); transfer::public_transfer(q, ctx.sender()); };
+                option::destroy_none(pay_quote);
+                if (option::is_some(&pay_base)) { let b = option::extract(&mut pay_base); transfer::public_transfer(b, ctx.sender()); };
+                option::destroy_none(pay_base);
+                transfer::public_transfer(pos, ctx.sender());
+                return (option::none<Coin<Base>>(), option::none<Coin<Quote>>())
+            };
             // Buyer pays strike * amount in Quote; receives Base amount
             let due_q = mul_u64_u64(strike, amount);
-            let q_in = coin::take<Quote>(ctx, due_q);
-            let qbal = coin::into_balance(q_in);
+            assert!(option::is_some(&pay_quote), E_ZERO);
+            let mut q_in = option::extract(&mut pay_quote);
+            assert!(coin::value(&q_in) >= due_q, E_ZERO);
+            let q_due = coin::split(&mut q_in, due_q, ctx);
+            let qbal = coin::into_balance(q_due);
             ser.pooled_quote.join(qbal);
-            // deliver base
-            let base_out = balance::into_coin(&mut ser.pooled_base, amount, ctx);
+            // refund change if any
+            sui::transfer::public_transfer(q_in, ctx.sender());
+            // deliver base from pooled collateral
+            let bsplit = balance::split(&mut ser.pooled_base, amount);
+            let base_out = coin::from_balance(bsplit, ctx);
             // aggregate exercised units
             ser.total_exercised_units = ser.total_exercised_units + amount;
             // reduce outstanding
             if (ser.total_sold_units >= amount) { ser.total_sold_units = ser.total_sold_units - amount; } else { ser.total_sold_units = 0; };
             pos.amount = pos.amount - amount;
+            if (option::is_some(&pay_quote)) { let q = option::extract(&mut pay_quote); sui::transfer::public_transfer(q, ctx.sender()); };
+            option::destroy_none(pay_quote);
+            if (option::is_some(&pay_base)) { let b = option::extract(&mut pay_base); sui::transfer::public_transfer(b, ctx.sender()); };
+            option::destroy_none(pay_base);
+            transfer::public_transfer(pos, ctx.sender());
             (option::some(base_out), option::none<Coin<Quote>>())
         } else {
-            if (!(spot_1e6 < strike)) { return (option::none<Coin<Base>>(), option::none<Coin<Quote>>()) };
+            if (!(spot_1e6 < strike)) {
+                if (option::is_some(&pay_quote)) { let q2 = option::extract(&mut pay_quote); transfer::public_transfer(q2, ctx.sender()); };
+                option::destroy_none(pay_quote);
+                if (option::is_some(&pay_base)) { let b2 = option::extract(&mut pay_base); transfer::public_transfer(b2, ctx.sender()); };
+                option::destroy_none(pay_base);
+                transfer::public_transfer(pos, ctx.sender());
+                return (option::none<Coin<Base>>(), option::none<Coin<Quote>>())
+            };
             // Buyer delivers Base; receives Quote strike * amount
-            let base_in = coin::take<Base>(ctx, amount);
-            let bbal = coin::into_balance(base_in);
-            ser.pooled_base.join(bbal);
+            assert!(option::is_some(&pay_base), E_ZERO);
+            let mut b_in = option::extract(&mut pay_base);
+            assert!(coin::value(&b_in) >= amount, E_ZERO);
+            let b_due = coin::split(&mut b_in, amount, ctx);
+            ser.pooled_base.join(coin::into_balance(b_due));
+            // refund base change if any
+            sui::transfer::public_transfer(b_in, ctx.sender());
             let due_q = mul_u64_u64(strike, amount);
-            let q_out = balance::into_coin(&mut ser.pooled_quote, due_q, ctx);
+            let qsplit = balance::split(&mut ser.pooled_quote, due_q);
+            let q_out = coin::from_balance(qsplit, ctx);
             ser.total_exercised_units = ser.total_exercised_units + amount;
             if (ser.total_sold_units >= amount) { ser.total_sold_units = ser.total_sold_units - amount; } else { ser.total_sold_units = 0; };
             pos.amount = pos.amount - amount;
+            if (option::is_some(&pay_quote)) { let q3 = option::extract(&mut pay_quote); sui::transfer::public_transfer(q3, ctx.sender()); };
+            option::destroy_none(pay_quote);
+            if (option::is_some(&pay_base)) { let b3 = option::extract(&mut pay_base); sui::transfer::public_transfer(b3, ctx.sender()); };
+            option::destroy_none(pay_base);
+            transfer::public_transfer(pos, ctx.sender());
             (option::none<Coin<Base>>(), option::some(q_out))
         }
     }
 
     // === Writer claims ===
-    entry fun writer_claim_proceeds<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, key: u128, clock: &Clock, ctx: &mut TxContext): (Coin<Base>, Coin<Quote>) {
+    public fun writer_claim_proceeds<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, key: u128, clock: &Clock, ctx: &mut TxContext): (Coin<Base>, Coin<Quote>) {
         assert!(table::contains(&market.series, key), E_INVALID_SERIES);
         let ser = table::borrow_mut(&mut market.series, key);
-        let mut wi = get_writer(ser, ctx.sender());
-        let mut base_out = coin::zero<Base>(ctx);
-        let mut quote_out = coin::zero<Quote>(ctx);
+        // take writer info to avoid borrow conflicts
+        let mut wi = if (table::contains(&ser.writer, ctx.sender())) { table::remove(&mut ser.writer, ctx.sender()) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0 } };
         if (ser.series.is_call) {
-            // claim Quote proceeds proportional to exercised units
             let total_ex = ser.total_exercised_units;
             if (total_ex > 0 && wi.exercised_units > wi.claimed_proceeds_quote) {
                 let unclaimed = wi.exercised_units - wi.claimed_proceeds_quote;
                 let pool_q = balance::value(&ser.pooled_quote);
                 let share = (pool_q as u128) * (unclaimed as u128) / (total_ex as u128);
-                if (share > 0) { quote_out = balance::into_coin(&mut ser.pooled_quote, share as u64, ctx); wi.claimed_proceeds_quote = wi.claimed_proceeds_quote + unclaimed; };
+                if (share > 0) {
+                    let qsplit = balance::split(&mut ser.pooled_quote, share as u64);
+                    let qout = coin::from_balance(qsplit, ctx);
+                    wi.claimed_proceeds_quote = wi.claimed_proceeds_quote + unclaimed;
+                    table::add(&mut ser.writer, ctx.sender(), wi);
+                    let _ = clock;
+                    return (coin::zero<Base>(ctx), qout)
+                };
             };
+            table::add(&mut ser.writer, ctx.sender(), wi);
+            let _ = clock;
+            (coin::zero<Base>(ctx), coin::zero<Quote>(ctx))
         } else {
-            // claim Base proceeds proportional to exercised units
             let total_ex2 = ser.total_exercised_units;
             if (total_ex2 > 0 && wi.exercised_units > wi.claimed_proceeds_base) {
                 let unclaimed2 = wi.exercised_units - wi.claimed_proceeds_base;
                 let pool_b = balance::value(&ser.pooled_base);
                 let share2 = (pool_b as u128) * (unclaimed2 as u128) / (total_ex2 as u128);
-                if (share2 > 0) { base_out = balance::into_coin(&mut ser.pooled_base, share2 as u64, ctx); wi.claimed_proceeds_base = wi.claimed_proceeds_base + unclaimed2; };
+                if (share2 > 0) {
+                    let bsplit = balance::split(&mut ser.pooled_base, share2 as u64);
+                    let bout = coin::from_balance(bsplit, ctx);
+                    wi.claimed_proceeds_base = wi.claimed_proceeds_base + unclaimed2;
+                    table::add(&mut ser.writer, ctx.sender(), wi);
+                    let _ = clock;
+                    return (bout, coin::zero<Quote>(ctx))
+                };
             };
-        };
-        // persist
-        set_writer(ser, ctx.sender(), wi);
-        // silence
-        let _ = clock;
-        (base_out, quote_out)
+            table::add(&mut ser.writer, ctx.sender(), wi);
+            let _ = clock;
+            (coin::zero<Base>(ctx), coin::zero<Quote>(ctx))
+        }
     }
 
     // === Views & helpers ===
@@ -338,7 +421,12 @@ module unxversal::options {
         push_u64(&mut s, strike_1e6);
         vector::push_back(&mut s, if (is_call) { 1 } else { 0 });
         let sb = string::as_bytes(symbol); let mut i = 0; let n = vector::length(sb); while (i < n) { vector::push_back(&mut s, *vector::borrow(sb, i)); i = i + 1; };
-        (hash::sha3_256(s) as u128)
+        let h = hash::sha3_256(s);
+        // fold first 16 bytes into u128
+        let mut acc: u128 = 0;
+        let mut i2 = 0; let n2 = vector::length(&h);
+        while (i2 < 16 && i2 < n2) { acc = (acc << 8) + (*vector::borrow(&h, i2) as u128); i2 = i2 + 1; };
+        acc
     }
 
     fun push_u64(buf: &mut vector<u8>, v: u64) { let mut x = v; let mut i = 0; while (i < 8) { vector::push_back(buf, (x & 0xFF) as u8); x = x >> 8; i = i + 1; } }
@@ -346,19 +434,19 @@ module unxversal::options {
     fun mul_u64_u64(a: u64, b: u64): u64 { ((a as u128) * (b as u128) / 1_000_000) as u64 }
 
     fun upsert_writer_base_lock<Base, Quote>(ser: &mut SeriesState<Base, Quote>, who: address, amount: u64, inc: bool) {
-        let mut wi = get_writer(ser, who);
+        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0 } };
         if (inc) { wi.locked_base = wi.locked_base + amount; } else { wi.locked_base = if (wi.locked_base >= amount) { wi.locked_base - amount } else { 0 }; };
-        set_writer(ser, who, wi);
+        table::add(&mut ser.writer, who, wi);
     }
 
     fun upsert_writer_quote_lock<Base, Quote>(ser: &mut SeriesState<Base, Quote>, who: address, amount: u64, inc: bool) {
-        let mut wi = get_writer(ser, who);
+        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0 } };
         if (inc) { wi.locked_quote = wi.locked_quote + amount; } else { wi.locked_quote = if (wi.locked_quote >= amount) { wi.locked_quote - amount } else { 0 }; };
-        set_writer(ser, who, wi);
+        table::add(&mut ser.writer, who, wi);
     }
 
     fun writer_add_sold<Base, Quote>(ser: &mut SeriesState<Base, Quote>, who: address, qty: u64, is_call: bool) {
-        let mut wi = get_writer(ser, who);
+        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0 } };
         wi.sold_units = wi.sold_units + qty;
         // Ensure collateral stays >= sold_units (call: base units; put: quote strike*units)
         if (is_call) {
@@ -368,33 +456,41 @@ module unxversal::options {
             assert!(wi.locked_quote >= need_q, E_COLLATERAL_MISMATCH);
         };
         ser.total_sold_units = ser.total_sold_units + qty;
-        set_writer(ser, who, wi);
+        table::add(&mut ser.writer, who, wi);
     }
 
     fun unlock_excess_collateral<Base, Quote>(ser: &mut SeriesState<Base, Quote>, who: address, qty_unfilled: u64, ctx: &mut TxContext) {
-        let mut wi = get_writer(ser, who);
+        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0 } };
         if (ser.series.is_call) {
             // cancel returns base for unfilled qty
             let amt = qty_unfilled;
             if (wi.locked_base >= amt) { wi.locked_base = wi.locked_base - amt; } else { wi.locked_base = 0; };
-            let c = balance::into_coin(&mut ser.pooled_base, amt, ctx);
+            let bsplit = balance::split(&mut ser.pooled_base, amt);
+            let c = coin::from_balance(bsplit, ctx);
             transfer::public_transfer(c, who);
         } else {
             let need_q = mul_u64_u64(ser.series.strike_1e6, qty_unfilled);
             if (wi.locked_quote >= need_q) { wi.locked_quote = wi.locked_quote - need_q; } else { wi.locked_quote = 0; };
-            let cq = balance::into_coin(&mut ser.pooled_quote, need_q, ctx);
+            let qsplit = balance::split(&mut ser.pooled_quote, need_q);
+            let cq = coin::from_balance(qsplit, ctx);
             transfer::public_transfer(cq, who);
         };
-        set_writer(ser, who, wi);
-    }
-
-    fun get_writer<Base, Quote>(ser: &SeriesState<Base, Quote>, who: address): WriterInfo {
-        if (table::contains(&ser.writer, who)) { *table::borrow(&ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0 } }
-    }
-
-    fun set_writer<Base, Quote>(ser: &mut SeriesState<Base, Quote>, who: address, wi: WriterInfo) {
-        if (table::contains(&ser.writer, who)) { let _ = table::remove(&mut ser.writer, who); };
         table::add(&mut ser.writer, who, wi);
+    }
+    // removed ensure_writer helper to avoid borrow conflicts
+
+    /// Internal: distribute UNXV fee to staking pool / treasury / burn via FeeConfig
+    fun distribute_unxv_fee(
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        staking_pool: &mut StakingPool,
+        unxv_fee: Coin<UNXV>,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        let (stakers_coin, treasury_coin, _burn) = fees::accrue_unxv_and_split(cfg, vault, unxv_fee, clock, ctx);
+        staking::add_weekly_reward(staking_pool, stakers_coin, clock);
+        transfer::public_transfer(treasury_coin, fees::treasury_address(cfg));
     }
 }
 
