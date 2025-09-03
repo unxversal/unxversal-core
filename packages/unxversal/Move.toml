@@ -10,8 +10,13 @@ authors = ["Joshua (joshua@unxversal.com)"]
 [dependencies.Switchboard]
 local = "../sui/on_demand"
 
+[dependencies.deepbook]
+local = "../../deepbookv3packages/deepbook"
+
 [addresses]
 unxversal = "0x0"
+# DeepBook mainnet addresses for integration
+deepbook = "0xb29d83c26cdd2a64959263abbcfc4a6937f0c9fccaf98580ca56faded65be244"
 # switchboard = "0xe6717fb7c9d44706bf8ce8a651e25c0a7902d32cb0ff40c0976251ce8ac25655"
 
 [dev-dependencies]

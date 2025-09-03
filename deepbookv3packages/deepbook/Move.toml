@@ -8,4 +8,4 @@ Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-fram
 token = { local = "../token"}
 
 [addresses]
-deepbook = "0x0"
+deepbook = "0xb29d83c26cdd2a64959263abbcfc4a6937f0c9fccaf98580ca56faded65be244"
