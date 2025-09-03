@@ -58,6 +58,17 @@ module unxversal::fees {
         dist: FeeDistribution,
         /// Unxversal fee (in UNXV units) for permissionless DeepBook pool creation
         pool_creation_fee_unxv: u64,
+        /// Lending origination fee in bps (before discounts); applied on borrow_with_fee
+        lending_borrow_fee_bps: u64,
+        /// Max collateral-factor bonus in bps for stakers
+        lending_collateral_bonus_bps_max: u64,
+        /// Staking tier thresholds and discounts (admin-set)
+        sd_t1_thr: u64, sd_t1_bps: u64,
+        sd_t2_thr: u64, sd_t2_bps: u64,
+        sd_t3_thr: u64, sd_t3_bps: u64,
+        sd_t4_thr: u64, sd_t4_bps: u64,
+        sd_t5_thr: u64, sd_t5_bps: u64,
+        sd_t6_thr: u64, sd_t6_bps: u64,
     }
 
     /// Generic key wrapper for storing balances in a Bag
@@ -100,6 +111,8 @@ module unxversal::fees {
         timestamp_ms: u64,
     }
 
+    // maker rebates removed
+
     /// One-time witness for module initialization
     public struct FEES has drop {}
     public struct VOLS has drop {}
@@ -116,6 +129,14 @@ module unxversal::fees {
             prefer_deep_backend: true,
             dist: FeeDistribution { stakers_share_bps: 4000, treasury_share_bps: 3000, burn_share_bps: 3000 },
             pool_creation_fee_unxv: 0,
+            lending_borrow_fee_bps: 0,
+            lending_collateral_bonus_bps_max: 500, // +5% max bonus by default
+            sd_t1_thr: 10, sd_t1_bps: 500,
+            sd_t2_thr: 100, sd_t2_bps: 1000,
+            sd_t3_thr: 1_000, sd_t3_bps: 1500,
+            sd_t4_thr: 10_000, sd_t4_bps: 2000,
+            sd_t5_thr: 100_000, sd_t5_bps: 3000,
+            sd_t6_thr: 500_000, sd_t6_bps: 4000,
         };
         let vault = FeeVault { id: object::new(ctx), store: bag::new(ctx), unxv_to_burn: balance::zero<UNXV>() };
         transfer::share_object(cfg);
@@ -163,10 +184,40 @@ module unxversal::fees {
         cfg.dex_maker_fee_bps = maker_bps;
     }
 
+    // maker rebates removed
+
     /// Admin: set UNXV fee amount for permissionless pool creation
     public fun set_pool_creation_fee_unxv(reg_admin: &AdminRegistry, cfg: &mut FeeConfig, fee_unxv: u64, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         cfg.pool_creation_fee_unxv = fee_unxv;
+    }
+
+    /// Admin: set lending fee and collateral bonus max (bps)
+    public fun set_lending_params(reg_admin: &AdminRegistry, cfg: &mut FeeConfig, borrow_fee_bps: u64, cf_bonus_max_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        cfg.lending_borrow_fee_bps = borrow_fee_bps;
+        cfg.lending_collateral_bonus_bps_max = cf_bonus_max_bps;
+    }
+
+    /// Admin: set staking tier table (6 tiers)
+    public fun set_staking_tiers(
+        reg_admin: &AdminRegistry,
+        cfg: &mut FeeConfig,
+        t1: u64, b1: u64,
+        t2: u64, b2: u64,
+        t3: u64, b3: u64,
+        t4: u64, b4: u64,
+        t5: u64, b5: u64,
+        t6: u64, b6: u64,
+        ctx: &TxContext,
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        cfg.sd_t1_thr = t1; cfg.sd_t1_bps = b1;
+        cfg.sd_t2_thr = t2; cfg.sd_t2_bps = b2;
+        cfg.sd_t3_thr = t3; cfg.sd_t3_bps = b3;
+        cfg.sd_t4_thr = t4; cfg.sd_t4_bps = b4;
+        cfg.sd_t5_thr = t5; cfg.sd_t5_bps = b5;
+        cfg.sd_t6_thr = t6; cfg.sd_t6_bps = b6;
     }
 
     /// Calculate discounted fee amount using UNXV discount
@@ -254,6 +305,9 @@ module unxversal::fees {
     public fun dex_taker_fee_bps(cfg: &FeeConfig): u64 { if (cfg.dex_taker_fee_bps > 0) { cfg.dex_taker_fee_bps } else { cfg.dex_fee_bps } }
     public fun dex_maker_fee_bps(cfg: &FeeConfig): u64 { if (cfg.dex_maker_fee_bps > 0) { cfg.dex_maker_fee_bps } else { cfg.dex_fee_bps } }
     public fun pool_creation_fee_unxv(cfg: &FeeConfig): u64 { cfg.pool_creation_fee_unxv }
+    public fun lending_borrow_fee_bps(cfg: &FeeConfig): u64 { cfg.lending_borrow_fee_bps }
+    public fun lending_collateral_bonus_bps_max(cfg: &FeeConfig): u64 { cfg.lending_collateral_bonus_bps_max }
+    // maker rebates removed
 
     /***********************
      * Volume tracking (14d)
@@ -344,28 +398,21 @@ module unxversal::fees {
         (taker_bps, maker_bps, tier)
     }
 
-    /// Staking discount in bps of the fee (not absolute), based on UNXV active stake
-    /// Aquatic tier names:
-    /// - Blue Ocean (Diamond)  >500,000 UNXV  => 40%
-    /// - Deep Trench (Platinum)>100,000 UNXV  => 30%
-    /// - Great Reef (Gold)     >10,000 UNXV   => 20%
-    /// - Open Sea (Silver)     >1,000 UNXV    => 15%
-    /// - Coral Bay (Bronze)    >100 UNXV      => 10%
-    /// - Lagoon (Wood)         >10 UNXV       => 5%
-    public fun staking_discount_bps(pool: &StakingPool, user: address): u64 {
+    /// Staking discount in bps of the fee (not absolute), based on UNXV active stake and admin-set tiers
+    public fun staking_discount_bps(pool: &StakingPool, user: address, cfg: &FeeConfig): u64 {
         let amt = staking::active_stake_of(pool, user);
-        if (amt > 500_000) { 4000 }
-        else if (amt > 100_000) { 3000 }
-        else if (amt > 10_000) { 2000 }
-        else if (amt > 1_000) { 1500 }
-        else if (amt > 100) { 1000 }
-        else if (amt > 10) { 500 }
+        if (amt > cfg.sd_t6_thr) { cfg.sd_t6_bps }
+        else if (amt > cfg.sd_t5_thr) { cfg.sd_t5_bps }
+        else if (amt > cfg.sd_t4_thr) { cfg.sd_t4_bps }
+        else if (amt > cfg.sd_t3_thr) { cfg.sd_t3_bps }
+        else if (amt > cfg.sd_t2_thr) { cfg.sd_t2_bps }
+        else if (amt > cfg.sd_t1_thr) { cfg.sd_t1_bps }
         else { 0 }
     }
 
     /// Final taker/maker bps after applying either UNXV-payment discount OR staking discount
     public fun apply_discounts(taker_bps: u64, maker_bps: u64, pay_with_unxv: bool, pool: &StakingPool, user: address, cfg: &FeeConfig): (u64, u64) {
-        let disc_bps = if (pay_with_unxv) { cfg.unxv_discount_bps } else { staking_discount_bps(pool, user) };
+        let disc_bps = if (pay_with_unxv) { cfg.unxv_discount_bps } else { staking_discount_bps(pool, user, cfg) };
         let taker_eff = ((taker_bps as u128) * ((BPS_DENOM - disc_bps) as u128) / (BPS_DENOM as u128)) as u64;
         let maker_eff = ((maker_bps as u128) * ((BPS_DENOM - disc_bps) as u128) / (BPS_DENOM as u128)) as u64;
         (taker_eff, maker_eff)
@@ -378,6 +425,9 @@ module unxversal::fees {
         let (teff, _) = apply_discounts(tb, mb, pay_with_unxv, pool, user, cfg);
         teff
     }
+
+    public fun kind_spot(): u8 { KIND_SPOT }
+    public fun kind_perps(): u8 { KIND_PERPS }
 
     /***********************
      * Admin conversion to USDC (generic quote)
@@ -415,6 +465,8 @@ module unxversal::fees {
         let bal = coin::into_balance(coin_in);
         if (bag::contains(&vault.store, key)) { let b: &mut Balance<T> = &mut vault.store[key]; b.join(bal); } else { vault.store.add(key, bal); };
     }
+
+    // maker rebates removed
 }
 
 

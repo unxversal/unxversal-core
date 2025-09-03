@@ -45,6 +45,13 @@ module unxversal::dex {
         timestamp_ms: u64,
     }
 
+    /// Rebate paid to maker from taker protocol fees (immediate)
+    public struct MakerRebatePaid has copy, drop {
+        maker: address,
+        amount: u64,
+        timestamp_ms: u64,
+    }
+
     /// Place a limit order with Unxversal fee handling. The order itself pays DeepBook fees per its flags.
     /// We optionally assess a protocol fee on the input token notionals.
     public fun place_limit_order<Base, Quote>(
@@ -133,11 +140,14 @@ module unxversal::dex {
     ): (Coin<Base>, Coin<Quote>) {
         let base_amt = coin::value(&base_in);
         assert!(base_amt > 0, E_ZERO_AMOUNT);
-        // Protocol fee from base_in
-        let fee_amt = (base_amt as u128 * (fees::dex_fee_bps(cfg) as u128) / (fees::bps_denom() as u128)) as u64;
+        // Protocol taker fee from base_in with staking or UNXV discount (no volume tiers)
+        let (taker_bps, _) = fees::apply_discounts(fees::dex_taker_fee_bps(cfg), fees::dex_maker_fee_bps(cfg), option::is_some(&fee_unxv_in), staking_pool, ctx.sender(), cfg);
+        let fee_amt = (base_amt as u128 * (taker_bps as u128) / (fees::bps_denom() as u128)) as u64;
         let _base_after = base_amt - fee_amt;
         let fee_coin = coin::split(&mut base_in, fee_amt, ctx);
         fees::accrue_generic<Base>(vault, fee_coin, clock, ctx);
+        // Record spot volume (we proxy the USD 1e6 calc externally; here we just flag the path)
+        // In production, pass oracle or pool mid-price to convert to USD 1e6 and call add_spot_volume_usd.
 
         // If UNXV provided for discounted overlay fee (optional), split and record
         if (option::is_some(&fee_unxv_in)) {
@@ -173,7 +183,9 @@ module unxversal::dex {
     ): (Coin<Quote>, Coin<Base>) {
         let q_amt = coin::value(&quote_in);
         assert!(q_amt > 0, E_ZERO_AMOUNT);
-        let fee_amt = (q_amt as u128 * (fees::dex_fee_bps(cfg) as u128) / (fees::bps_denom() as u128)) as u64;
+        let (taker_bps, _) = fees::apply_discounts(fees::dex_taker_fee_bps(cfg), fees::dex_maker_fee_bps(cfg), option::is_some(&fee_unxv_in), staking_pool, ctx.sender(), cfg);
+        let fee_amt = (q_amt as u128 * (taker_bps as u128) / (fees::bps_denom() as u128)) as u64;
+        // Collect taker protocol fee in quote
         let fee_coin = coin::split(&mut quote_in, fee_amt, ctx);
         fees::accrue_generic<Quote>(vault, fee_coin, clock, ctx);
         if (option::is_some(&fee_unxv_in)) {

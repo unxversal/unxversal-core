@@ -22,6 +22,7 @@ module unxversal::lending {
     // no option alias needed
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::fees::{Self as fees};
+    use unxversal::staking::StakingPool;
     
     /// Errors
     const E_NOT_ADMIN: u64 = 1;
@@ -63,6 +64,8 @@ module unxversal::lending {
         reserve_factor_bps: u64,
         /// Collateral factor (bps) applied to depositor value for borrow limits
         collateral_factor_bps: u64,
+        /// Liquidation collateral ratio (bps). Must be lower than collateral_factor_bps.
+        liquidation_collateral_bps: u64,
         /// Liquidation bonus (bps) given to liquidator on seized shares
         liquidation_bonus_bps: u64,
         /// Interest model
@@ -98,10 +101,12 @@ module unxversal::lending {
         kink_util_bps: u64,
         reserve_factor_bps: u64,
         collateral_factor_bps: u64,
+        liquidation_collateral_bps: u64,
         liquidation_bonus_bps: u64,
         ctx: &mut TxContext
     ) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(liquidation_collateral_bps < collateral_factor_bps, E_NOT_ADMIN);
         let irm = InterestRateModel { base_rate_bps, multiplier_bps, jump_multiplier_bps, kink_util_bps };
         let pool = LendingPool<T> {
             id: object::new(ctx),
@@ -110,6 +115,7 @@ module unxversal::lending {
             borrow_index: WAD,
             reserve_factor_bps,
             collateral_factor_bps,
+            liquidation_collateral_bps,
             liquidation_bonus_bps,
             irm,
             last_accrued_ms: sui::tx_context::epoch_timestamp_ms(ctx),
@@ -204,6 +210,43 @@ module unxversal::lending {
         let bal_part = balance::split(&mut pool.liquidity, amount);
         let c = coin::from_balance(bal_part, ctx);
         event::emit(Borrow { who: ctx.sender(), amount, new_principal, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        c
+    }
+
+    /// Borrow with one-time fee and staking-tier collateral bonus
+    public fun borrow_with_fee<T>(
+        pool: &mut LendingPool<T>,
+        amount: u64,
+        staking_pool: &StakingPool,
+        cfg: &fees::FeeConfig,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): Coin<T> {
+        accrue<T>(pool, clock);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        // effective collateral factor with staking bonus, but never below liquidation CR
+        let eff_cf = effective_collateral_factor_bps(pool.collateral_factor_bps, pool.liquidation_collateral_bps, staking_pool, ctx.sender(), cfg);
+        // health check with effective CF
+        let max_borrow = max_borrowable_with_cf<T>(pool, ctx.sender(), eff_cf);
+        assert!((current_borrow_balance<T>(pool, ctx.sender()) as u128) + (amount as u128) <= max_borrow as u128, E_HEALTH_VIOLATION);
+        // apply origination fee
+        let fee_bps = fees::lending_borrow_fee_bps(cfg);
+        let fee_amt: u64 = ((amount as u128) * (fee_bps as u128) / (fees::bps_denom() as u128)) as u64;
+        assert!(balance::value(&pool.liquidity) >= amount, E_INSUFFICIENT_LIQUIDITY);
+        // Split amount from liquidity
+        let part_bal = balance::split(&mut pool.liquidity, amount);
+        let mut c = coin::from_balance(part_bal, ctx);
+        if (fee_amt > 0) {
+            let fee_coin = coin::split(&mut c, fee_amt, ctx);
+            // For simplicity, accrue to reserves (or we could send to fees vault via an adapter)
+            pool.reserves.join(coin::into_balance(fee_coin));
+        };
+        // record principal
+        let mut pos = get_borrow_position(&pool.borrows, ctx.sender());
+        pos.principal = pos.principal + (amount as u128);
+        pos.interest_index_snap = pool.borrow_index;
+        set_borrow_position(&mut pool.borrows, ctx.sender(), pos);
+        pool.total_borrows_principal = pool.total_borrows_principal + (amount as u128);
         c
     }
 
@@ -329,11 +372,29 @@ module unxversal::lending {
         ((val * (pool.collateral_factor_bps as u128) / (fees::bps_denom() as u128)) as u64)
     }
 
+    fun max_borrowable_with_cf<T>(pool: &LendingPool<T>, who: address, eff_cf_bps: u64): u64 {
+        let shares = get_shares(&pool.supplier_shares, who);
+        if (pool.total_supply_shares == 0 || shares == 0) return 0;
+        let liq = balance::value(&pool.liquidity) as u128;
+        let val: u128 = liq * (shares as u128) / (pool.total_supply_shares as u128);
+        ((val * (eff_cf_bps as u128) / (fees::bps_denom() as u128)) as u64)
+    }
+
     /// View: true if borrower meets collateral requirement
     public fun is_healthy_for<T>(pool: &LendingPool<T>, who: address): bool {
         let maxb = max_borrowable_for<T>(pool, who) as u128;
         let owed = current_borrow_balance<T>(pool, who) as u128;
         maxb >= owed
+    }
+
+    public fun effective_collateral_factor_bps(base_cf_bps: u64, liq_cf_bps: u64, staking_pool: &StakingPool, user: address, cfg: &fees::FeeConfig): u64 {
+        let bonus = fees::staking_discount_bps(staking_pool, user, cfg);
+        let cap = fees::lending_collateral_bonus_bps_max(cfg);
+        let add = if (bonus > cap) { cap } else { bonus };
+        let mut eff = base_cf_bps + add;
+        // never let minimum CR drop below liquidation CR
+        if (eff <= liq_cf_bps) { eff = liq_cf_bps + 1; };
+        if (eff > fees::bps_denom() - 100) { fees::bps_denom() - 100 } else { eff }
     }
 
     /// View: current borrow balance including interest

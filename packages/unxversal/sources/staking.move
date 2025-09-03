@@ -253,6 +253,14 @@ module unxversal::staking {
         }
     }
 
+    /// View: active stake of a user
+    public fun active_stake_of(pool: &StakingPool, who: address): u64 {
+        if (df::exists_(&pool.id, who)) {
+            let st_ref = df::borrow<address, Staker>(&pool.id, who);
+            st_ref.active_stake
+        } else { 0 }
+    }
+
     fun write_staker(pool: &mut StakingPool, who: address, st: Staker) {
         if (df::exists_(&pool.id, who)) {
             let sref = df::borrow_mut<address, Staker>(&mut pool.id, who);
@@ -278,10 +286,7 @@ module unxversal::staking {
 
     // Removed per-account dynamic-field key helpers; using simple pending fields instead.
 
-    /// View: total active stake for address
-    public fun active_stake_of(pool: &StakingPool, who: address): u64 {
-        if (df::exists_(&pool.id, who)) { let sref = df::borrow<address, Staker>(&pool.id, who); sref.active_stake } else { 0 }
-    }
+    // duplicate active_stake_of removed
 }
 
 
