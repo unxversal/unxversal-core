@@ -163,7 +163,7 @@ module unxversal::lending {
     }
 
     /// Public: withdraw liquidity by specifying share amount
-    public fun withdraw<T>(pool: &mut LendingPool<T>, shares: u128, clock: &Clock, ctx: &mut TxContext) {
+    public fun withdraw<T>(pool: &mut LendingPool<T>, shares: u128, clock: &Clock, ctx: &mut TxContext): Coin<T> {
         accrue<T>(pool, clock);
         assert!(shares > 0, E_NO_SHARES);
         // check user's shares
@@ -180,12 +180,12 @@ module unxversal::lending {
         assert!(balance::value(&pool.liquidity) >= amt, E_INSUFFICIENT_LIQUIDITY);
         let bal_part = balance::split(&mut pool.liquidity, amt);
         let c = coin::from_balance(bal_part, ctx);
-        transfer::public_transfer(c, ctx.sender());
         event::emit(Withdraw { who: ctx.sender(), amount: amt, shares, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        c
     }
 
     /// Public: borrow asset from pool (uses caller's deposit as collateral)
-    public fun borrow<T>(pool: &mut LendingPool<T>, amount: u64, clock: &Clock, ctx: &mut TxContext) {
+    public fun borrow<T>(pool: &mut LendingPool<T>, amount: u64, clock: &Clock, ctx: &mut TxContext): Coin<T> {
         accrue<T>(pool, clock);
         assert!(amount > 0, E_ZERO_AMOUNT);
         // check liquidity
@@ -197,17 +197,18 @@ module unxversal::lending {
         let mut pos = get_borrow_position(&pool.borrows, ctx.sender());
         pos.principal = pos.principal + (amount as u128);
         pos.interest_index_snap = pool.borrow_index;
+        let new_principal = pos.principal;
         set_borrow_position(&mut pool.borrows, ctx.sender(), pos);
         pool.total_borrows_principal = pool.total_borrows_principal + (amount as u128);
         // transfer funds
         let bal_part = balance::split(&mut pool.liquidity, amount);
         let c = coin::from_balance(bal_part, ctx);
-        transfer::public_transfer(c, ctx.sender());
-        event::emit(Borrow { who: ctx.sender(), amount, new_principal: pos.principal, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        event::emit(Borrow { who: ctx.sender(), amount, new_principal, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        c
     }
 
     /// Public: repay debt (anyone can repay on behalf of borrower)
-    public fun repay<T>(pool: &mut LendingPool<T>, mut pay: Coin<T>, borrower: address, clock: &Clock, ctx: &mut TxContext) {
+    public fun repay<T>(pool: &mut LendingPool<T>, mut pay: Coin<T>, borrower: address, clock: &Clock, ctx: &mut TxContext): Coin<T> {
         accrue<T>(pool, clock);
         let amt = coin::value(&pay);
         assert!(amt > 0, E_ZERO_AMOUNT);
@@ -226,22 +227,24 @@ module unxversal::lending {
         pool.reserves.join(coin::into_balance(reserve_coin));
         // Remainder of to_use to liquidity
         pool.liquidity.join(coin::into_balance(to_use));
-        // Return any leftover pay to sender
-        if (coin::value(&pay) > 0) { transfer::public_transfer(pay, ctx.sender()); };
+        // Return leftover coin (consume 'pay')
+        let leftover = pay;
         // reduce principal and update snapshot
-        let mut remaining: u128 = owed - (pay_amt as u128);
+        let remaining: u128 = owed - (pay_amt as u128);
         // convert remaining to new principal using current index
         pos.principal = (remaining as u128) * WAD / pool.borrow_index;
         pos.interest_index_snap = pool.borrow_index;
+        let new_principal = pos.principal;
         set_borrow_position(&mut pool.borrows, borrower, pos);
         // update totals
         let principal_reduction: u128 = if ((pay_amt as u128) > (interest_applied as u128)) { (pay_amt as u128) - (interest_applied as u128) } else { 0 };
         if (pool.total_borrows_principal >= principal_reduction) { pool.total_borrows_principal = pool.total_borrows_principal - principal_reduction; } else { pool.total_borrows_principal = 0; };
-        event::emit(Repay { who: ctx.sender(), amount: pay_amt, remaining_principal: pos.principal, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        event::emit(Repay { who: ctx.sender(), amount: pay_amt, remaining_principal: new_principal, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        leftover
     }
 
     /// Keeper: liquidate an undercollateralized borrower by repaying up to `repay_amount` and seizing shares with a bonus
-    public fun liquidate<T>(pool: &mut LendingPool<T>, borrower: address, repay_amount: Coin<T>, clock: &Clock, ctx: &mut TxContext) {
+    public fun liquidate<T>(pool: &mut LendingPool<T>, borrower: address, repay_amount: Coin<T>, clock: &Clock, ctx: &mut TxContext): Coin<T> {
         accrue<T>(pool, clock);
         let health_ok = is_healthy_for<T>(pool, borrower);
         assert!(!health_ok, E_HEALTH_VIOLATION);
@@ -272,8 +275,8 @@ module unxversal::lending {
         set_shares(&mut pool.supplier_shares, borrower, borrower_sh - actual_seize);
         add_shares(&mut pool.supplier_shares, ctx.sender(), actual_seize);
         event::emit(Liquidated { borrower, liquidator: ctx.sender(), repay_amount: to_repay, shares_seized: actual_seize, bonus_bps: pool.liquidation_bonus_bps, timestamp_ms: sui::clock::timestamp_ms(clock) });
-        // return leftover of repay coin if any
-        if (coin::value(&repay) > 0) { transfer::public_transfer(repay, ctx.sender()); };
+        // return leftover of repay coin
+        repay
     }
 
     /// Accrue interest based on elapsed time and utilization. Updates borrow_index and moves reserve share.

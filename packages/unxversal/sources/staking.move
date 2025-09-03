@@ -23,7 +23,7 @@ module unxversal::staking {
     public struct STAKING has drop {}
 
     /// Per-account staking state stored as a dynamic field off the pool id
-    public struct Staker has store {
+    public struct Staker has store, drop {
         active_stake: u64,
         pending_stake: u64,
         /// The week number when pending stake activates
@@ -126,7 +126,7 @@ module unxversal::staking {
     }
 
     /// Unstake active UNXV. Effective at next week boundary.
-    public fun unstake_unx(pool: &mut StakingPool, amount: u64, clock: &sui::clock::Clock, ctx: &mut TxContext) {
+    public fun unstake_unx(pool: &mut StakingPool, amount: u64, clock: &sui::clock::Clock, ctx: &mut TxContext): Coin<UNXV> {
         assert!(amount > 0, E_ZERO_AMOUNT);
         update_to_now(pool, clock);
         let mut staker = borrow_or_new_staker(pool, ctx.sender());
@@ -142,7 +142,7 @@ module unxversal::staking {
         let bal_part = balance::split(&mut pool.stake_vault, amount);
         let c = coin::from_balance(bal_part, ctx);
         event::emit(Unstaked { who: ctx.sender(), amount, effective_week: eff_week, timestamp_ms: sui::clock::timestamp_ms(clock) });
-        transfer::public_transfer(c, ctx.sender());
+        c
     }
 
     /// Add reward for the current week. Protocol modules should call this with the stakers' UNXV portion.
@@ -162,12 +162,16 @@ module unxversal::staking {
     }
 
     /// Claim rewards for all fully completed weeks since last claim.
-    public fun claim_rewards(pool: &mut StakingPool, clock: &sui::clock::Clock, ctx: &mut TxContext) {
+    public fun claim_rewards(pool: &mut StakingPool, clock: &sui::clock::Clock, ctx: &mut TxContext): Coin<UNXV> {
         update_to_now(pool, clock);
         let mut staker = borrow_or_new_staker(pool, ctx.sender());
         let start = staker.last_claimed_week + 1;
         // You can only claim up to current_week - 1
-        if (pool.current_week == 0 || start > pool.current_week - 1) { return; };
+        if (pool.current_week == 0 || start > pool.current_week - 1) {
+            // persist unchanged
+            write_staker(pool, ctx.sender(), staker);
+            return coin::zero(ctx)
+        };
         let end = pool.current_week - 1;
         let mut acc: u64 = 0;
         let mut active = staker.active_stake;
@@ -198,11 +202,11 @@ module unxversal::staking {
         staker.last_claimed_week = end;
         // Persist staker state
         write_staker(pool, ctx.sender(), staker);
-        if (acc == 0) { return; };
+        if (acc == 0) { return coin::zero(ctx) };
         let balp = balance::split(&mut pool.reward_vault, acc);
         let c = coin::from_balance(balp, ctx);
         event::emit(RewardsClaimed { who: ctx.sender(), from_week: start, to_week: end, amount: acc, timestamp_ms: sui::clock::timestamp_ms(clock) });
-        transfer::public_transfer(c, ctx.sender());
+        c
     }
 
     /// Internal: progress pool to current week and finalize snapshots for completed weeks.
@@ -252,12 +256,13 @@ module unxversal::staking {
     fun write_staker(pool: &mut StakingPool, who: address, st: Staker) {
         if (df::exists_(&pool.id, who)) {
             let sref = df::borrow_mut<address, Staker>(&mut pool.id, who);
-            sref.active_stake = st.active_stake;
-            sref.pending_stake = st.pending_stake;
-            sref.activate_week = st.activate_week;
-            sref.pending_unstake = st.pending_unstake;
-            sref.deactivate_week = st.deactivate_week;
-            sref.last_claimed_week = st.last_claimed_week;
+            let Staker { active_stake, pending_stake, activate_week, pending_unstake, deactivate_week, last_claimed_week } = st;
+            sref.active_stake = active_stake;
+            sref.pending_stake = pending_stake;
+            sref.activate_week = activate_week;
+            sref.pending_unstake = pending_unstake;
+            sref.deactivate_week = deactivate_week;
+            sref.last_claimed_week = last_claimed_week;
         } else {
             df::add<address, Staker>(&mut pool.id, who, st);
         };
