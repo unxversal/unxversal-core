@@ -267,11 +267,11 @@ module unxversal::futures {
         };
 
         // Apply realized PnL to collateral balance
-        apply_realized_to_collat(&mut acc.collat, realized_gain, realized_loss, ctx);
+        apply_realized_to_collat(&mut acc.collat, realized_gain, realized_loss, vault, clock, ctx);
 
         // Charge protocol fee either in UNXV or Collat
         if (pay_with_unxv) {
-            let mut u = option::extract(maybe_unxv_fee);
+            let u = option::extract(maybe_unxv_fee);
             // Replace fee_amt with UNXV-specific discounted payment amount already captured via t_eff; here we just split UNXV in full amount provided.
             // Caller supplies sufficient UNXV to cover; split exact fee_amt-equivalent UNXV outside scope is non-trivial without price; we accept full provided and split into shares.
             let (stakers_coin, treasury_coin, _burn_amt) = fees::accrue_unxv_and_split(cfg, vault, u, clock, ctx);
@@ -327,7 +327,7 @@ module unxversal::futures {
             let c2 = if (qty <= acc.short_qty) { qty } else { acc.short_qty };
             if (c2 > 0) { let (g2,l2) = realize_short_ul(acc.avg_short_1e6, px_1e6, c2, market.series.contract_size); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.short_qty = acc.short_qty - c2; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; closed = c2; };
         };
-        apply_realized_to_collat(&mut acc.collat, realized_gain, realized_loss, ctx);
+        apply_realized_to_collat(&mut acc.collat, realized_gain, realized_loss, vault, clock, ctx);
 
         // Penalty taken from victim remaining collateral and sent to fee vault
         let notional_1e6 = (closed as u128) * (px_1e6 as u128) * (market.series.contract_size as u128);
@@ -380,7 +380,8 @@ module unxversal::futures {
     }
 
     fun required_initial_margin_bps<Collat>(acc: &Account<Collat>, price_1e6: u64, contract_size: u64, bps: u64): u64 {
-        let gross = (acc.long_qty as u128 + acc.short_qty as u128) * (price_1e6 as u128) * (contract_size as u128);
+        let size_u128 = (acc.long_qty as u128) + (acc.short_qty as u128);
+        let gross = size_u128 * (price_1e6 as u128) * (contract_size as u128);
         let im_1e6 = (gross * (bps as u128) / (fees::bps_denom() as u128));
         (im_1e6 / 1_000_000u128) as u64
     }
@@ -418,13 +419,15 @@ module unxversal::futures {
         (num / den) as u64
     }
 
-    fun apply_realized_to_collat<Collat>(balc: &mut Balance<Collat>, gain: u64, loss: u64, _ctx: &mut TxContext) {
-        // Credit path: no-op (accounting credit tracked in balance by external settlement);
-        // Debit path: burn from available collateral.
+    fun apply_realized_to_collat<Collat>(balc: &mut Balance<Collat>, gain: u64, loss: u64, vault: &mut FeeVault, clock: &Clock, ctx: &mut TxContext) {
         if (loss > 0) {
             let have = balance::value(balc);
             let burn = if (loss <= have) { loss } else { have };
-            if (burn > 0) { let _ = balance::split(balc, burn); };
+            if (burn > 0) {
+                let bal_loss = balance::split(balc, burn);
+                let coin_loss = coin::from_balance(bal_loss, ctx);
+                fees::accrue_generic<Collat>(vault, coin_loss, clock, ctx);
+            };
         };
         let _ = gain;
     }
@@ -434,7 +437,6 @@ module unxversal::futures {
     }
 
     fun store_account<Collat>(market: &mut FuturesMarket<Collat>, who: address, acc: Account<Collat>) {
-        if (table::contains(&market.accounts, who)) { let _ = table::remove(&mut market.accounts, who); };
         table::add(&mut market.accounts, who, acc);
     }
 
