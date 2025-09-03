@@ -284,9 +284,6 @@ module unxversal::staking {
 
     fun store_u64(tbl: &mut Table<u64, u64>, k: u64, v: u64) { if (table::contains(tbl, k)) { let _ = table::remove(tbl, k); }; table::add(tbl, k, v) }
 
-    // Removed per-account dynamic-field key helpers; using simple pending fields instead.
-
-    // duplicate active_stake_of removed
 }
 
 
