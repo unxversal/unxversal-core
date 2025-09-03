@@ -105,7 +105,7 @@ module unxversal::staking {
     }
 
     /// Stake UNXV. Activates next week for fairness.
-    entry fun stake_unx(pool: &mut StakingPool, amount: Coin<UNXV>, clock: &sui::clock::Clock, ctx: &mut TxContext) {
+    public fun stake_unx(pool: &mut StakingPool, amount: Coin<UNXV>, clock: &sui::clock::Clock, ctx: &mut TxContext) {
         let amt = coin::value(&amount);
         assert!(amt > 0, E_ZERO_AMOUNT);
         // Bring pool to current week boundary
@@ -126,7 +126,7 @@ module unxversal::staking {
     }
 
     /// Unstake active UNXV. Effective at next week boundary.
-    entry fun unstake_unx(pool: &mut StakingPool, amount: u64, clock: &sui::clock::Clock, ctx: &mut TxContext) {
+    public fun unstake_unx(pool: &mut StakingPool, amount: u64, clock: &sui::clock::Clock, ctx: &mut TxContext) {
         assert!(amount > 0, E_ZERO_AMOUNT);
         update_to_now(pool, clock);
         let mut staker = borrow_or_new_staker(pool, ctx.sender());
@@ -146,7 +146,7 @@ module unxversal::staking {
     }
 
     /// Add reward for the current week. Protocol modules should call this with the stakers' UNXV portion.
-    entry fun add_weekly_reward(pool: &mut StakingPool, reward: Coin<UNXV>, clock: &sui::clock::Clock) {
+    public fun add_weekly_reward(pool: &mut StakingPool, reward: Coin<UNXV>, clock: &sui::clock::Clock) {
         let amt = coin::value(&reward);
         assert!(amt > 0, E_ZERO_AMOUNT);
         update_to_now(pool, clock);
@@ -162,7 +162,7 @@ module unxversal::staking {
     }
 
     /// Claim rewards for all fully completed weeks since last claim.
-    entry fun claim_rewards(pool: &mut StakingPool, clock: &sui::clock::Clock, ctx: &mut TxContext) {
+    public fun claim_rewards(pool: &mut StakingPool, clock: &sui::clock::Clock, ctx: &mut TxContext) {
         update_to_now(pool, clock);
         let mut staker = borrow_or_new_staker(pool, ctx.sender());
         let start = staker.last_claimed_week + 1;

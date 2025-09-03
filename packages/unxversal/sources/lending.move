@@ -90,7 +90,7 @@ module unxversal::lending {
     public struct ParamsUpdated has copy, drop { reserve_bps: u64, collat_bps: u64, liq_bonus_bps: u64, timestamp_ms: u64 }
 
     /// Initialize a new lending pool for asset T
-    entry fun init_pool<T>(
+    public fun init_pool<T>(
         reg_admin: &AdminRegistry,
         base_rate_bps: u64,
         multiplier_bps: u64,
@@ -123,7 +123,7 @@ module unxversal::lending {
     }
 
     /// Admin: update general parameters
-    entry fun set_params<T>(reg_admin: &AdminRegistry, pool: &mut LendingPool<T>, reserve_factor_bps: u64, collateral_factor_bps: u64, liquidation_bonus_bps: u64, clock: &Clock, ctx: &TxContext) {
+    public fun set_params<T>(reg_admin: &AdminRegistry, pool: &mut LendingPool<T>, reserve_factor_bps: u64, collateral_factor_bps: u64, liquidation_bonus_bps: u64, clock: &Clock, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         pool.reserve_factor_bps = reserve_factor_bps;
         pool.collateral_factor_bps = collateral_factor_bps;
@@ -132,7 +132,7 @@ module unxversal::lending {
     }
 
     /// Admin: update interest rate model
-    entry fun set_interest_model<T>(
+    public fun set_interest_model<T>(
         reg_admin: &AdminRegistry,
         pool: &mut LendingPool<T>,
         base_rate_bps: u64,
@@ -146,7 +146,7 @@ module unxversal::lending {
     }
 
     /// Public: deposit liquidity and receive shares (acts as collateral)
-    entry fun deposit<T>(pool: &mut LendingPool<T>, amount: Coin<T>, clock: &Clock, ctx: &mut TxContext) {
+    public fun deposit<T>(pool: &mut LendingPool<T>, amount: Coin<T>, clock: &Clock, ctx: &mut TxContext) {
         accrue<T>(pool, clock);
         let amt = coin::value(&amount);
         assert!(amt > 0, E_ZERO_AMOUNT);
@@ -163,7 +163,7 @@ module unxversal::lending {
     }
 
     /// Public: withdraw liquidity by specifying share amount
-    entry fun withdraw<T>(pool: &mut LendingPool<T>, shares: u128, clock: &Clock, ctx: &mut TxContext) {
+    public fun withdraw<T>(pool: &mut LendingPool<T>, shares: u128, clock: &Clock, ctx: &mut TxContext) {
         accrue<T>(pool, clock);
         assert!(shares > 0, E_NO_SHARES);
         // check user's shares
@@ -185,7 +185,7 @@ module unxversal::lending {
     }
 
     /// Public: borrow asset from pool (uses caller's deposit as collateral)
-    entry fun borrow<T>(pool: &mut LendingPool<T>, amount: u64, clock: &Clock, ctx: &mut TxContext) {
+    public fun borrow<T>(pool: &mut LendingPool<T>, amount: u64, clock: &Clock, ctx: &mut TxContext) {
         accrue<T>(pool, clock);
         assert!(amount > 0, E_ZERO_AMOUNT);
         // check liquidity
@@ -207,7 +207,7 @@ module unxversal::lending {
     }
 
     /// Public: repay debt (anyone can repay on behalf of borrower)
-    entry fun repay<T>(pool: &mut LendingPool<T>, mut pay: Coin<T>, borrower: address, clock: &Clock, ctx: &mut TxContext) {
+    public fun repay<T>(pool: &mut LendingPool<T>, mut pay: Coin<T>, borrower: address, clock: &Clock, ctx: &mut TxContext) {
         accrue<T>(pool, clock);
         let amt = coin::value(&pay);
         assert!(amt > 0, E_ZERO_AMOUNT);
@@ -241,7 +241,7 @@ module unxversal::lending {
     }
 
     /// Keeper: liquidate an undercollateralized borrower by repaying up to `repay_amount` and seizing shares with a bonus
-    entry fun liquidate<T>(pool: &mut LendingPool<T>, borrower: address, repay_amount: Coin<T>, clock: &Clock, ctx: &mut TxContext) {
+    public fun liquidate<T>(pool: &mut LendingPool<T>, borrower: address, repay_amount: Coin<T>, clock: &Clock, ctx: &mut TxContext) {
         accrue<T>(pool, clock);
         let health_ok = is_healthy_for<T>(pool, borrower);
         assert!(!health_ok, E_HEALTH_VIOLATION);
