@@ -19,7 +19,7 @@ module unxversal::dex {
     use deepbook::{
         pool::{Self as db_pool, Pool},
         balance_manager::{Self as bm, BalanceManager, TradeProof},
-        registry::{Self as db_reg, Registry as DBRegistry},
+        registry::{Registry as DBRegistry},
     };
     use deepbook::order_info::OrderInfo;
     use token::deep::DEEP;
@@ -45,12 +45,7 @@ module unxversal::dex {
         timestamp_ms: u64,
     }
 
-    /// Rebate paid to maker from taker protocol fees (immediate)
-    public struct MakerRebatePaid has copy, drop {
-        maker: address,
-        amount: u64,
-        timestamp_ms: u64,
-    }
+    // maker rebates removed
 
     /// Place a limit order with Unxversal fee handling. The order itself pays DeepBook fees per its flags.
     /// We optionally assess a protocol fee on the input token notionals.
@@ -109,15 +104,18 @@ module unxversal::dex {
         tick_size: u64,
         lot_size: u64,
         min_size: u64,
+        staking_pool: &mut StakingPool,
+        clock: &Clock,
         ctx: &mut TxContext,
     ): ID {
         let required = fees::pool_creation_fee_unxv(cfg);
         let paid = coin::value(&fee_payment_unxv);
         assert!(paid >= required, E_POOL_FEE_NOT_PAID);
         let pay_exact = coin::split(&mut fee_payment_unxv, required, ctx);
-        // split UNXV fee to staking/treasury/burn
-        let (stakers_coin, treasury_coin, _burn) = fees::accrue_unxv_and_split(cfg, vault, pay_exact, &sui::clock::clock(), ctx);
-        // call into staking pool deposit is performed by caller upstream using PoolCreationFeePaid signal
+        // split UNXV fee to staking/treasury/burn and consume outputs
+        let (stakers_coin, treasury_coin, _burn) = fees::accrue_unxv_and_split(cfg, vault, pay_exact, clock, ctx);
+        staking::add_weekly_reward(staking_pool, stakers_coin, clock);
+        transfer::public_transfer(treasury_coin, fees::treasury_address(cfg));
         event::emit(PoolCreationFeePaid { payer: ctx.sender(), amount_unxv: required, timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
         // refund remainder
         let change = fee_payment_unxv;
