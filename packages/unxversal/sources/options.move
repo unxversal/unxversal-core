@@ -97,7 +97,7 @@ module unxversal::options {
     // Events
     public struct SeriesCreated has copy, drop { key: u128, expiry_ms: u64, strike_1e6: u64, is_call: bool }
     /// Extended series metadata for UI bootstrap
-    public struct SeriesCreatedV2 has copy, drop { key: u128, expiry_ms: u64, strike_1e6: u64, is_call: bool, symbol_bytes: vector<u8>, tick_size: u64, lot_size: u64, min_size: u64 }
+    public struct SeriesCreatedV2 has copy, drop { market_id: ID, key: u128, expiry_ms: u64, strike_1e6: u64, is_call: bool, symbol_bytes: vector<u8>, tick_size: u64, lot_size: u64, min_size: u64 }
     public struct OrderPlaced has copy, drop { key: u128, order_id: u128, maker: address, price: u64, quantity: u64, is_bid: bool, expire_ts: u64 }
     /// Emitted when an order is canceled by the maker
     public struct OrderCanceled has copy, drop { key: u128, order_id: u128, maker: address, quantity: u64 }
@@ -157,7 +157,7 @@ module unxversal::options {
         let mut sym: vector<u8> = vector::empty<u8>();
         let mut i = 0u64; let n = vector::length(sb);
         while (i < n) { vector::push_back(&mut sym, *vector::borrow(sb, i)); i = i + 1; };
-        event::emit(SeriesCreatedV2 { key, expiry_ms, strike_1e6, is_call, symbol_bytes: sym, tick_size, lot_size, min_size });
+        event::emit(SeriesCreatedV2 { market_id: object::id(market), key, expiry_ms, strike_1e6, is_call, symbol_bytes: sym, tick_size, lot_size, min_size });
     }
 
     // === Maker: place sell order with collateral locking ===

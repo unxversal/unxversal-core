@@ -1,7 +1,7 @@
 import { db, type EventRow } from '../../lib/storage';
 
 export type SeriesCreated = { key: string; expiry_ms: number; strike_1e6: number; is_call: boolean };
-export type SeriesCreatedV2 = { key: string; expiry_ms: number; strike_1e6: number; is_call: boolean; symbol_bytes: string; tick_size: number; lot_size: number; min_size: number };
+export type SeriesCreatedV2 = { market_id: string; key: string; expiry_ms: number; strike_1e6: number; is_call: boolean; symbol_bytes: string; tick_size: number; lot_size: number; min_size: number };
 export type OrderPlaced = { key: string; order_id: string; maker: string; price: number; quantity: number; is_bid: boolean; expire_ts: number };
 export type OrderCanceled = { key: string; order_id: string; maker: string; quantity: number };
 export type Matched = { key: string; taker: string; total_units: number; total_premium_quote: number };

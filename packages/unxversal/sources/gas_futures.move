@@ -45,18 +45,18 @@ module unxversal::gas_futures {
         liquidation_fee_bps: u64,
     }
 
-    public struct MarketInitialized has copy, drop { expiry_ms: u64, contract_size: u64 }
-    public struct CollateralDeposited<phantom Collat> has copy, drop { who: address, amount: u64 }
-    public struct CollateralWithdrawn<phantom Collat> has copy, drop { who: address, amount: u64 }
-    public struct PositionChanged has copy, drop { who: address, is_long: bool, qty_delta: u64, exec_price_1e6: u64 }
-    public struct FeeCharged has copy, drop { who: address, notional_1e6: u128, fee_paid: u64, paid_in_unxv: bool }
-    public struct Liquidated has copy, drop { who: address, qty_closed: u64, exec_price_1e6: u64, penalty_collat: u64 }
+    public struct MarketInitialized has copy, drop { market_id: ID, expiry_ms: u64, contract_size: u64, initial_margin_bps: u64, maintenance_margin_bps: u64, liquidation_fee_bps: u64 }
+    public struct CollateralDeposited<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, timestamp_ms: u64 }
+    public struct CollateralWithdrawn<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, timestamp_ms: u64 }
+    public struct PositionChanged has copy, drop { market_id: ID, who: address, is_long: bool, qty_delta: u64, exec_price_1e6: u64, timestamp_ms: u64 }
+    public struct FeeCharged has copy, drop { market_id: ID, who: address, notional_1e6: u128, fee_paid: u64, paid_in_unxv: bool, timestamp_ms: u64 }
+    public struct Liquidated has copy, drop { market_id: ID, who: address, qty_closed: u64, exec_price_1e6: u64, penalty_collat: u64, timestamp_ms: u64 }
 
     // === Init ===
     public fun init_market<Collat>(reg_admin: &AdminRegistry, expiry_ms: u64, contract_size: u64, im_bps: u64, mm_bps: u64, liq_fee_bps: u64, ctx: &mut TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         let m = GasMarket<Collat> { id: object::new(ctx), series: GasSeries { expiry_ms, contract_size }, accounts: table::new<address, Account<Collat>>(ctx), initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps };
-        event::emit(MarketInitialized { expiry_ms, contract_size });
+        event::emit(MarketInitialized { market_id: object::id(&m), expiry_ms, contract_size, initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps });
         transfer::share_object(m);
     }
 
@@ -74,10 +74,10 @@ module unxversal::gas_futures {
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         acc.collat.join(coin::into_balance(c));
         store_account<Collat>(market, ctx.sender(), acc);
-        event::emit(CollateralDeposited<Collat> { who: ctx.sender(), amount: amt });
+        event::emit(CollateralDeposited<Collat> { market_id: object::id(market), who: ctx.sender(), amount: amt, timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
-    public fun withdraw_collateral<Collat>(market: &mut GasMarket<Collat>, amount: u64, _clock: &Clock, ctx: &mut TxContext): Coin<Collat> {
+    public fun withdraw_collateral<Collat>(market: &mut GasMarket<Collat>, amount: u64, clock: &Clock, ctx: &mut TxContext): Coin<Collat> {
         assert!(amount > 0, E_ZERO);
         let price_1e6 = current_gas_price_1e6(ctx);
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
@@ -89,7 +89,7 @@ module unxversal::gas_futures {
         let part = balance::split(&mut acc.collat, amount);
         let out = coin::from_balance(part, ctx);
         store_account<Collat>(market, ctx.sender(), acc);
-        event::emit(CollateralWithdrawn<Collat> { who: ctx.sender(), amount });
+        event::emit(CollateralWithdrawn<Collat> { market_id: object::id(market), who: ctx.sender(), amount, timestamp_ms: clock.timestamp_ms() });
         out
     }
 
@@ -131,12 +131,12 @@ module unxversal::gas_futures {
             let (stakers_coin, treasury_coin, _burn) = fees::accrue_unxv_and_split(cfg, vault, u, clock, ctx);
             staking::add_weekly_reward(staking_pool, stakers_coin, clock);
             transfer::public_transfer(treasury_coin, fees::treasury_address(cfg));
-            event::emit(FeeCharged { who: ctx.sender(), notional_1e6, fee_paid: 0, paid_in_unxv: true });
+            event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_1e6, fee_paid: 0, paid_in_unxv: true, timestamp_ms: clock.timestamp_ms() });
         } else {
             assert!(balance::value(&acc.collat) >= fee_amt, E_INSUFF);
             let part = balance::split(&mut acc.collat, fee_amt);
             fees::accrue_generic<Collat>(vault, coin::from_balance(part, ctx), clock, ctx);
-            event::emit(FeeCharged { who: ctx.sender(), notional_1e6, fee_paid: fee_amt, paid_in_unxv: false });
+            event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_1e6, fee_paid: fee_amt, paid_in_unxv: false, timestamp_ms: clock.timestamp_ms() });
         };
 
         // IM check
@@ -144,7 +144,7 @@ module unxversal::gas_futures {
         let req_im = required_margin_bps(&acc, px_1e6, market.series.contract_size, market.initial_margin_bps);
         assert!(eq >= req_im, E_UNDER_IM);
 
-        event::emit(PositionChanged { who: ctx.sender(), is_long: is_buy, qty_delta: qty, exec_price_1e6: px_1e6 });
+        event::emit(PositionChanged { market_id: object::id(market), who: ctx.sender(), is_long: is_buy, qty_delta: qty, exec_price_1e6: px_1e6, timestamp_ms: clock.timestamp_ms() });
         store_account<Collat>(market, ctx.sender(), acc);
     }
 
@@ -170,7 +170,7 @@ module unxversal::gas_futures {
         let pay = if (pen <= have) { pen } else { have };
         if (pay > 0) { let part = balance::split(&mut acc.collat, pay); fees::accrue_generic<Collat>(vault, coin::from_balance(part, ctx), clock, ctx); };
         store_account<Collat>(market, victim, acc);
-        event::emit(Liquidated { who: victim, qty_closed: closed, exec_price_1e6: px, penalty_collat: pay });
+        event::emit(Liquidated { market_id: object::id(market), who: victim, qty_closed: closed, exec_price_1e6: px, penalty_collat: pay, timestamp_ms: clock.timestamp_ms() });
     }
 
     // Views & helpers
