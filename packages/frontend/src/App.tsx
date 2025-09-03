@@ -1,34 +1,51 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
+import { useEffect, useState } from 'react'
 import './App.css'
+import { SuiClientProvider, WalletProvider } from './lib/wallet'
+import { createSuiClient, defaultRpc } from './lib/network'
+import { runPollLoop, type IndexerTracker, startTrackers } from './lib/indexer'
+import { db } from './lib/storage'
+import { getContracts } from './lib/env'
+import { allProtocolTrackers } from './protocols'
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [network, setNetwork] = useState<'testnet' | 'mainnet'>('testnet')
+  const [started, setStarted] = useState(false)
+
+  useEffect(() => {
+    if (started) return
+    const rpc = defaultRpc(network)
+    const client = createSuiClient(rpc)
+    const { pkgUnxversal } = getContracts()
+    if (!pkgUnxversal) return
+    const trackers = allProtocolTrackers(pkgUnxversal).map((t) => ({ ...t, id: `${t.id}-${network}` }))
+    setStarted(true)
+    startTrackers(client, trackers).catch(() => {})
+  }, [network, started])
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
+    <SuiClientProvider networks={{
+      networks: {
+        mainnet: { url: defaultRpc('mainnet').url },
+        testnet: { url: defaultRpc('testnet').url },
+      },
+      initialNetwork: network,
+    } as any}>
+      <WalletProvider>
+        <div style={{ padding: 16 }}>
+          <h2>Unxversal</h2>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setNetwork('testnet')}>Testnet</button>
+            <button onClick={() => setNetwork('mainnet')}>Mainnet</button>
+            <button onClick={async () => {
+              const latest = await db.events.orderBy('tsMs').reverse().limit(5).toArray()
+              console.log('Latest events', latest)
+              alert(`Indexed rows: ${latest.length}`)
+            }}>Peek events</button>
+          </div>
+          <p style={{ opacity: 0.7 }}>Polling on {network}. Set VITE_UNXV_PKG in .env for indexing filters.</p>
+        </div>
+      </WalletProvider>
+    </SuiClientProvider>
   )
 }
 

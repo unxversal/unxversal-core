@@ -2,7 +2,7 @@
 
 [move]
 version = 3
-manifest_digest = "6309F7EFB4CD7142106E13AFF5E6092556AC273B5F89AE9CA86A84E98943B075"
+manifest_digest = "DDDC7F6128BFDD6F741FC1212C2B9C8AA1A729DC06826BC31D590389A21FC4A9"
 deps_digest = "52B406A7A21811BEF51751CF88DA0E76DAEFFEAC888D4F4060B1A72BBE7D8D35"
 dependencies = [
   { id = "Bridge", name = "Bridge" },
@@ -46,7 +46,7 @@ dependencies = [
 
 [[move.package]]
 id = "Switchboard"
-source = { local = "../sui/on_demand" }
+source = { local = "../../switchboard/on_demand" }
 
 dependencies = [
   { id = "Sui", name = "Sui" },

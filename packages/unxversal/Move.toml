@@ -8,7 +8,7 @@ authors = ["Joshua (joshua@unxversal.com)"]
 [dependencies]
 
 [dependencies.Switchboard]
-local = "../sui/on_demand"
+local = "../../switchboard/on_demand"
 
 [dependencies.deepbook]
 local = "../../deepbookv3packages/deepbook"
