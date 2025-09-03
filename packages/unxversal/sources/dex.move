@@ -8,6 +8,7 @@
 /// Notes:
 /// - This module defers matching and settlement to deepbook::pool
 /// - Protocol fee is applied to taker flows of swap helpers and on order placement at injection
+#[allow(lint(self_transfer))]
 module unxversal::dex {
     use sui::{
         coin::{Self as coin, Coin},
@@ -112,10 +113,14 @@ module unxversal::dex {
         } else {
             event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: fee_amt, timestamp_ms: sui::clock::timestamp_ms(clock) });
         };
+        // fee_unxv_in is now guaranteed to be None; destroy container
+        option::destroy_none(fee_unxv_in);
 
         // Execute DeepBook swap using remaining base
         let deep_zero = coin::zero<DEEP>(ctx);
-        let (base_left, quote_out, _deep_out) = db_pool::swap_exact_base_for_quote(pool, base_in, deep_zero, min_quote_out, clock, ctx);
+        let (base_left, quote_out, deep_back) = db_pool::swap_exact_base_for_quote(pool, base_in, deep_zero, min_quote_out, clock, ctx);
+        // return any DEEP change to sender
+        transfer::public_transfer(deep_back, ctx.sender());
         (base_left, quote_out)
     }
 
@@ -144,8 +149,10 @@ module unxversal::dex {
         } else {
             event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: fee_amt, timestamp_ms: sui::clock::timestamp_ms(clock) });
         };
+        option::destroy_none(fee_unxv_in);
         let deep_zero = coin::zero<DEEP>(ctx);
-        let (base_out, quote_left, _deep) = db_pool::swap_exact_quote_for_base(pool, quote_in, deep_zero, min_base_out, clock, ctx);
+        let (base_out, quote_left, deep_back) = db_pool::swap_exact_quote_for_base(pool, quote_in, deep_zero, min_base_out, clock, ctx);
+        transfer::public_transfer(deep_back, ctx.sender());
         (quote_left, base_out)
     }
 
@@ -208,7 +215,9 @@ module unxversal::dex {
         ctx: &mut TxContext,
     ): Coin<DEEP> {
         let deep_zero = coin::zero<DEEP>(ctx);
-        let (_unxv_left, deep_out, _deep_back) = db_pool::swap_exact_base_for_quote(pool, unxv_in, deep_zero, min_deep_out, clock, ctx);
+        let (unxv_left, deep_out, deep_back) = db_pool::swap_exact_base_for_quote(pool, unxv_in, deep_zero, min_deep_out, clock, ctx);
+        transfer::public_transfer(unxv_left, ctx.sender());
+        transfer::public_transfer(deep_back, ctx.sender());
         deep_out
     }
 
@@ -222,7 +231,9 @@ module unxversal::dex {
     ): Coin<DEEP> {
         let deep_zero = coin::zero<DEEP>(ctx);
         // We need to call quote->base variant: quote is UNXV, base is DEEP
-        let (deep_out, _unxv_left, _deep_unused) = db_pool::swap_exact_quote_for_base(pool, unxv_in, deep_zero, min_deep_out, clock, ctx);
+        let (deep_out, unxv_left, deep_unused) = db_pool::swap_exact_quote_for_base(pool, unxv_in, deep_zero, min_deep_out, clock, ctx);
+        transfer::public_transfer(unxv_left, ctx.sender());
+        transfer::public_transfer(deep_unused, ctx.sender());
         deep_out
     }
 
@@ -231,14 +242,15 @@ module unxversal::dex {
     public fun swap_exact_base_for_quote_with_unxv_deep_fee<Base, Quote>(
         target_pool: &mut Pool<Base, Quote>,
         fee_pool_unxv_deep: &mut Pool<UNXV, DEEP>,
-        mut base_in: Coin<Base>,
+        base_in: Coin<Base>,
         unxv_for_fees: Coin<UNXV>,
         min_quote_out: u64,
         clock: &Clock,
         ctx: &mut TxContext,
     ): (Coin<Base>, Coin<Quote>) {
         let deep_in = unxv_to_deep_via_unxv_deep_pool(fee_pool_unxv_deep, unxv_for_fees, 0, clock, ctx);
-        let (base_left, quote_out, _deep_left) = db_pool::swap_exact_base_for_quote(target_pool, base_in, deep_in, min_quote_out, clock, ctx);
+        let (base_left, quote_out, deep_left) = db_pool::swap_exact_base_for_quote(target_pool, base_in, deep_in, min_quote_out, clock, ctx);
+        transfer::public_transfer(deep_left, ctx.sender());
         (base_left, quote_out)
     }
 
@@ -246,14 +258,15 @@ module unxversal::dex {
     public fun swap_exact_quote_for_base_with_unxv_deep_fee<Base, Quote>(
         target_pool: &mut Pool<Base, Quote>,
         fee_pool_deep_unxv: &mut Pool<DEEP, UNXV>,
-        mut quote_in: Coin<Quote>,
+        quote_in: Coin<Quote>,
         unxv_for_fees: Coin<UNXV>,
         min_base_out: u64,
         clock: &Clock,
         ctx: &mut TxContext,
     ): (Coin<Quote>, Coin<Base>) {
         let deep_in = unxv_to_deep_via_deep_unxv_pool(fee_pool_deep_unxv, unxv_for_fees, 0, clock, ctx);
-        let (base_out, quote_left, _deep_left) = db_pool::swap_exact_quote_for_base(target_pool, quote_in, deep_in, min_base_out, clock, ctx);
+        let (base_out, quote_left, deep_left) = db_pool::swap_exact_quote_for_base(target_pool, quote_in, deep_in, min_base_out, clock, ctx);
+        transfer::public_transfer(deep_left, ctx.sender());
         (quote_left, base_out)
     }
 
@@ -387,7 +400,9 @@ module unxversal::dex {
         ctx: &mut TxContext,
     ): Coin<Base> {
         let deep_zero = coin::zero<DEEP>(ctx);
-        let (_unxv_left, base_out, _deep_back) = db_pool::swap_exact_base_for_quote(pool, unxv_in, deep_zero, min_base_out, clock, ctx);
+        let (unxv_left, base_out, deep_back) = db_pool::swap_exact_base_for_quote(pool, unxv_in, deep_zero, min_base_out, clock, ctx);
+        transfer::public_transfer(unxv_left, ctx.sender());
+        transfer::public_transfer(deep_back, ctx.sender());
         base_out
     }
 
@@ -400,7 +415,9 @@ module unxversal::dex {
         ctx: &mut TxContext,
     ): Coin<Quote> {
         let deep_zero = coin::zero<DEEP>(ctx);
-        let (_unxv_left, quote_out, _deep_back) = db_pool::swap_exact_base_for_quote(pool, unxv_in, deep_zero, min_quote_out, clock, ctx);
+        let (unxv_left, quote_out, deep_back) = db_pool::swap_exact_base_for_quote(pool, unxv_in, deep_zero, min_quote_out, clock, ctx);
+        transfer::public_transfer(unxv_left, ctx.sender());
+        transfer::public_transfer(deep_back, ctx.sender());
         quote_out
     }
 
@@ -562,20 +579,22 @@ module unxversal::dex {
         target_pool: &mut Pool<Base, Quote>,
         cfg: &FeeConfig,
         vault: &mut FeeVault,
-        mut base_in: Coin<Base>,
+        base_in: Coin<Base>,
         staking_pool: &mut StakingPool,
         // For prefer_deep_backend=true
         unxv_deep_pool: &mut Pool<UNXV, DEEP>,
-        maybe_unxv: Option<Coin<UNXV>>,
+        mut maybe_unxv: Option<Coin<UNXV>>,
         min_quote_out: u64,
         clock: &Clock,
         ctx: &mut TxContext,
     ): (Coin<Base>, Coin<Quote>) {
         if (fees::prefer_deep_backend(cfg)) {
             assert!(option::is_some(&maybe_unxv), 1337);
-            let unxv = option::extract(&mut { maybe_unxv });
+            let unxv = option::extract(&mut maybe_unxv);
             let deep_in = unxv_to_deep_via_unxv_deep_pool(unxv_deep_pool, unxv, 0, clock, ctx);
-            let (base_left, quote_out, _deep_left) = db_pool::swap_exact_base_for_quote(target_pool, base_in, deep_in, min_quote_out, clock, ctx);
+            option::destroy_none(maybe_unxv);
+            let (base_left, quote_out, deep_left) = db_pool::swap_exact_base_for_quote(target_pool, base_in, deep_in, min_quote_out, clock, ctx);
+            transfer::public_transfer(deep_left, ctx.sender());
             (base_left, quote_out)
         } else {
             swap_exact_base_for_quote(target_pool, cfg, vault, base_in, maybe_unxv, staking_pool, min_quote_out, clock, ctx)
@@ -587,20 +606,22 @@ module unxversal::dex {
         target_pool: &mut Pool<Base, Quote>,
         cfg: &FeeConfig,
         vault: &mut FeeVault,
-        mut quote_in: Coin<Quote>,
+        quote_in: Coin<Quote>,
         staking_pool: &mut StakingPool,
         // For prefer_deep_backend=true
         deep_unxv_pool: &mut Pool<DEEP, UNXV>,
-        maybe_unxv: Option<Coin<UNXV>>,
+        mut maybe_unxv: Option<Coin<UNXV>>,
         min_base_out: u64,
         clock: &Clock,
         ctx: &mut TxContext,
     ): (Coin<Quote>, Coin<Base>) {
         if (fees::prefer_deep_backend(cfg)) {
             assert!(option::is_some(&maybe_unxv), 1337);
-            let unxv = option::extract(&mut { maybe_unxv });
+            let unxv = option::extract(&mut maybe_unxv);
             let deep_in = unxv_to_deep_via_deep_unxv_pool(deep_unxv_pool, unxv, 0, clock, ctx);
-            let (base_out, quote_left, _deep_left) = db_pool::swap_exact_quote_for_base(target_pool, quote_in, deep_in, min_base_out, clock, ctx);
+            option::destroy_none(maybe_unxv);
+            let (base_out, quote_left, deep_left) = db_pool::swap_exact_quote_for_base(target_pool, quote_in, deep_in, min_base_out, clock, ctx);
+            transfer::public_transfer(deep_left, ctx.sender());
             (quote_left, base_out)
         } else {
             swap_exact_quote_for_base(target_pool, cfg, vault, quote_in, maybe_unxv, staking_pool, min_base_out, clock, ctx)
