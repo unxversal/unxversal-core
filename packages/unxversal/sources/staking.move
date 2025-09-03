@@ -277,6 +277,11 @@ module unxversal::staking {
     fun store_u64(tbl: &mut Table<u64, u64>, k: u64, v: u64) { if (table::contains(tbl, k)) { let _ = table::remove(tbl, k); }; table::add(tbl, k, v) }
 
     // Removed per-account dynamic-field key helpers; using simple pending fields instead.
+
+    /// View: total active stake for address
+    public fun active_stake_of(pool: &StakingPool, who: address): u64 {
+        if (df::exists_(&pool.id, who)) { let sref = df::borrow<address, Staker>(&pool.id, who); sref.active_stake } else { 0 }
+    }
 }
 
 

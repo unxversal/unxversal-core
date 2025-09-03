@@ -12,10 +12,14 @@ module unxversal::fees {
         bag::{Self as bag, Bag},
         coin::{Self as coin, Coin},
         event,
+        table::{Self as table, Table},
     };
 
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::unxv::UNXV;
+    use unxversal::staking::{Self as staking, StakingPool};
+    use deepbook::pool::{Self as db_pool, Pool};
+    use token::deep::DEEP;
 
     /// Errors
     const E_NOT_ADMIN: u64 = 1;
@@ -24,6 +28,9 @@ module unxversal::fees {
 
     /// Basis points denominator
     const BPS_DENOM: u64 = 10_000;
+    const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+    const KIND_SPOT: u8 = 0;
+    const KIND_PERPS: u8 = 1;
 
     /// Fee distribution parameters (in BPS, all must sum to BPS_DENOM)
     public struct FeeDistribution has copy, drop, store {
@@ -35,8 +42,12 @@ module unxversal::fees {
     /// Global fee configuration shared by protocols
     public struct FeeConfig has key, store {
         id: UID,
-        /// DEX layer protocol fee in bps, applied to notional for direct coin swaps
+        /// Fallback DEX protocol fee in bps (used if specific maker/taker not set)
         dex_fee_bps: u64,
+        /// Separate taker protocol fee in bps (0 = use dex_fee_bps)
+        dex_taker_fee_bps: u64,
+        /// Separate maker protocol fee in bps (0 = use dex_fee_bps)
+        dex_maker_fee_bps: u64,
         /// UNXV discount on Unxversal protocol fees, in bps (e.g. 3000 = 30%)
         unxv_discount_bps: u64,
         /// Address that receives the treasury share
@@ -45,6 +56,8 @@ module unxversal::fees {
         prefer_deep_backend: bool,
         /// Distribution percentages
         dist: FeeDistribution,
+        /// Unxversal fee (in UNXV units) for permissionless DeepBook pool creation
+        pool_creation_fee_unxv: u64,
     }
 
     /// Generic key wrapper for storing balances in a Bag
@@ -89,16 +102,20 @@ module unxversal::fees {
 
     /// One-time witness for module initialization
     public struct FEES has drop {}
+    public struct VOLS has drop {}
 
     /// Initialize the fee manager objects (config + vault). Treasury defaults to publisher.
     fun init(_w: FEES, ctx: &mut TxContext) {
         let cfg = FeeConfig {
             id: object::new(ctx),
             dex_fee_bps: 100,                // 1 bps initial DEX protocol fee
+            dex_taker_fee_bps: 100,
+            dex_maker_fee_bps: 0,
             unxv_discount_bps: 3000,         // 30% discount
             treasury: ctx.sender(),
             prefer_deep_backend: true,
             dist: FeeDistribution { stakers_share_bps: 4000, treasury_share_bps: 3000, burn_share_bps: 3000 },
+            pool_creation_fee_unxv: 0,
         };
         let vault = FeeVault { id: object::new(ctx), store: bag::new(ctx), unxv_to_burn: balance::zero<UNXV>() };
         transfer::share_object(cfg);
@@ -139,6 +156,19 @@ module unxversal::fees {
         });
     }
 
+    /// Admin: set separate maker/taker protocol fees (bps)
+    public fun set_trade_fees(reg_admin: &AdminRegistry, cfg: &mut FeeConfig, taker_bps: u64, maker_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        cfg.dex_taker_fee_bps = taker_bps;
+        cfg.dex_maker_fee_bps = maker_bps;
+    }
+
+    /// Admin: set UNXV fee amount for permissionless pool creation
+    public fun set_pool_creation_fee_unxv(reg_admin: &AdminRegistry, cfg: &mut FeeConfig, fee_unxv: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        cfg.pool_creation_fee_unxv = fee_unxv;
+    }
+
     /// Calculate discounted fee amount using UNXV discount
     public fun apply_unxv_discount(base_amount: u64, cfg: &FeeConfig): u64 {
         let discount = cfg.unxv_discount_bps;
@@ -162,7 +192,7 @@ module unxversal::fees {
             vault.store.add(key, bal);
         };
     }
-
+    
     /// Accrue UNXV-denominated fee and split to stakers / treasury / burn buckets.
     /// - stakers_unxv is expected to be deposited into a staking pool by the caller.
     /// - treasury_unxv is transferred to `cfg.treasury`.
@@ -221,6 +251,170 @@ module unxversal::fees {
     public fun treasury_address(cfg: &FeeConfig): address { cfg.treasury }
     public fun shares(cfg: &FeeConfig): (u64, u64, u64) { (cfg.dist.stakers_share_bps, cfg.dist.treasury_share_bps, cfg.dist.burn_share_bps) }
     public fun bps_denom(): u64 { BPS_DENOM }
+    public fun dex_taker_fee_bps(cfg: &FeeConfig): u64 { if (cfg.dex_taker_fee_bps > 0) { cfg.dex_taker_fee_bps } else { cfg.dex_fee_bps } }
+    public fun dex_maker_fee_bps(cfg: &FeeConfig): u64 { if (cfg.dex_maker_fee_bps > 0) { cfg.dex_maker_fee_bps } else { cfg.dex_fee_bps } }
+    public fun pool_creation_fee_unxv(cfg: &FeeConfig): u64 { cfg.pool_creation_fee_unxv }
+
+    /***********************
+     * Volume tracking (14d)
+     ***********************/
+    public struct VolumeEntry has copy, drop, store { spot_usd_1e6: u128, perps_usd_1e6: u128 }
+    public struct UserVolume has store { last_day: u64, by_day: Table<u64, VolumeEntry> }
+    public struct VolumeRegistry has key, store { id: UID, users: Table<address, UserVolume> }
+
+    fun day_index(clock: &sui::clock::Clock): u64 { sui::clock::timestamp_ms(clock) / DAY_MS }
+
+    public fun init_volume_registry(_w: VOLS, ctx: &mut TxContext) {
+        let reg = VolumeRegistry { id: object::new(ctx), users: table::new<address, UserVolume>(ctx) };
+        transfer::share_object(reg);
+    }
+
+    public fun add_spot_volume_usd(reg: &mut VolumeRegistry, user: address, usd_1e6: u128, clock: &sui::clock::Clock, ctx: &mut TxContext) { add_volume_internal(reg, user, usd_1e6, true, clock, ctx) }
+
+    public fun add_perps_volume_usd(reg: &mut VolumeRegistry, user: address, usd_1e6: u128, clock: &sui::clock::Clock, ctx: &mut TxContext) { add_volume_internal(reg, user, usd_1e6, false, clock, ctx) }
+
+    fun add_volume_internal(reg: &mut VolumeRegistry, user: address, usd_1e6: u128, is_spot: bool, clock: &sui::clock::Clock, ctx: &mut TxContext) {
+        let d = day_index(clock);
+        if (table::contains(&reg.users, user)) {
+            let uv: &mut UserVolume = table::borrow_mut(&mut reg.users, user);
+            prune_old(uv, d);
+            let ve = if (table::contains(&uv.by_day, d)) { *table::borrow(&uv.by_day, d) } else { VolumeEntry { spot_usd_1e6: 0, perps_usd_1e6: 0 } };
+            let mut ve2 = ve;
+            if (is_spot) { ve2.spot_usd_1e6 = ve.spot_usd_1e6 + usd_1e6; } else { ve2.perps_usd_1e6 = ve.perps_usd_1e6 + usd_1e6; };
+            if (table::contains(&uv.by_day, d)) { let _old = table::remove(&mut uv.by_day, d); };
+            table::add(&mut uv.by_day, d, ve2);
+            uv.last_day = d;
+        } else {
+            let mut uv_new = UserVolume { last_day: d, by_day: table::new<u64, VolumeEntry>(ctx) };
+            let ve2 = if (is_spot) { VolumeEntry { spot_usd_1e6: usd_1e6, perps_usd_1e6: 0 } } else { VolumeEntry { spot_usd_1e6: 0, perps_usd_1e6: usd_1e6 } };
+            table::add(&mut uv_new.by_day, d, ve2);
+            table::add(&mut reg.users, user, uv_new);
+        };
+    }
+
+    fun prune_old(uv: &mut UserVolume, current_day: u64) {
+        // remove entries older than 14 days
+        let mut day = if (uv.last_day + 1 < current_day) { current_day - 15 } else { uv.last_day };
+        while (day + 14 < current_day) {
+            if (table::contains(&uv.by_day, day)) { let _ = table::remove(&mut uv.by_day, day); };
+            day = day + 1;
+        };
+        uv.last_day = current_day;
+    }
+
+    public fun weighted_14d_volume_usd(reg: &VolumeRegistry, user: address, clock: &sui::clock::Clock): u128 {
+        if (!table::contains(&reg.users, user)) { return 0 };
+        let uv = table::borrow(&reg.users, user);
+        let today = day_index(clock);
+        let mut total: u128 = 0;
+        let mut i = 0u64;
+        while (i < 14) {
+            let d = today - i;
+            if (table::contains(&uv.by_day, d)) {
+                let e = table::borrow(&uv.by_day, d);
+                total = total + e.perps_usd_1e6 + (e.spot_usd_1e6 * 2);
+            };
+            i = i + 1;
+        };
+        total
+    }
+
+    /***********************
+     * Fee schedule (HL-like)
+     ***********************/
+    public fun compute_tier_bps_spot(total_weighted_usd_1e6: u128): (u64, u64, u8) {
+        let (taker_bps, maker_bps, tier) = if (total_weighted_usd_1e6 > 7_000_000_000u128 * 1_000_000u128) { (25, 0, 6) }
+        else if (total_weighted_usd_1e6 > 2_000_000_000u128 * 1_000_000u128) { (30, 0, 5) }
+        else if (total_weighted_usd_1e6 > 500_000_000u128 * 1_000_000u128) { (35, 0, 4) }
+        else if (total_weighted_usd_1e6 > 100_000_000u128 * 1_000_000u128) { (40, 10, 3) }
+        else if (total_weighted_usd_1e6 > 25_000_000u128 * 1_000_000u128) { (50, 20, 2) }
+        else if (total_weighted_usd_1e6 > 5_000_000u128 * 1_000_000u128) { (60, 30, 1) }
+        else { (70, 40, 0) };
+        (taker_bps, maker_bps, tier)
+    }
+
+    public fun compute_tier_bps_perps(total_weighted_usd_1e6: u128): (u64, u64, u8) {
+        let (taker_bps, maker_bps, tier) = if (total_weighted_usd_1e6 > 7_000_000_000u128 * 1_000_000u128) { (24, 0, 6) }
+        else if (total_weighted_usd_1e6 > 2_000_000_000u128 * 1_000_000u128) { (26, 0, 5) }
+        else if (total_weighted_usd_1e6 > 500_000_000u128 * 1_000_000u128) { (28, 0, 4) }
+        else if (total_weighted_usd_1e6 > 100_000_000u128 * 1_000_000u128) { (30, 4, 3) }
+        else if (total_weighted_usd_1e6 > 25_000_000u128 * 1_000_000u128) { (35, 8, 2) }
+        else if (total_weighted_usd_1e6 > 5_000_000u128 * 1_000_000u128) { (40, 12, 1) }
+        else { (45, 15, 0) };
+        (taker_bps, maker_bps, tier)
+    }
+
+    /// Staking discount in bps of the fee (not absolute), based on UNXV active stake
+    /// Aquatic tier names:
+    /// - Blue Ocean (Diamond)  >500,000 UNXV  => 40%
+    /// - Deep Trench (Platinum)>100,000 UNXV  => 30%
+    /// - Great Reef (Gold)     >10,000 UNXV   => 20%
+    /// - Open Sea (Silver)     >1,000 UNXV    => 15%
+    /// - Coral Bay (Bronze)    >100 UNXV      => 10%
+    /// - Lagoon (Wood)         >10 UNXV       => 5%
+    public fun staking_discount_bps(pool: &StakingPool, user: address): u64 {
+        let amt = staking::active_stake_of(pool, user);
+        if (amt > 500_000) { 4000 }
+        else if (amt > 100_000) { 3000 }
+        else if (amt > 10_000) { 2000 }
+        else if (amt > 1_000) { 1500 }
+        else if (amt > 100) { 1000 }
+        else if (amt > 10) { 500 }
+        else { 0 }
+    }
+
+    /// Final taker/maker bps after applying either UNXV-payment discount OR staking discount
+    public fun apply_discounts(taker_bps: u64, maker_bps: u64, pay_with_unxv: bool, pool: &StakingPool, user: address, cfg: &FeeConfig): (u64, u64) {
+        let disc_bps = if (pay_with_unxv) { cfg.unxv_discount_bps } else { staking_discount_bps(pool, user) };
+        let taker_eff = ((taker_bps as u128) * ((BPS_DENOM - disc_bps) as u128) / (BPS_DENOM as u128)) as u64;
+        let maker_eff = ((maker_bps as u128) * ((BPS_DENOM - disc_bps) as u128) / (BPS_DENOM as u128)) as u64;
+        (taker_eff, maker_eff)
+    }
+
+    /// Convenience: compute taker bps for SPOT or PERPS given registry and staking pool
+    public fun compute_taker_bps_for_user(kind: u8, volreg: &VolumeRegistry, user: address, pool: &StakingPool, cfg: &FeeConfig, pay_with_unxv: bool, clock: &sui::clock::Clock): u64 {
+        let total = weighted_14d_volume_usd(volreg, user, clock);
+        let (tb, mb, _) = if (kind == KIND_SPOT) { compute_tier_bps_spot(total) } else if (kind == KIND_PERPS) { compute_tier_bps_perps(total) } else { compute_tier_bps_spot(total) };
+        let (teff, _) = apply_discounts(tb, mb, pay_with_unxv, pool, user, cfg);
+        teff
+    }
+
+    /***********************
+     * Admin conversion to USDC (generic quote)
+     ***********************/
+    public fun admin_convert_fee_balance_via_pool<Base, Quote>(
+        reg_admin: &AdminRegistry,
+        vault: &mut FeeVault,
+        amount: u64,
+        pool: &mut Pool<Base, Quote>,
+        is_base_to_quote: bool,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        let key = FeeKey<Base> {};
+        assert!(bag::contains(&vault.store, key), E_ZERO_AMOUNT);
+        let bal: &mut Balance<Base> = &mut vault.store[key];
+        let bal_out = balance::split(bal, amount);
+        let coin_base = coin::from_balance(bal_out, ctx);
+        let deep_zero = coin::zero<DEEP>(ctx);
+        if (is_base_to_quote) {
+            let (base_left, quote_out, deep_left) = db_pool::swap_exact_base_for_quote(pool, coin_base, deep_zero, 0, clock, ctx);
+            // deposit all outputs back to the vault (consume coins): Base change, Quote proceeds, DEEP change
+            deposit_generic<Base>(vault, base_left);
+            deposit_generic<Quote>(vault, quote_out);
+            deposit_generic<DEEP>(vault, deep_left);
+        } else {
+            // If fee asset is actually Quote, we need a different key; keep Base path only for simplicity
+            abort 1338
+        }
+    }
+
+    fun deposit_generic<T>(vault: &mut FeeVault, coin_in: Coin<T>) {
+        let key = FeeKey<T> {};
+        let bal = coin::into_balance(coin_in);
+        if (bag::contains(&vault.store, key)) { let b: &mut Balance<T> = &mut vault.store[key]; b.join(bal); } else { vault.store.add(key, bal); };
+    }
 }
 
 

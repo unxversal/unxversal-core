@@ -19,6 +19,7 @@ module unxversal::dex {
     use deepbook::{
         pool::{Self as db_pool, Pool},
         balance_manager::{Self as bm, BalanceManager, TradeProof},
+        registry::{Self as db_reg, Registry as DBRegistry},
     };
     use deepbook::order_info::OrderInfo;
     use token::deep::DEEP;
@@ -28,12 +29,19 @@ module unxversal::dex {
 
     /// Errors
     const E_ZERO_AMOUNT: u64 = 1;
+    const E_POOL_FEE_NOT_PAID: u64 = 2;
 
     /// Events
     public struct ProtocolFeeTaken has copy, drop {
         payer: address,
         base_fee_asset_unxv: bool,
         amount: u64,
+        timestamp_ms: u64,
+    }
+
+    public struct PoolCreationFeePaid has copy, drop {
+        payer: address,
+        amount_unxv: u64,
         timestamp_ms: u64,
     }
 
@@ -82,6 +90,33 @@ module unxversal::dex {
         let info = db_pool::place_market_order(pool, balance_manager, trade_proof, client_order_id, self_matching_option, quantity, is_bid, pay_with_deep, clock, ctx);
         event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: 0, timestamp_ms: sui::clock::timestamp_ms(clock) });
         info
+    }
+
+    // === Permissionless pool creation with Unxversal fee in UNXV ===
+    /// Creates a new DeepBook pool and charges an Unxversal UNXV creation fee set in FeeConfig.
+    public fun create_permissionless_pool<Base, Quote>(
+        registry: &mut DBRegistry,
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        mut fee_payment_unxv: Coin<UNXV>,
+        tick_size: u64,
+        lot_size: u64,
+        min_size: u64,
+        ctx: &mut TxContext,
+    ): ID {
+        let required = fees::pool_creation_fee_unxv(cfg);
+        let paid = coin::value(&fee_payment_unxv);
+        assert!(paid >= required, E_POOL_FEE_NOT_PAID);
+        let pay_exact = coin::split(&mut fee_payment_unxv, required, ctx);
+        // split UNXV fee to staking/treasury/burn
+        let (stakers_coin, treasury_coin, _burn) = fees::accrue_unxv_and_split(cfg, vault, pay_exact, &sui::clock::clock(), ctx);
+        // call into staking pool deposit is performed by caller upstream using PoolCreationFeePaid signal
+        event::emit(PoolCreationFeePaid { payer: ctx.sender(), amount_unxv: required, timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
+        // refund remainder
+        let change = fee_payment_unxv;
+        transfer::public_transfer(change, ctx.sender());
+        // create DeepBook pool (DeepBook collects its own DEEP creation fee internally)
+        db_pool::create_permissionless_pool<Base, Quote>(registry, tick_size, lot_size, min_size, coin::zero<DEEP>(ctx), ctx)
     }
 
     /// Swap exact base for quote with Unxversal protocol fee on input. Can accept UNXV for discounted fee and split.
