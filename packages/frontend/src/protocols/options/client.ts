@@ -1,13 +1,45 @@
 import { SuiClient } from '@mysten/sui/client';
-import { Transaction, Inputs } from '@mysten/sui/transactions';
+import { Transaction } from '@mysten/sui/transactions';
 
 export class OptionsClient {
   private client: SuiClient;
   private pkg: string;
   constructor(client: SuiClient, pkg: string) { this.client = client; this.pkg = pkg; }
 
+  private async getMarketTypeArgs(marketId: string): Promise<{ base: string; quote: string }> {
+    const o = await this.client.getObject({ id: marketId, options: { showType: true } });
+    const t = (o as any).data?.content?.type as string | undefined;
+    if (!t) throw new Error('Market type not found');
+    const lt = t.indexOf('<');
+    const gt = t.lastIndexOf('>');
+    if (lt === -1 || gt === -1) throw new Error('Unexpected market type');
+    const inner = t.slice(lt + 1, gt);
+    // split top-level by comma
+    const parts: string[] = [];
+    let depth = 0, cur = '';
+    for (const ch of inner) {
+      if (ch === '<') depth++;
+      if (ch === '>') depth--;
+      if (ch === ',' && depth === 0) { parts.push(cur.trim()); cur = ''; continue; }
+      cur += ch;
+    }
+    if (cur.trim()) parts.push(cur.trim());
+    if (parts.length !== 2) throw new Error('Unexpected market generics');
+    return { base: parts[0], quote: parts[1] };
+  }
+
+  private coinTypeOf(inner: string): string { return `0x2::coin::Coin<${inner}>`; }
+
+  private makeNone(tx: Transaction, typeTag: string) {
+    return tx.moveCall({ target: '0x1::option::none', typeArguments: [typeTag], arguments: [] });
+  }
+
+  private makeSomeObject(tx: Transaction, typeTag: string, objectId: string) {
+    return tx.moveCall({ target: '0x1::option::some', typeArguments: [typeTag], arguments: [tx.object(objectId)] });
+  }
+
   // place_option_sell_order<Base, Quote>(market, key, quantity, limit_premium_quote, expire_ts, collateral: Option<Coin<Base>>, collateral_q: Option<Coin<Quote>>,...)
-  sellOrder(args: {
+  async sellOrder(args: {
     marketId: string;
     key: bigint;
     quantity: bigint;
@@ -17,8 +49,11 @@ export class OptionsClient {
     quoteCollateralCoinId?: string; // for puts
   }) {
     const tx = new Transaction();
-    const collBase = args.baseCollateralCoinId ? tx.pure.option('object', Inputs.ObjectRef({ objectId: args.baseCollateralCoinId, digest: '', version: 0 })) : tx.pure.option('object', null);
-    const collQuote = args.quoteCollateralCoinId ? tx.pure.option('object', Inputs.ObjectRef({ objectId: args.quoteCollateralCoinId, digest: '', version: 0 })) : tx.pure.option('object', null);
+    const { base, quote } = await this.getMarketTypeArgs(args.marketId);
+    const coinBase = this.coinTypeOf(base);
+    const coinQuote = this.coinTypeOf(quote);
+    const collBase = args.baseCollateralCoinId ? this.makeSomeObject(tx, coinBase, args.baseCollateralCoinId) : this.makeNone(tx, coinBase);
+    const collQuote = args.quoteCollateralCoinId ? this.makeSomeObject(tx, coinQuote, args.quoteCollateralCoinId) : this.makeNone(tx, coinQuote);
     tx.moveCall({
       target: `${this.pkg}::options::place_option_sell_order`,
       arguments: [
@@ -36,7 +71,7 @@ export class OptionsClient {
   }
 
   // place_option_buy_order<Base, Quote>(market, key, quantity, limit_premium_quote, expire_ts, premium_budget_quote, cfg, vault, staking_pool, fee_unxv_in, clock, ctx)
-  buyOrder(args: {
+  async buyOrder(args: {
     marketId: string;
     key: bigint;
     quantity: bigint;
@@ -49,6 +84,8 @@ export class OptionsClient {
     unxvFeeCoinId?: string;
   }) {
     const tx = new Transaction();
+    const coinUnxv = this.coinTypeOf(`${this.pkg}::unxv::UNXV`);
+    const feeOpt = args.unxvFeeCoinId ? this.makeSomeObject(tx, coinUnxv, args.unxvFeeCoinId) : this.makeNone(tx, coinUnxv);
     tx.moveCall({
       target: `${this.pkg}::options::place_option_buy_order`,
       arguments: [
@@ -61,7 +98,7 @@ export class OptionsClient {
         tx.object(args.feeConfigId),
         tx.object(args.feeVaultId),
         tx.object(args.stakingPoolId),
-        args.unxvFeeCoinId ? tx.object(args.unxvFeeCoinId) : tx.pure.option('address', null),
+        feeOpt,
         tx.object('0x6'),
       ],
     });
@@ -75,7 +112,7 @@ export class OptionsClient {
   }
 
   // exercise_option<Base, Quote>(market, pos, amount, reg, agg, pay_quote, pay_base, clock, ctx)
-  exercise(args: {
+  async exercise(args: {
     marketId: string;
     positionId: string;
     amount: bigint;
@@ -85,8 +122,11 @@ export class OptionsClient {
     payBaseCoinId?: string;
   }) {
     const tx = new Transaction();
-    const payQ = args.payQuoteCoinId ? tx.pure.option('object', tx.object(args.payQuoteCoinId)) : tx.pure.option('object', null);
-    const payB = args.payBaseCoinId ? tx.pure.option('object', tx.object(args.payBaseCoinId)) : tx.pure.option('object', null);
+    const { base, quote } = await this.getMarketTypeArgs(args.marketId);
+    const coinBase = this.coinTypeOf(base);
+    const coinQuote = this.coinTypeOf(quote);
+    const payQ = args.payQuoteCoinId ? this.makeSomeObject(tx, coinQuote, args.payQuoteCoinId) : this.makeNone(tx, coinQuote);
+    const payB = args.payBaseCoinId ? this.makeSomeObject(tx, coinBase, args.payBaseCoinId) : this.makeNone(tx, coinBase);
     tx.moveCall({
       target: `${this.pkg}::options::exercise_option`,
       arguments: [
