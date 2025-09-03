@@ -48,6 +48,14 @@ module unxversal::fees {
         dex_taker_fee_bps: u64,
         /// Separate maker protocol fee in bps (0 = use dex_fee_bps)
         dex_maker_fee_bps: u64,
+        /// Futures taker protocol fee in bps (0 = use dex_fee_bps)
+        futures_taker_fee_bps: u64,
+        /// Futures maker protocol fee in bps (0 = use dex_fee_bps)
+        futures_maker_fee_bps: u64,
+        /// Gas-futures taker protocol fee in bps (0 = use futures_taker_fee_bps)
+        gasfut_taker_fee_bps: u64,
+        /// Gas-futures maker protocol fee in bps (0 = use futures_maker_fee_bps)
+        gasfut_maker_fee_bps: u64,
         /// UNXV discount on Unxversal protocol fees, in bps (e.g. 3000 = 30%)
         unxv_discount_bps: u64,
         /// Address that receives the treasury share
@@ -124,6 +132,10 @@ module unxversal::fees {
             dex_fee_bps: 100,                // 1 bps initial DEX protocol fee
             dex_taker_fee_bps: 100,
             dex_maker_fee_bps: 0,
+            futures_taker_fee_bps: 45,       // default taker fee for futures (0.45 bps)
+            futures_maker_fee_bps: 15,       // default maker fee for futures (0.15 bps)
+            gasfut_taker_fee_bps: 45,        // default equal to futures
+            gasfut_maker_fee_bps: 15,
             unxv_discount_bps: 3000,         // 30% discount
             treasury: ctx.sender(),
             prefer_deep_backend: true,
@@ -182,6 +194,20 @@ module unxversal::fees {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         cfg.dex_taker_fee_bps = taker_bps;
         cfg.dex_maker_fee_bps = maker_bps;
+    }
+
+    /// Admin: set futures maker/taker protocol fees (bps)
+    public fun set_futures_trade_fees(reg_admin: &AdminRegistry, cfg: &mut FeeConfig, taker_bps: u64, maker_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        cfg.futures_taker_fee_bps = taker_bps;
+        cfg.futures_maker_fee_bps = maker_bps;
+    }
+
+    /// Admin: set gas-futures maker/taker protocol fees (bps)
+    public fun set_gasfutures_trade_fees(reg_admin: &AdminRegistry, cfg: &mut FeeConfig, taker_bps: u64, maker_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        cfg.gasfut_taker_fee_bps = taker_bps;
+        cfg.gasfut_maker_fee_bps = maker_bps;
     }
 
     // maker rebates removed
@@ -304,6 +330,10 @@ module unxversal::fees {
     public fun bps_denom(): u64 { BPS_DENOM }
     public fun dex_taker_fee_bps(cfg: &FeeConfig): u64 { if (cfg.dex_taker_fee_bps > 0) { cfg.dex_taker_fee_bps } else { cfg.dex_fee_bps } }
     public fun dex_maker_fee_bps(cfg: &FeeConfig): u64 { if (cfg.dex_maker_fee_bps > 0) { cfg.dex_maker_fee_bps } else { cfg.dex_fee_bps } }
+    public fun futures_taker_fee_bps(cfg: &FeeConfig): u64 { if (cfg.futures_taker_fee_bps > 0) { cfg.futures_taker_fee_bps } else { cfg.dex_fee_bps } }
+    public fun futures_maker_fee_bps(cfg: &FeeConfig): u64 { if (cfg.futures_maker_fee_bps > 0) { cfg.futures_maker_fee_bps } else { cfg.dex_fee_bps } }
+    public fun gasfut_taker_fee_bps(cfg: &FeeConfig): u64 { let base = futures_taker_fee_bps(cfg); if (cfg.gasfut_taker_fee_bps > 0) { cfg.gasfut_taker_fee_bps } else { base } }
+    public fun gasfut_maker_fee_bps(cfg: &FeeConfig): u64 { let base = futures_maker_fee_bps(cfg); if (cfg.gasfut_maker_fee_bps > 0) { cfg.gasfut_maker_fee_bps } else { base } }
     public fun pool_creation_fee_unxv(cfg: &FeeConfig): u64 { cfg.pool_creation_fee_unxv }
     public fun lending_borrow_fee_bps(cfg: &FeeConfig): u64 { cfg.lending_borrow_fee_bps }
     public fun lending_collateral_bonus_bps_max(cfg: &FeeConfig): u64 { cfg.lending_collateral_bonus_bps_max }
