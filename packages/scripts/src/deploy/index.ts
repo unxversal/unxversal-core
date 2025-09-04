@@ -3,6 +3,41 @@ import { Transaction } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { logger } from '../utils/logger.js';
 import { deployConfig, type DeployConfig } from './config.js';
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+type DeployedOptions = { marketId: string; base: string; quote: string; series: Array<{ expiryMs: number; strike1e6: number; isCall: boolean; symbol: string }> };
+type DeployedFutures = { marketId: string; collat: string; symbol: string; contractSize: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number };
+type DeployedGasFutures = { marketId: string; collat: string; expiryMs: number; contractSize: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number };
+type DeployedPerp = { marketId: string; collat: string; symbol: string; contractSize: number; fundingIntervalMs: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number };
+type DeployedDexPool = { poolId: string; base: string; quote: string; tickSize: number; lotSize: number; minSize: number; registryId: string; feeConfigId: string; feeVaultId: string; stakingPoolId: string };
+
+type DeploymentSummary = {
+  network: string;
+  timestampMs: number;
+  pkgId: string;
+  adminRegistryId: string;
+  feeConfigId: string;
+  feeVaultId: string;
+  stakingPoolId: string;
+  usduFaucetId?: string;
+  oracleRegistryId?: string;
+  additionalAdmins?: string[];
+  feeParams?: DeployConfig['feeParams'];
+  feeTiers?: DeployConfig['feeTiers'];
+  lendingParams?: DeployConfig['lendingParams'];
+  poolCreationFeeUnxv?: DeployConfig['poolCreationFeeUnxv'];
+  tradeFees?: DeployConfig['tradeFees'];
+  oracleMaxAgeSec?: number;
+  oracleFeeds?: NonNullable<DeployConfig['oracleFeeds']>;
+  lending: Array<{ poolId: string; asset: string; params: NonNullable<DeployConfig['lending']>[number] }>;
+  options: DeployedOptions[];
+  futures: DeployedFutures[];
+  gasFutures: DeployedGasFutures[];
+  perpetuals: DeployedPerp[];
+  dexPools: DeployedDexPool[];
+};
 
 function kpFromEnv(): Ed25519Keypair {
   const b64 = process.env.UNXV_ADMIN_SEED_B64 || '';
@@ -151,7 +186,7 @@ async function applyUsduFaucetSettings(client: SuiClient, cfg: DeployConfig, key
   }
 }
 
-async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
+async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.options?.length) return;
   for (const m of cfg.options) {
     let marketId = m.marketId;
@@ -183,10 +218,13 @@ async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25
         await execTx(client, tx, keypair, `options.create_series ${s.symbol}`);
       }
     }
+    if (marketId) {
+      summary.options.push({ marketId, base: m.base, quote: m.quote, series: m.series || [] });
+    }
   }
 }
 
-async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
+async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.futures?.length) return;
   for (const f of cfg.futures) {
     if (!f.marketId) {
@@ -207,11 +245,14 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
       const res = await execTx(client, tx, keypair, `futures.init_market ${f.symbol}`);
       const id = extractCreatedId(res, `${cfg.pkgId}::futures::FuturesMarket<`);
       if (id) logger.info(`futures.market created id=${id}`);
+      if (id) summary.futures.push({ marketId: id, collat: f.collat, symbol: f.symbol, contractSize: f.contractSize, initialMarginBps: f.initialMarginBps, maintenanceMarginBps: f.maintenanceMarginBps, liquidationFeeBps: f.liquidationFeeBps });
+    } else {
+      summary.futures.push({ marketId: f.marketId, collat: f.collat, symbol: f.symbol, contractSize: f.contractSize, initialMarginBps: f.initialMarginBps, maintenanceMarginBps: f.maintenanceMarginBps, liquidationFeeBps: f.liquidationFeeBps });
     }
   }
 }
 
-async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
+async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.gasFutures?.length) return;
   for (const g of cfg.gasFutures) {
     if (!g.marketId) {
@@ -231,11 +272,14 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
       const res = await execTx(client, tx, keypair, 'gas_futures.init_market');
       const id = extractCreatedId(res, `${cfg.pkgId}::gas_futures::GasMarket<`);
       if (id) logger.info(`gas_futures.market created id=${id}`);
+      if (id) summary.gasFutures.push({ marketId: id, collat: g.collat, expiryMs: g.expiryMs, contractSize: g.contractSize, initialMarginBps: g.initialMarginBps, maintenanceMarginBps: g.maintenanceMarginBps, liquidationFeeBps: g.liquidationFeeBps });
+    } else {
+      summary.gasFutures.push({ marketId: g.marketId, collat: g.collat, expiryMs: g.expiryMs, contractSize: g.contractSize, initialMarginBps: g.initialMarginBps, maintenanceMarginBps: g.maintenanceMarginBps, liquidationFeeBps: g.liquidationFeeBps });
     }
   }
 }
 
-async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
+async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.perpetuals?.length) return;
   for (const p of cfg.perpetuals) {
     if (!p.marketId) {
@@ -256,11 +300,14 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
       const res = await execTx(client, tx, keypair, `perpetuals.init_market ${p.symbol}`);
       const id = extractCreatedId(res, `${cfg.pkgId}::perpetuals::PerpMarket<`);
       if (id) logger.info(`perpetuals.market created id=${id}`);
+      if (id) summary.perpetuals.push({ marketId: id, collat: p.collat, symbol: p.symbol, contractSize: p.contractSize, fundingIntervalMs: p.fundingIntervalMs, initialMarginBps: p.initialMarginBps, maintenanceMarginBps: p.maintenanceMarginBps, liquidationFeeBps: p.liquidationFeeBps });
+    } else {
+      summary.perpetuals.push({ marketId: p.marketId, collat: p.collat, symbol: p.symbol, contractSize: p.contractSize, fundingIntervalMs: p.fundingIntervalMs, initialMarginBps: p.initialMarginBps, maintenanceMarginBps: p.maintenanceMarginBps, liquidationFeeBps: p.liquidationFeeBps });
     }
   }
 }
 
-async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
+async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.lending?.length) return;
   for (const l of cfg.lending) {
     if (!l.poolId) {
@@ -283,11 +330,12 @@ async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25
       const res = await execTx(client, tx, keypair, `lending.init_pool ${l.asset}`);
       const id = extractCreatedId(res, `${cfg.pkgId}::lending::LendingPool<`);
       if (id) logger.info(`lending.pool created id=${id}`);
+      if (id) summary.lending.push({ poolId: id, asset: l.asset, params: l });
     }
   }
 }
 
-async function deployDexPools(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
+async function deployDexPools(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.dexPools?.length) return;
   for (const d of cfg.dexPools) {
     const tx = new Transaction();
@@ -306,8 +354,88 @@ async function deployDexPools(client: SuiClient, cfg: DeployConfig, keypair: Ed2
         tx.object('0x6'),
       ],
     });
-    await execTx(client, tx, keypair, 'dex.create_permissionless_pool');
+    const res = await execTx(client, tx, keypair, 'dex.create_permissionless_pool');
+    const poolId = extractCreatedId(res, 'deepbook::pool::Pool<') || '';
+    if (poolId) {
+      summary.dexPools.push({ poolId, base: d.base, quote: d.quote, tickSize: d.tickSize, lotSize: d.lotSize, minSize: d.minSize, registryId: d.registryId, feeConfigId: d.feeConfigId, feeVaultId: d.feeVaultId, stakingPoolId: d.stakingPoolId });
+    }
   }
+}
+
+function getOutputPath(): string {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  return path.resolve(__dirname, '..', '..', 'deploy-output.md');
+}
+
+async function writeDeploymentMarkdown(summary: DeploymentSummary) {
+  const lines: string[] = [];
+  lines.push(`# Unxversal Deploy Summary`);
+  lines.push('');
+  lines.push(`- **Network**: ${summary.network}`);
+  lines.push(`- **Timestamp**: ${new Date(summary.timestampMs).toISOString()}`);
+  lines.push('');
+  lines.push('## Core objects');
+  lines.push(`- **Package**: \`${summary.pkgId}\``);
+  lines.push(`- **AdminRegistry**: \`${summary.adminRegistryId}\``);
+  lines.push(`- **FeeConfig**: \`${summary.feeConfigId}\``);
+  lines.push(`- **FeeVault**: \`${summary.feeVaultId}\``);
+  lines.push(`- **StakingPool**: \`${summary.stakingPoolId}\``);
+  if (summary.usduFaucetId) lines.push(`- **USDU Faucet**: \`${summary.usduFaucetId}\``);
+  if (summary.oracleRegistryId) lines.push(`- **OracleRegistry**: \`${summary.oracleRegistryId}\``);
+  if (summary.additionalAdmins?.length) lines.push(`- **Additional Admins**: ${summary.additionalAdmins.map((a) => `\`${a}\``).join(', ')}`);
+  lines.push('');
+  lines.push('## Fee settings');
+  if (summary.feeParams) lines.push('```json\n' + JSON.stringify(summary.feeParams, null, 2) + '\n```');
+  if (summary.feeTiers) lines.push('```json\n' + JSON.stringify(summary.feeTiers, null, 2) + '\n```');
+  if (summary.lendingParams) lines.push('```json\n' + JSON.stringify(summary.lendingParams, null, 2) + '\n```');
+  if (typeof summary.poolCreationFeeUnxv === 'number') lines.push(`- **Pool Creation Fee (UNXV)**: ${summary.poolCreationFeeUnxv}`);
+  if (summary.tradeFees) lines.push('```json\n' + JSON.stringify(summary.tradeFees, null, 2) + '\n```');
+  lines.push('');
+  lines.push('## Oracle');
+  if (typeof summary.oracleMaxAgeSec === 'number') lines.push(`- **Max Age (sec)**: ${summary.oracleMaxAgeSec}`);
+  if (summary.oracleFeeds?.length) {
+    lines.push('- **Feeds**:');
+    for (const f of summary.oracleFeeds) lines.push(`  - **${f.symbol}**: \`${f.aggregatorId}\``);
+  }
+  lines.push('');
+  if (summary.options.length) {
+    lines.push('## Options Markets');
+    for (const m of summary.options) {
+      lines.push(`- **Market** \`${m.marketId}\` (<${m.base}>, <${m.quote}>)`);
+      if (m.series?.length) {
+        for (const s of m.series) lines.push(`  - ${s.symbol} | expiry=${s.expiryMs} | strike1e6=${s.strike1e6} | isCall=${s.isCall}`);
+      }
+    }
+    lines.push('');
+  }
+  if (summary.futures.length) {
+    lines.push('## Futures Markets');
+    for (const m of summary.futures) lines.push(`- **${m.symbol}**: market=\`${m.marketId}\`, collat=<${m.collat}>, cs=${m.contractSize}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}`);
+    lines.push('');
+  }
+  if (summary.gasFutures.length) {
+    lines.push('## Gas Futures Markets');
+    for (const m of summary.gasFutures) lines.push(`- market=\`${m.marketId}\`, collat=<${m.collat}>, expiry=${m.expiryMs}, cs=${m.contractSize}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}`);
+    lines.push('');
+  }
+  if (summary.perpetuals.length) {
+    lines.push('## Perpetuals Markets');
+    for (const m of summary.perpetuals) lines.push(`- **${m.symbol}**: market=\`${m.marketId}\`, collat=<${m.collat}>, cs=${m.contractSize}, fundInt=${m.fundingIntervalMs}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}`);
+    lines.push('');
+  }
+  if (summary.dexPools.length) {
+    lines.push('## DEX Pools (DeepBook)');
+    for (const p of summary.dexPools) lines.push(`- pool=\`${p.poolId}\`, <${p.base}>/<${p.quote}>, tick=${p.tickSize}, lot=${p.lotSize}, min=${p.minSize}`);
+    lines.push('');
+  }
+  lines.push('## Raw summary');
+  lines.push('```json');
+  lines.push(JSON.stringify(summary, null, 2));
+  lines.push('```');
+  const outPath = getOutputPath();
+  await writeFile(outPath, lines.join('\n'));
+  logger.info(`Wrote deploy summary to ${outPath}`);
 }
 
 export async function main(): Promise<void> {
@@ -322,12 +450,41 @@ export async function main(): Promise<void> {
   await setOracleParams(client, deployConfig, keypair);
   await updateFeeParams(client, deployConfig, keypair);
   await applyUsduFaucetSettings(client, deployConfig, keypair);
-  await deployLending(client, deployConfig, keypair);
-  await deployOptions(client, deployConfig, keypair);
-  await deployFutures(client, deployConfig, keypair);
-  await deployGasFutures(client, deployConfig, keypair);
-  await deployPerpetuals(client, deployConfig, keypair);
-  await deployDexPools(client, deployConfig, keypair);
+
+  const summary: DeploymentSummary = {
+    network: deployConfig.network,
+    timestampMs: Date.now(),
+    pkgId: deployConfig.pkgId,
+    adminRegistryId: deployConfig.adminRegistryId,
+    feeConfigId: deployConfig.feeConfigId,
+    feeVaultId: deployConfig.feeVaultId,
+    stakingPoolId: deployConfig.stakingPoolId,
+    usduFaucetId: deployConfig.usduFaucetId,
+    oracleRegistryId: deployConfig.oracleRegistryId,
+    additionalAdmins: deployConfig.additionalAdmins,
+    feeParams: deployConfig.feeParams,
+    feeTiers: deployConfig.feeTiers,
+    lendingParams: deployConfig.lendingParams,
+    poolCreationFeeUnxv: deployConfig.poolCreationFeeUnxv,
+    tradeFees: deployConfig.tradeFees,
+    oracleMaxAgeSec: deployConfig.oracleMaxAgeSec,
+    oracleFeeds: deployConfig.oracleFeeds || [],
+    lending: [],
+    options: [],
+    futures: [],
+    gasFutures: [],
+    perpetuals: [],
+    dexPools: [],
+  };
+
+  await deployLending(client, deployConfig, keypair, summary);
+  await deployOptions(client, deployConfig, keypair, summary);
+  await deployFutures(client, deployConfig, keypair, summary);
+  await deployGasFutures(client, deployConfig, keypair, summary);
+  await deployPerpetuals(client, deployConfig, keypair, summary);
+  await deployDexPools(client, deployConfig, keypair, summary);
+
+  await writeDeploymentMarkdown(summary);
 
   logger.info('Deploy completed');
 }

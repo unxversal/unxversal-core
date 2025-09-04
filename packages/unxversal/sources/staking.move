@@ -185,6 +185,12 @@ module unxversal::staking {
                 staker.pending_stake = 0;
                 staker.activate_week = 0;
             };
+            if (staker.deactivate_week != 0 && w == staker.deactivate_week && staker.pending_unstake > 0) {
+                if (active >= staker.pending_unstake) { active = active - staker.pending_unstake; } else { active = 0; };
+                staker.active_stake = active;
+                staker.pending_unstake = 0;
+                staker.deactivate_week = 0;
+            };
             // Compute week reward share
             let pool_active = if (table::contains(&pool.active_by_week, w)) { *table::borrow(&pool.active_by_week, w) } else { pool.total_active_stake };
             if (pool_active > 0 && active > 0 && table::contains(&pool.reward_by_week, w)) {

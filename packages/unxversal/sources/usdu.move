@@ -6,7 +6,7 @@
 /// - Faucet with admin-configurable per-address cumulative claim limit
 /// - Public claim function mints directly to caller, respecting caps
 module unxversal::usdu {
-    use sui::coin::{Self as coin, Coin, TreasuryCap};
+    use sui::coin::{Self as coin, TreasuryCap};
     use sui::table::{Self as table, Table};
     use sui::clock::Clock;
     use sui::event;
@@ -73,6 +73,8 @@ module unxversal::usdu {
             paused: false,
         };
         transfer::share_object(faucet);
+        // Initial event for off-chain indexers
+        event::emit(FaucetInitialized { per_address_limit: 0, by: ctx.sender(), timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /// Admin: set or update the per-address faucet claim limit (in base units).

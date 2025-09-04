@@ -49,6 +49,9 @@ module unxversal::options {
     // const E_NOT_ITM: u64 = 10;
     const E_SERIES_EXISTS: u64 = 11;
 
+    /// Fixed-point scale for proceeds per unit index (1e12)
+    const PROCEEDS_INDEX_SCALE: u128 = 1_000_000_000_000;
+
     // Data
     public struct OptionSeries has copy, drop, store {
         expiry_ms: u64,     // epoch ms
@@ -60,11 +63,13 @@ module unxversal::options {
     /// Writer state for claims and outstanding obligations
     public struct WriterInfo has store {
         sold_units: u64,          // matched outstanding units
-        exercised_units: u64,     // portion exercised (for claim calc)
+        exercised_units: u64,     // legacy; kept for compatibility (unused)
         claimed_proceeds_quote: u64, // claimed quote (calls)
         claimed_proceeds_base: u64,  // claimed base (puts)
         locked_base: u64,         // currently locked base collateral
         locked_quote: u64,        // currently locked quote collateral
+        /// Snapshot of proceeds index at last writer update/claim
+        proceeds_index_snap_1e12: u128,
     }
 
     /// Per-series state and vaults
@@ -79,6 +84,8 @@ module unxversal::options {
         // aggregated metrics
         total_sold_units: u64,              // total outstanding matched sell units
         total_exercised_units: u64,         // total units exercised
+        /// Cumulative proceeds per sold unit scaled by PROCEEDS_INDEX_SCALE
+        proceeds_index_1e12: u128,
         settled: bool,
     }
 
@@ -148,6 +155,7 @@ module unxversal::options {
             pooled_quote: balance::zero<Quote>(),
             total_sold_units: 0,
             total_exercised_units: 0,
+            proceeds_index_1e12: 0,
             settled: false,
         };
         table::add(&mut market.series, key, ser);
@@ -356,6 +364,11 @@ module unxversal::options {
             let base_out = coin::from_balance(bsplit, ctx);
             // aggregate exercised units
             ser.total_exercised_units = ser.total_exercised_units + amount;
+            // Update proceeds index for calls: quote collected per outstanding sold unit
+            if (ser.total_sold_units > 0) {
+                let delta_index: u128 = ((due_q as u128) * PROCEEDS_INDEX_SCALE) / (ser.total_sold_units as u128);
+                ser.proceeds_index_1e12 = ser.proceeds_index_1e12 + delta_index;
+            };
             // reduce outstanding
             if (ser.total_sold_units >= amount) { ser.total_sold_units = ser.total_sold_units - amount; } else { ser.total_sold_units = 0; };
             pos.amount = pos.amount - amount;
@@ -387,6 +400,11 @@ module unxversal::options {
             let qsplit = balance::split(&mut ser.pooled_quote, due_q);
             let q_out = coin::from_balance(qsplit, ctx);
             ser.total_exercised_units = ser.total_exercised_units + amount;
+            // Update proceeds index for puts: base deposited per outstanding sold unit
+            if (ser.total_sold_units > 0) {
+                let delta_index2: u128 = ((amount as u128) * PROCEEDS_INDEX_SCALE) / (ser.total_sold_units as u128);
+                ser.proceeds_index_1e12 = ser.proceeds_index_1e12 + delta_index2;
+            };
             if (ser.total_sold_units >= amount) { ser.total_sold_units = ser.total_sold_units - amount; } else { ser.total_sold_units = 0; };
             pos.amount = pos.amount - amount;
             event::emit(OptionPositionUpdated { key: pos.key, owner: ctx.sender(), position_id: object::id(&pos), increase: false, delta_units: amount, new_amount: pos.amount, timestamp_ms: clock.timestamp_ms() });
@@ -404,44 +422,50 @@ module unxversal::options {
         assert!(table::contains(&market.series, key), E_INVALID_SERIES);
         let ser = table::borrow_mut(&mut market.series, key);
         // take writer info to avoid borrow conflicts
-        let mut wi = if (table::contains(&ser.writer, ctx.sender())) { table::remove(&mut ser.writer, ctx.sender()) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0 } };
-        if (ser.series.is_call) {
-            let total_ex = ser.total_exercised_units;
-            if (total_ex > 0 && wi.exercised_units > wi.claimed_proceeds_quote) {
-                let unclaimed = wi.exercised_units - wi.claimed_proceeds_quote;
-                let pool_q = balance::value(&ser.pooled_quote);
-                let share = (pool_q as u128) * (unclaimed as u128) / (total_ex as u128);
-                if (share > 0) {
-                    let qsplit = balance::split(&mut ser.pooled_quote, share as u64);
-                    let qout = coin::from_balance(qsplit, ctx);
-                    wi.claimed_proceeds_quote = wi.claimed_proceeds_quote + unclaimed;
-                    table::add(&mut ser.writer, ctx.sender(), wi);
-                    let _ = clock;
-                    return (coin::zero<Base>(ctx), qout)
+        let mut wi = if (table::contains(&ser.writer, ctx.sender())) { table::remove(&mut ser.writer, ctx.sender()) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0, proceeds_index_snap_1e12: ser.proceeds_index_1e12 } };
+        let cur_index = ser.proceeds_index_1e12;
+        let snap = wi.proceeds_index_snap_1e12;
+        if (cur_index > snap && wi.sold_units > 0) {
+            let delta_index = cur_index - snap;
+            // gross proceeds since last snap = (delta_index * sold_units) / SCALE
+            let gross: u128 = (delta_index * (wi.sold_units as u128)) / PROCEEDS_INDEX_SCALE;
+            if (gross > 0) {
+                if (ser.series.is_call) {
+                    let pool_q = balance::value(&ser.pooled_quote) as u128;
+                    let to_pay_u128 = if (gross <= pool_q) { gross } else { pool_q };
+                    if (to_pay_u128 > 0) {
+                        let to_pay: u64 = (to_pay_u128 as u64);
+                        let qsplit = balance::split(&mut ser.pooled_quote, to_pay);
+                        let qout = coin::from_balance(qsplit, ctx);
+                        wi.claimed_proceeds_quote = wi.claimed_proceeds_quote + to_pay;
+                        wi.proceeds_index_snap_1e12 = cur_index;
+                        table::add(&mut ser.writer, ctx.sender(), wi);
+                        let _ = clock;
+                        event::emit(WriterClaimed { key, writer: ctx.sender(), amount_base: 0, amount_quote: to_pay, timestamp_ms: clock.timestamp_ms() });
+                        return (coin::zero<Base>(ctx), qout)
+                    };
+                } else {
+                    let pool_b = balance::value(&ser.pooled_base) as u128;
+                    let to_pay_b_u128 = if (gross <= pool_b) { gross } else { pool_b };
+                    if (to_pay_b_u128 > 0) {
+                        let to_pay_b: u64 = (to_pay_b_u128 as u64);
+                        let bsplit = balance::split(&mut ser.pooled_base, to_pay_b);
+                        let bout = coin::from_balance(bsplit, ctx);
+                        wi.claimed_proceeds_base = wi.claimed_proceeds_base + to_pay_b;
+                        wi.proceeds_index_snap_1e12 = cur_index;
+                        table::add(&mut ser.writer, ctx.sender(), wi);
+                        let _ = clock;
+                        event::emit(WriterClaimed { key, writer: ctx.sender(), amount_base: to_pay_b, amount_quote: 0, timestamp_ms: clock.timestamp_ms() });
+                        return (bout, coin::zero<Quote>(ctx))
+                    };
                 };
             };
-            table::add(&mut ser.writer, ctx.sender(), wi);
-            let _ = clock;
-            (coin::zero<Base>(ctx), coin::zero<Quote>(ctx))
-        } else {
-            let total_ex2 = ser.total_exercised_units;
-            if (total_ex2 > 0 && wi.exercised_units > wi.claimed_proceeds_base) {
-                let unclaimed2 = wi.exercised_units - wi.claimed_proceeds_base;
-                let pool_b = balance::value(&ser.pooled_base);
-                let share2 = (pool_b as u128) * (unclaimed2 as u128) / (total_ex2 as u128);
-                if (share2 > 0) {
-                    let bsplit = balance::split(&mut ser.pooled_base, share2 as u64);
-                    let bout = coin::from_balance(bsplit, ctx);
-                    wi.claimed_proceeds_base = wi.claimed_proceeds_base + unclaimed2;
-                    table::add(&mut ser.writer, ctx.sender(), wi);
-                    let _ = clock;
-                    return (bout, coin::zero<Quote>(ctx))
-                };
-            };
-            table::add(&mut ser.writer, ctx.sender(), wi);
-            let _ = clock;
-            (coin::zero<Base>(ctx), coin::zero<Quote>(ctx))
-        }
+        };
+        // nothing payable now; just update snap
+        wi.proceeds_index_snap_1e12 = cur_index;
+        table::add(&mut ser.writer, ctx.sender(), wi);
+        let _ = clock;
+        (coin::zero<Base>(ctx), coin::zero<Quote>(ctx))
     }
 
     // === Views & helpers ===
@@ -489,19 +513,19 @@ module unxversal::options {
     }
 
     fun upsert_writer_base_lock<Base, Quote>(ser: &mut SeriesState<Base, Quote>, who: address, amount: u64, inc: bool) {
-        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0 } };
+        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0, proceeds_index_snap_1e12: ser.proceeds_index_1e12 } };
         if (inc) { wi.locked_base = wi.locked_base + amount; } else { wi.locked_base = if (wi.locked_base >= amount) { wi.locked_base - amount } else { 0 }; };
         table::add(&mut ser.writer, who, wi);
     }
 
     fun upsert_writer_quote_lock<Base, Quote>(ser: &mut SeriesState<Base, Quote>, who: address, amount: u64, inc: bool) {
-        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0 } };
+        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0, proceeds_index_snap_1e12: ser.proceeds_index_1e12 } };
         if (inc) { wi.locked_quote = wi.locked_quote + amount; } else { wi.locked_quote = if (wi.locked_quote >= amount) { wi.locked_quote - amount } else { 0 }; };
         table::add(&mut ser.writer, who, wi);
     }
 
     fun writer_add_sold<Base, Quote>(ser: &mut SeriesState<Base, Quote>, who: address, qty: u64, is_call: bool) {
-        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0 } };
+        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0, proceeds_index_snap_1e12: ser.proceeds_index_1e12 } };
         wi.sold_units = wi.sold_units + qty;
         // Ensure collateral stays >= sold_units (call: base units; put: quote strike*units)
         if (is_call) {
@@ -515,7 +539,7 @@ module unxversal::options {
     }
 
     fun unlock_excess_collateral<Base, Quote>(ser: &mut SeriesState<Base, Quote>, who: address, qty_unfilled: u64, clock: &Clock, ctx: &mut TxContext) {
-        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0 } };
+        let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0, proceeds_index_snap_1e12: ser.proceeds_index_1e12 } };
         if (ser.series.is_call) {
             // cancel returns base for unfilled qty
             let amt = qty_unfilled;

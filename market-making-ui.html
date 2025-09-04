@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeepBook Market Making Protocol</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .nav-tabs {
+            display: flex;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 6px;
+            margin-bottom: 30px;
+            backdrop-filter: blur(10px);
+        }
+
+        .tab {
+            flex: 1;
+            padding: 12px 20px;
+            text-align: center;
+            border-radius: 8px;
+            cursor: pointer;
+            color: white;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .tab:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .tab.active {
+            background: white;
+            color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .metric-card {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .metric-card h3 {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #888;
+            margin-bottom: 8px;
+        }
+
+        .metric-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .metric-card .change {
+            font-size: 0.9rem;
+            margin-top: 8px;
+        }
+
+        .change.positive {
+            color: #10b981;
+        }
+
+        .change.negative {
+            color: #ef4444;
+        }
+
+        .strategy-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .strategy-card {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .strategy-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .strategy-card h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #333;
+        }
+
+        .strategy-card .description {
+            color: #666;
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+
+        .strategy-card .metrics {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .metric {
+            text-align: center;
+        }
+
+        .metric .label {
+            font-size: 0.8rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metric .value {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+            width: 100%;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background: #f3f4f6;
+            color: #333;
+        }
+
+        .custom-builder {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .builder-section {
+            margin-bottom: 30px;
+            padding-bottom: 30px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .builder-section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+
+        .builder-section h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 6px;
+            color: #555;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid #e5e5e5;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .toggle input[type="checkbox"] {
+            width: 40px;
+            height: 20px;
+            appearance: none;
+            background: #ccc;
+            border-radius: 20px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .toggle input[type="checkbox"]:checked {
+            background: #667eea;
+        }
+
+        .toggle input[type="checkbox"]:before {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 16px;
+            height: 16px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.3s ease;
+        }
+
+        .toggle input[type="checkbox"]:checked:before {
+            transform: translateX(20px);
+        }
+
+        .risk-indicator {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .risk-low {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .risk-medium {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .risk-high {
+            background: #fecaca;
+            color: #991b1b;
+        }
+
+        .preview-panel {
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .preview-panel h4 {
+            margin-bottom: 16px;
+            color: #333;
+        }
+
+        .config-json {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 16px;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.9rem;
+            overflow-x: auto;
+            white-space: pre;
+        }
+
+        .chart-placeholder {
+            height: 200px;
+            background: linear-gradient(135deg, #667eea20 0%, #764ba240 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #667eea;
+            font-weight: 600;
+            margin: 20px 0;
+        }
+
+        @media (max-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+            
+            .nav-tabs {
+                flex-direction: column;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🌊 DeepBook Market Making Protocol</h1>
+            <p>Advanced liquidity provisioning strategies for Sui's central limit order book</p>
+        </header>
+
+        <nav class="nav-tabs">
+            <div class="tab active" onclick="showTab('dashboard')">Dashboard</div>
+            <div class="tab" onclick="showTab('strategies')">Strategy Templates</div>
+            <div class="tab" onclick="showTab('custom')">Custom Builder</div>
+            <div class="tab" onclick="showTab('derivatives')">Derivatives</div>
+            <div class="tab" onclick="showTab('analytics')">Analytics</div>
+        </nav>
+
+        <!-- Dashboard Tab -->
+        <div id="dashboard" class="tab-content active">
+            <div class="dashboard">
+                <div class="metric-card">
+                    <h3>Total Value Locked</h3>
+                    <div class="value">$2.4M</div>
+                    <div class="change positive">+12.3% (24h)</div>
+                </div>
+                <div class="metric-card">
+                    <h3>Active Strategies</h3>
+                    <div class="value">42</div>
+                    <div class="change positive">+5 (7d)</div>
+                </div>
+                <div class="metric-card">
+                    <h3>24h P&L</h3>
+                    <div class="value">+$3,247</div>
+                    <div class="change positive">+0.14%</div>
+                </div>
+            </div>
+
+            <div class="chart-placeholder">
+                📈 Portfolio Performance Chart (Integration with charting library)
+            </div>
+
+            <div class="custom-builder">
+                <h3>Your Active Vaults</h3>
+                <div class="strategy-grid">
+                    <div class="strategy-card">
+                        <h3>My Static Range Vault</h3>
+                        <div class="description">SUI/USDC pair with ±5% range</div>
+                        <div class="metrics">
+                            <div class="metric">
+                                <div class="label">Balance</div>
+                                <div class="value">$12,500</div>
+                            </div>
+                            <div class="metric">
+                                <div class="label">APY</div>
+                                <div class="value">18.2%</div>
+                            </div>
+                            <div class="metric">
+                                <div class="label">Risk</div>
+                                <div class="risk-indicator risk-low">Low</div>
+                            </div>
+                        </div>
+                        <button class="btn btn-secondary">Manage</button>
+                    </div>
+                    <div class="strategy-card">
+                        <h3>Vol-Adaptive DEEP</h3>
+                        <div class="description">Dynamic band adjustment based on volatility</div>
+                        <div class="metrics">
+                            <div class="metric">
+                                <div class="label">Balance</div>
+                                <div class="value">$8,750</div>
+                            </div>
+                            <div class="metric">
+                                <div class="label">APY</div>
+                                <div class="value">24.7%</div>
+                            </div>
+                            <div class="metric">
+                                <div class="label">Risk</div>
+                                <div class="risk-indicator risk-medium">Med</div>
+                            </div>
+                        </div>
+                        <button class="btn btn-secondary">Manage</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Strategy Templates Tab -->
+        <div id="strategies" class="tab-content">
+            <div class="strategy-grid">
+                <div class="strategy-card">
+                    <h3>Static Range Maker</h3>
+                    <div class="description">Fixed price band around mid price with evenly spaced bids/asks. Perfect for sideways markets.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">15-25%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-low">Low</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>AMM Overlay</h3>
+                    <div class="description">Mimics AMM curves (x*y=k) on the orderbook with geometric sizing and continuous rebalancing.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">18-30%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-low">Low</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>Volatility-Adaptive Maker</h3>
+                    <div class="description">Band width scales with realized volatility. Narrow spreads in calm markets, wide in volatile ones.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">20-35%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-medium">Med</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>Inventory-Aware Skew</h3>
+                    <div class="description">Avellaneda-Stoikov style market making with inventory risk management and adaptive spreads.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">25-40%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-medium">Med</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>Mean-Reversion Pairing</h3>
+                    <div class="description">Auto-places take-profit orders on fills to clip small round-trip profits repeatedly.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">22-38%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-medium">Med</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>Trend-Following Maker</h3>
+                    <div class="description">Detects trends via EMA cross, skews quotes to favor momentum direction with tight risk controls.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">28-45%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-high">High</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>Oracle-Anchored Maker</h3>
+                    <div class="description">Centers quotes around oracle/TWAP price instead of local mid. Great for thin orderbooks.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">16-28%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-low">Low</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>Time-Regime Switcher</h3>
+                    <div class="description">Switches strategy presets based on time-to-event or market volatility regimes.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">24-36%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-medium">Med</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Custom Builder Tab -->
+        <div id="custom" class="tab-content">
+            <div class="custom-builder">
+                <h2>Custom Strategy Builder</h2>
+                <p>Compose your own market making strategy using modular blocks. All parameters are validated on-chain.</p>
+
+                <div class="builder-section">
+                    <h3>📊 Price Source</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Price Source</label>
+                            <select>
+                                <option>Mid Price</option>
+                                <option>Oracle/TWAP</option>
+                                <option>Best Bid/Ask Mid</option>
+                                <option>Index Price</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>TWAP Window (seconds)</label>
+                            <input type="number" value="30" min="5" max="300">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="builder-section">
+                    <h3>📈 Volatility Module</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Volatility Estimator</label>
+                            <select>
+                                <option>ATR (Average True Range)</option>
+                                <option>Standard Deviation</option>
+                                <option>Options Implied Vol</option>
+                                <option>EWMA</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Lookback Window (minutes)</label>
+                            <input type="number" value="60" min="5" max="1440">
+                        </div>
+                        <div class="form-group">
+                            <label>Vol Cap (bps)</label>
+                            <input type="number" value="2000" min="100" max="5000">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="builder-section">
+                    <h3>🎯 Ladder Topology</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Band Policy</label>
+                            <select onchange="toggleBandInputs(this.value)">
+                                <option value="fixed">Fixed Percentage</option>
+                                <option value="sigma">Volatility Scaled (k·σ)</option>
+                                <option value="logit">Log-odds (for prediction markets)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="fixed-band">
+                            <label>Band Width (±%)</label>
+                            <input type="number" value="5" min="0.5" max="50" step="0.1">
+                        </div>
+                        <div class="form-group" id="sigma-multiplier" style="display: none;">
+                            <label>Sigma Multiplier (k)</label>
+                            <input type="number" value="3" min="1" max="10" step="0.5">
+                        </div>
+                        <div class="form-group">
+                            <label>Levels Per Side</label>
+                            <input type="number" value="5" min="1" max="20">
+                        </div>
+                        <div class="form-group">
+                            <label>Step Size (%)</label>
+                            <input type="number" value="0.8" min="0.1" max="5" step="0.1">
+                        </div>
+                        <div class="form-group">
+                            <label>Sizing Policy</label>
+                            <select>
+                                <option>Equal Notional</option>
+                                <option>Equal Base Qty</option>
+                                <option>Geometric Weights</option>
+                                <option>Distance Weighted</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Per-Level Notional ($)</label>
+                            <input type="number" value="2000" min="100" max="50000">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="builder-section">
+                    <h3>⚖️ Inventory Skew</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Target Inventory (%)</label>
+                            <input type="number" value="50" min="20" max="80">
+                        </div>
+                        <div class="form-group">
+                            <label>Skew Slope (bps per %)</label>
+                            <input type="number" value="2" min="0" max="10" step="0.5">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Center Shift (bps)</label>
+                            <input type="number" value="50" min="10" max="200">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="builder-section">
+                    <h3>🔄 Recenter Rules</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <div class="toggle">
+                                <input type="checkbox" id="time-recenter" checked>
+                                <label for="time-recenter">Time-Based Recentering</label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Recenter Interval (minutes)</label>
+                            <input type="number" value="60" min="5" max="1440">
+                        </div>
+                        <div class="form-group">
+                            <div class="toggle">
+                                <input type="checkbox" id="drift-recenter">
+                                <label for="drift-recenter">Drift-Based Recentering</label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Drift Threshold (bps)</label>
+                            <input type="number" value="80" min="20" max="500">
+                        </div>
+                        <div class="form-group">
+                            <div class="toggle">
+                                <input type="checkbox" id="breakout-recenter">
+                                <label for="breakout-recenter">Breakout Mode</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="builder-section">
+                    <h3>🎯 Pairing / Take-Profit</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <div class="toggle">
+                                <input type="checkbox" id="pairing-enabled">
+                                <label for="pairing-enabled">Enable Pairing</label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Take-Profit Offset (bps)</label>
+                            <input type="number" value="120" min="50" max="500">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Concurrent Pairs</label>
+                            <input type="number" value="10" min="1" max="50">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="builder-section">
+                    <h3>🛡️ Risk Controls (On-Chain Hard Caps)</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Max Inventory Tilt (%)</label>
+                            <input type="number" value="70" min="51" max="90">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Per-Order Size ($)</label>
+                            <input type="number" value="5000" min="100" max="100000">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Daily Turnover ($)</label>
+                            <input type="number" value="200000" min="1000" max="10000000">
+                        </div>
+                        <div class="form-group">
+                            <label>Circuit Breaker (bps in 1min)</label>
+                            <input type="number" value="300" min="100" max="1000">
+                        </div>
+                        <div class="form-group">
+                            <label>Drawdown Stop (%)</label>
+                            <input type="number" value="10" min="5" max="50">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="builder-section">
+                    <h3>⚙️ Execution Controls</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <div class="toggle">
+                                <input type="checkbox" id="post-only" checked>
+                                <label for="post-only">Post-Only (Maker)</label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Refresh Cadence (seconds)</label>
+                            <input type="number" value="10" min="1" max="300">
+                        </div>
+                        <div class="form-group">
+                            <label>Cool-down (ms)</label>
+                            <input type="number" value="300" min="100" max="5000">
+                        </div>
+                        <div class="form-group">
+                            <label>Partial Fill Handling</label>
+                            <select>
+                                <option>Replace</option>
+                                <option>Top-up</option>
+                                <option>Cancel</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="preview-panel">
+                    <h4>Strategy Configuration Preview</h4>
+                    <div class="config-json" id="config-preview">{
+  "name": "Custom Strategy",
+  "price": { "source": "mid", "twap_secs": 30 },
+  "vol": { "estimator": "atr", "lookback_mins": 60, "cap_bps": 2000 },
+  "ladder": {
+    "band_policy": { "type": "fixed", "bps": 500 },
+    "levels_per_side": 5,
+    "step_bps": 80,
+    "size_policy": "equal_notional",
+    "per_level_quote": 2000
+  },
+  "skew": { "target_pct": 50, "slope_bps_per_pct": 2, "max_shift_bps": 50 },
+  "recenter": { "time_mins": 60, "drift_bps": 80, "breakout": false },
+  "pairing": { "enabled": false, "tp_bps": 120, "max_pairs": 10 },
+  "risk": {
+    "max_tilt_pct": 70,
+    "max_order_usd": 5000,
+    "max_turnover_daily": 200000,
+    "circuit_bps_1m": 300,
+    "drawdown_stop_pct": 10
+  },
+  "execution": { "post_only": true, "refresh_secs": 10, "cooldown_ms": 300 }
+}</div>
+                    <button class="btn" style="margin-top: 20px;">Deploy Custom Strategy</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Derivatives Tab -->
+        <div id="derivatives" class="tab-content">
+            <div class="strategy-grid">
+                <div class="strategy-card">
+                    <h3>Delta-Hedged Vol Seller</h3>
+                    <div class="description">Sell options and hedge delta in spot/perp to harvest theta and volatility risk premium.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">35-60%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-high">High</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>Cash-and-Carry (Funding)</h3>
+                    <div class="description">Long spot, short perp to capture positive funding rates. Auto-invert when negative.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Current Funding</div>
+                            <div class="value">12.3% APY</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-low">Low</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>Term Structure Roll</h3>
+                    <div class="description">Trade calendar spreads across futures maturities to harvest roll yield and contango.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">20-40%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-medium">Med</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>Gas Futures Hedger</h3>
+                    <div class="description">Buy SUI Reference Gas Price futures to hedge protocol operational costs.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">RGP Coverage</div>
+                            <div class="value">60 days</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-low">Low</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>Covered Calls Vault</h3>
+                    <div class="description">Write calls against inventory to generate income. Auto-roll at expiry.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">18-35%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-medium">Med</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+
+                <div class="strategy-card">
+                    <h3>Skew-Arb MM</h3>
+                    <div class="description">Market make across option strikes and enforce smile constraints to clip mispriced vol.</div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">Est. APY</div>
+                            <div class="value">40-70%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">Risk</div>
+                            <div class="risk-indicator risk-high">High</div>
+                        </div>
+                    </div>
+                    <button class="btn">Deploy Strategy</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Analytics Tab -->
+        <div id="analytics" class="tab-content">
+            <div class="custom-builder">
+                <h2>Strategy Analytics & Backtesting</h2>
+                
+                <div class="dashboard" style="margin-bottom: 30px;">
+                    <div class="metric-card">
+                        <h3>Total Trades</h3>
+                        <div class="value">1,247</div>
+                        <div class="change positive">+34 (24h)</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Win Rate</h3>
+                        <div class="value">73.2%</div>
+                        <div class="change positive">+2.1% (7d)</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Avg Round Trip</h3>
+                        <div class="value">$12.50</div>
+                        <div class="change negative">-$1.20 (fees)</div>
+                    </div>
+                </div>
+
+                <div class="chart-placeholder">
+                    📊 P&L Distribution Chart (Integration with D3.js/Chart.js)
+                </div>
+
+                <div class="builder-section">
+                    <h3>Backtest Configuration</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Historical Period</label>
+                            <select>
+                                <option>Last 7 days</option>
+                                <option>Last 30 days</option>
+                                <option>Last 90 days</option>
+                                <option>Custom Range</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Market Pair</label>
+                            <select>
+                                <option>SUI/USDC</option>
+                                <option>DEEP/SUI</option>
+                                <option>ETH/USDC</option>
+                                <option>BTC/USDC</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Initial Capital</label>
+                            <input type="number" value="10000" min="1000" max="1000000">
+                        </div>
+                    </div>
+                    <button class="btn">Run Backtest</button>
+                </div>
+
+                <div class="chart-placeholder">
+                    📈 Strategy Performance vs Benchmark
+                </div>
+
+                <div class="strategy-grid">
+                    <div class="metric-card">
+                        <h3>Max Drawdown</h3>
+                        <div class="value">-8.3%</div>
+                        <div class="change">Jun 15, 2024</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Sharpe Ratio</h3>
+                        <div class="value">2.14</div>
+                        <div class="change positive">Above benchmark</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Inventory Drift</h3>
+                        <div class="value">±4.2%</div>
+                        <div class="change positive">Within limits</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showTab(tabName) {
+            // Hide all tab contents
+            const tabContents = document.querySelectorAll('.tab-content');
+            tabContents.forEach(content => content.classList.remove('active'));
+            
+            // Remove active class from all tabs
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
+            
+            // Show selected tab content
+            document.getElementById(tabName).classList.add('active');
+            
+            // Add active class to clicked tab
+            event.target.classList.add('active');
+        }
+
+        function toggleBandInputs(value) {
+            document.getElementById('fixed-band').style.display = value === 'fixed' ? 'block' : 'none';
+            document.getElementById('sigma-multiplier').style.display = value === 'sigma' ? 'block' : 'none';
+            updateConfigPreview();
+        }
+
+        function updateConfigPreview() {
+            // This would normally read all form values and generate real JSON
+            // For demo purposes, showing static config
+            const config = {
+                "name": "Custom Strategy",
+                "price": { "source": "mid", "twap_secs": 30 },
+                "vol": { "estimator": "atr", "lookback_mins": 60, "cap_bps": 2000 },
+                "ladder": {
+                    "band_policy": { "type": "fixed", "bps": 500 },
+                    "levels_per_side": 5,
+                    "step_bps": 80,
+                    "size_policy": "equal_notional",
+                    "per_level_quote": 2000
+                },
+                "skew": { "target_pct": 50, "slope_bps_per_pct": 2, "max_shift_bps": 50 },
+                "recenter": { "time_mins": 60, "drift_bps": 80, "breakout": false },
+                "pairing": { "enabled": false, "tp_bps": 120, "max_pairs": 10 },
+                "risk": {
+                    "max_tilt_pct": 70,
+                    "max_order_usd": 5000,
+                    "max_turnover_daily": 200000,
+                    "circuit_bps_1m": 300,
+                    "drawdown_stop_pct": 10
+                },
+                "execution": { "post_only": true, "refresh_secs": 10, "cooldown_ms": 300 }
+            };
+            
+            document.getElementById('config-preview').textContent = JSON.stringify(config, null, 2);
+        }
+
+        // Add event listeners to form inputs to update preview in real-time
+        document.addEventListener('DOMContentLoaded', function() {
+            const inputs = document.querySelectorAll('input, select');
+            inputs.forEach(input => {
+                input.addEventListener('change', updateConfigPreview);
+            });
+        });
+    </script>
+</body>
+</html>

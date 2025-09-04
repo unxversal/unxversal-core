@@ -241,17 +241,21 @@ module unxversal::perpetuals {
         let mut realized_gain: u64 = 0;
         let mut realized_loss: u64 = 0;
         if (is_buy) {
-            if (acc.short_qty > 0) { let reduce = if (qty <= acc.short_qty) { qty } else { acc.short_qty }; if (reduce > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px, reduce, market.params.contract_size); realized_gain = realized_gain + g; realized_loss = realized_loss + l; acc.short_qty = acc.short_qty - reduce; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; } } };
-            let add = qty; if (add > 0) { acc.avg_long_1e6 = wavg(acc.avg_long_1e6, acc.long_qty, px, add); acc.long_qty = acc.long_qty + add; };
+            let reduced = if (acc.short_qty > 0) { let r = if (qty <= acc.short_qty) { qty } else { acc.short_qty }; if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px, r, market.params.contract_size); realized_gain = realized_gain + g; realized_loss = realized_loss + l; acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; r } else { 0 } } else { 0 };
+            let add = if (qty > reduced) { qty - reduced } else { 0 };
+            if (add > 0) { acc.avg_long_1e6 = wavg(acc.avg_long_1e6, acc.long_qty, px, add); acc.long_qty = acc.long_qty + add; };
         } else {
-            if (acc.long_qty > 0) { let reduce2 = if (qty <= acc.long_qty) { qty } else { acc.long_qty }; if (reduce2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px, reduce2, market.params.contract_size); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.long_qty = acc.long_qty - reduce2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; } } };
-            let add2 = qty; if (add2 > 0) { acc.avg_short_1e6 = wavg(acc.avg_short_1e6, acc.short_qty, px, add2); acc.short_qty = acc.short_qty + add2; };
+            let reduced2 = if (acc.long_qty > 0) { let r2 = if (qty <= acc.long_qty) { qty } else { acc.long_qty }; if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px, r2, market.params.contract_size); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; r2 } else { 0 } } else { 0 };
+            let add2 = if (qty > reduced2) { qty - reduced2 } else { 0 };
+            if (add2 > 0) { acc.avg_short_1e6 = wavg(acc.avg_short_1e6, acc.short_qty, px, add2); acc.short_qty = acc.short_qty + add2; };
         };
 
         apply_realized_to_collat(&mut acc.collat, realized_gain, realized_loss, vault, clock, ctx);
 
         // Fees on notional
-        let notional_1e6 = (qty as u128) * (px as u128) * (market.params.contract_size as u128);
+        // Overflow-safe notional: ((px * cs)/1e6) * qty * 1e6
+        let per_unit_1e6: u128 = ((px as u128) * (market.params.contract_size as u128)) / 1_000_000u128;
+        let notional_1e6 = (qty as u128) * per_unit_1e6 * 1_000_000u128;
         let taker_bps = fees::futures_taker_fee_bps(cfg);
         let pay_with_unxv = option::is_some(maybe_unxv);
         let (t_eff, _) = fees::apply_discounts(taker_bps, 0, pay_with_unxv, staking_pool, ctx.sender(), cfg);
@@ -366,7 +370,14 @@ module unxversal::perpetuals {
         let pen = ((notional_1e6 * (market.liquidation_fee_bps as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64;
         let have = balance::value(&acc.collat);
         let pay = if (pen <= have) { pen } else { have };
-        if (pay > 0) { let part = balance::split(&mut acc.collat, pay); fees::pnl_deposit<Collat>(vault, coin::from_balance(part, ctx)); };
+        if (pay > 0) {
+            // Split keeper incentive and deposit remainder into PnL bucket
+            let keeper_bps: u64 = 1000; // 10%
+            let keeper_cut: u64 = ((pay as u128) * (keeper_bps as u128) / (fees::bps_denom() as u128)) as u64;
+            let mut pen_coin = coin::from_balance(balance::split(&mut acc.collat, pay), ctx);
+            if (keeper_cut > 0) { let kc = coin::split(&mut pen_coin, keeper_cut, ctx); transfer::public_transfer(kc, ctx.sender()); };
+            fees::pnl_deposit<Collat>(vault, pen_coin);
+        };
 
         store_account<Collat>(market, victim, acc);
         event::emit(Liquidated { market_id: object::id(market), who: victim, qty_closed: closed, exec_price_1e6: px, penalty_collat: pay, timestamp_ms: clock.timestamp_ms() });

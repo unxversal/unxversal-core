@@ -232,7 +232,9 @@ module unxversal::futures {
         let now = clock.timestamp_ms();
         if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
         let px_1e6 = current_price_1e6(&market.series, reg, agg, clock);
-        let notional_1e6 = (qty as u128) * (px_1e6 as u128) * (market.series.contract_size as u128);
+        // Overflow-safe notional: ((px * cs)/1e6) * qty * 1e6
+        let per_unit_1e6: u128 = ((px_1e6 as u128) * (market.series.contract_size as u128)) / 1_000_000u128;
+        let notional_1e6 = (qty as u128) * per_unit_1e6 * 1_000_000u128;
         // compute fee in Collat terms
         let taker_bps = fees::futures_taker_fee_bps(cfg);
         let pay_with_unxv = option::is_some(maybe_unxv_fee);
@@ -245,24 +247,12 @@ module unxversal::futures {
         let mut realized_gain: u64 = 0;
         let mut realized_loss: u64 = 0;
         if (is_buy) {
-            if (acc.short_qty > 0) {
-                let reduce = if (qty <= acc.short_qty) { qty } else { acc.short_qty };
-                let (g,l) = realize_short_ul(acc.avg_short_1e6, px_1e6, reduce, market.series.contract_size);
-                realized_gain = realized_gain + g; realized_loss = realized_loss + l;
-                acc.short_qty = acc.short_qty - reduce;
-                if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; };
-            };
-            let add = qty - if (qty <= acc.short_qty + 0) { 0 } else { 0 }; // reduce already applied
+            let reduced = if (acc.short_qty > 0) { let r = if (qty <= acc.short_qty) { qty } else { acc.short_qty }; if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px_1e6, r, market.series.contract_size); realized_gain = realized_gain + g; realized_loss = realized_loss + l; acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; r } else { 0 } } else { 0 };
+            let add = if (qty > reduced) { qty - reduced } else { 0 };
             if (add > 0) { acc.avg_long_1e6 = weighted_avg_price(acc.avg_long_1e6, acc.long_qty, px_1e6, add); acc.long_qty = acc.long_qty + add; };
         } else {
-            if (acc.long_qty > 0) {
-                let reduce2 = if (qty <= acc.long_qty) { qty } else { acc.long_qty };
-                let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px_1e6, reduce2, market.series.contract_size);
-                realized_gain = realized_gain + g2; realized_loss = realized_loss + l2;
-                acc.long_qty = acc.long_qty - reduce2;
-                if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; };
-            };
-            let add2 = qty - if (qty <= acc.long_qty + 0) { 0 } else { 0 }; // reduce already applied
+            let reduced2 = if (acc.long_qty > 0) { let r2 = if (qty <= acc.long_qty) { qty } else { acc.long_qty }; if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px_1e6, r2, market.series.contract_size); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; r2 } else { 0 } } else { 0 };
+            let add2 = if (qty > reduced2) { qty - reduced2 } else { 0 };
             if (add2 > 0) { acc.avg_short_1e6 = weighted_avg_price(acc.avg_short_1e6, acc.short_qty, px_1e6, add2); acc.short_qty = acc.short_qty + add2; };
         };
 
