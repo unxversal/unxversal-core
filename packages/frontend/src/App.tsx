@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import './App.css'
-import { SuiClientProvider, WalletProvider } from './lib/wallet'
+import { SuiClientProvider, WalletProvider, makeDappNetworks } from './lib/wallet'
+import { ConnectButton } from '@mysten/dapp-kit'
 import { createSuiClient, defaultRpc } from './lib/network'
-import { runPollLoop, type IndexerTracker, startTrackers } from './lib/indexer'
+import { startTrackers } from './lib/indexer'
 import { db } from './lib/storage'
 import { getContracts } from './lib/env'
 import { allProtocolTrackers } from './protocols'
@@ -10,6 +11,7 @@ import { allProtocolTrackers } from './protocols'
 function App() {
   const [network, setNetwork] = useState<'testnet' | 'mainnet'>('testnet')
   const [started, setStarted] = useState(false)
+  const { networkConfig } = makeDappNetworks()
 
   useEffect(() => {
     if (started) return
@@ -23,19 +25,14 @@ function App() {
   }, [network, started])
 
   return (
-    <SuiClientProvider networks={{
-      networks: {
-        mainnet: { url: defaultRpc('mainnet').url },
-        testnet: { url: defaultRpc('testnet').url },
-      },
-      initialNetwork: network,
-    } as any}>
+    <SuiClientProvider networks={networkConfig} network={network} onNetworkChange={(n) => setNetwork(n as 'testnet' | 'mainnet')}>
       <WalletProvider>
         <div style={{ padding: 16 }}>
           <h2>Unxversal</h2>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => setNetwork('testnet')}>Testnet</button>
             <button onClick={() => setNetwork('mainnet')}>Mainnet</button>
+            <ConnectButton />
             <button onClick={async () => {
               const latest = await db.events.orderBy('tsMs').reverse().limit(5).toArray()
               console.log('Latest events', latest)

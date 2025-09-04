@@ -1,4 +1,3 @@
-import { SuiClient } from '@mysten/sui/client';
 import { moveModuleFilter } from '../common';
 import type { IndexerTracker } from '../../lib/indexer';
 import { Transaction } from '@mysten/sui/transactions';
@@ -12,9 +11,8 @@ export function dexEventTracker(pkg: string): IndexerTracker {
 }
 
 export class DexClient {
-  private client: SuiClient;
   private pkg: string;
-  constructor(client: SuiClient, pkg: string) { this.client = client; this.pkg = pkg; }
+  constructor(pkg: string) { this.pkg = pkg; }
   placeLimitOrder(args: {
     poolId: string;
     balanceManagerId: string;

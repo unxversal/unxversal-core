@@ -8,7 +8,7 @@ export class OptionsClient {
 
   private async getMarketTypeArgs(marketId: string): Promise<{ base: string; quote: string }> {
     const o = await this.client.getObject({ id: marketId, options: { showType: true } });
-    const t = (o as any).data?.content?.type as string | undefined;
+    const t = o.data?.content && 'type' in o.data.content ? (o.data.content as { type: string }).type : undefined;
     if (!t) throw new Error('Market type not found');
     const lt = t.indexOf('<');
     const gt = t.lastIndexOf('>');

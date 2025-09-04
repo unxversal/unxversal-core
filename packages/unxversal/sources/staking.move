@@ -138,9 +138,6 @@ module unxversal::staking {
         staker.active_stake = staker.active_stake - amount;
         let eff_week = pool.current_week + 1;
         add_delta(&mut pool.neg_delta_by_week, eff_week, amount);
-        // also track per-account deactivation
-        staker.pending_unstake = staker.pending_unstake + amount;
-        if (staker.deactivate_week < eff_week) { staker.deactivate_week = eff_week; };
         write_staker(pool, ctx.sender(), staker);
         // Transfer principal out immediately
         let bal_part = balance::split(&mut pool.stake_vault, amount);
@@ -187,12 +184,6 @@ module unxversal::staking {
                 staker.active_stake = active;
                 staker.pending_stake = 0;
                 staker.activate_week = 0;
-            };
-            if (staker.deactivate_week != 0 && w == staker.deactivate_week && staker.pending_unstake > 0) {
-                if (active >= staker.pending_unstake) { active = active - staker.pending_unstake; } else { active = 0; };
-                staker.active_stake = active;
-                staker.pending_unstake = 0;
-                staker.deactivate_week = 0;
             };
             // Compute week reward share
             let pool_active = if (table::contains(&pool.active_by_week, w)) { *table::borrow(&pool.active_by_week, w) } else { pool.total_active_stake };

@@ -1,10 +1,8 @@
-import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 
 export class LendingClient {
-  private client: SuiClient;
   private pkg: string;
-  constructor(client: SuiClient, pkg: string) { this.client = client; this.pkg = pkg; }
+  constructor(pkg: string) { this.pkg = pkg; }
 
   // deposit<T>(pool: &mut LendingPool<T>, amount: Coin<T>, clock: &Clock, ctx: &mut TxContext)
   deposit(args: { poolId: string; amountCoinId: string }) {

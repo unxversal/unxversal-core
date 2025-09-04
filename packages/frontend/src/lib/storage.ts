@@ -9,7 +9,7 @@ export type EventRow = {
   module?: string | null;
   packageId?: string | null;
   sender?: string | null;
-  parsedJson?: any | null;
+  parsedJson?: unknown | null;
 };
 
 export type CursorRow = {

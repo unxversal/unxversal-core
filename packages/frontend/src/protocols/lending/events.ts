@@ -1,4 +1,4 @@
-import { db, type EventRow } from '../../lib/storage';
+import { db } from '../../lib/storage';
 
 export type DepositEvent = { who: string; amount: number; shares: string; timestamp_ms: number };
 export type WithdrawEvent = { who: string; amount: number; shares: string; timestamp_ms: number };

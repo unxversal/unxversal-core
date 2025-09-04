@@ -1,21 +1,14 @@
-import { SuiClient } from '@mysten/sui/client';
+import { type SuiClient, type SuiEvent, type SuiEventFilter, type EventId } from '@mysten/sui/client';
 import { db, type EventRow } from './storage';
 import { loadIndexerSettings } from './settings';
 
-export type EventFilter =
-  | { MoveModule: { package: string; module: string } }
-  | { MoveEventType: string }
-  | { Sender: string }
-  | { TimeRange: { startTime: number; endTime: number } }
-  | { Any: EventFilter[] };
-
 export type IndexerTracker = {
   id: string;                // unique name
-  filter: EventFilter;
+  filter: SuiEventFilter;
   pageLimit?: number;
 };
 
-export type Cursor = { txDigest: string; eventSeq: string } | null;
+export type Cursor = EventId | null;
 
 function keyOf(txDigest: string, eventSeq: string): string {
   return `${txDigest}:${eventSeq}`;
@@ -39,13 +32,13 @@ export async function insertEvents(rows: EventRow[]): Promise<void> {
 export async function pollOnce(client: SuiClient, tracker: IndexerTracker, cursor: Cursor): Promise<{ cursor: Cursor; hasNext: boolean; count: number }>{
   const settings = loadIndexerSettings();
   const res = await client.queryEvents({
-    query: tracker.filter as any,
-    cursor: cursor as any,
+    query: tracker.filter,
+    cursor,
     limit: tracker.pageLimit ?? settings.pageLimit,
     order: 'ascending',
-  } as any);
+  });
 
-  const data = (res as any).data ?? [];
+  const data: SuiEvent[] = res.data ?? [];
   const rows: EventRow[] = [];
   for (const ev of data) {
     rows.push({
@@ -62,8 +55,8 @@ export async function pollOnce(client: SuiClient, tracker: IndexerTracker, curso
   }
   await insertEvents(rows);
 
-  const next = (res as any).nextCursor ?? null;
-  const hasNext = Boolean((res as any).hasNextPage);
+  const next: Cursor = res.nextCursor ?? null;
+  const hasNext = Boolean(res.hasNextPage);
   await saveCursor(tracker.id, next);
   return { cursor: next, hasNext, count: rows.length };
 }
@@ -93,8 +86,8 @@ export async function startTrackers(client: SuiClient, trackers: IndexerTracker[
   }
 }
 
-export function withTimeRange(filter: EventFilter, startTime: number, endTime: number): EventFilter {
-  return { Any: [filter, { TimeRange: { startTime, endTime } }] } as const;
+export function withTimeRange(filter: SuiEventFilter, startTime: number, endTime: number): SuiEventFilter {
+  return { Any: [filter, { TimeRange: { startTime: String(startTime), endTime: String(endTime) } }] } as const;
 }
 
 export async function pollWindowOnce(
@@ -108,13 +101,13 @@ export async function pollWindowOnce(
   let total = 0;
   while (true) {
     const res = await client.queryEvents({
-      query: withTimeRange(tracker.filter as any, startTime, endTime) as any,
-      cursor: cursor as any,
+      query: withTimeRange(tracker.filter, startTime, endTime),
+      cursor,
       limit: tracker.pageLimit ?? settings.pageLimit,
       order: 'ascending',
-    } as any);
+    });
 
-    const data = (res as any).data ?? [];
+    const data: SuiEvent[] = res.data ?? [];
     const rows: EventRow[] = [];
     for (const ev of data) {
       rows.push({
@@ -132,8 +125,8 @@ export async function pollWindowOnce(
     await insertEvents(rows);
     total += rows.length;
 
-    const hasNext = Boolean((res as any).hasNextPage);
-    const next = (res as any).nextCursor ?? null;
+    const hasNext = Boolean(res.hasNextPage);
+    const next: Cursor = res.nextCursor ?? null;
     if (!hasNext || !next) break;
     cursor = next;
   }
@@ -171,7 +164,7 @@ export function buildDeepbookPublicIndexer(baseUrl: string) {
     return r.json();
   }
   return {
-    getPools: () => j('/get_pools') as Promise<any[]>,
+    getPools: () => j('/get_pools') as Promise<{ name: string }[]>,
     allHistoricalVolume: (params?: { start_time?: number; end_time?: number; volume_in_base?: boolean }) => {
       const sp = new URLSearchParams();
       if (params?.start_time != null) sp.set('start_time', String(params.start_time));
@@ -209,7 +202,7 @@ export function buildDeepbookPublicIndexer(baseUrl: string) {
       const q = sp.toString();
       return j(`/historical_volume_by_balance_manager_id_with_interval/${poolNames.join(',')}/${balanceManagerId}${q ? `?${q}` : ''}`) as Promise<Record<string, Record<string, [number, number]>>>;
     },
-    summary: () => j('/summary') as Promise<any[]>,
+    summary: () => j('/summary') as Promise<{ pool: string; base_volume: number; quote_volume: number; last_price: number }[]>,
     ticker: () => j('/ticker') as Promise<Record<string, { base_volume: number; quote_volume: number; last_price: number; isFrozen: 0 | 1 }>>,
     trades: (poolName: string, params?: { limit?: number; start_time?: number; end_time?: number; maker_balance_manager_id?: string; taker_balance_manager_id?: string }) => {
       const sp = new URLSearchParams();
@@ -219,7 +212,7 @@ export function buildDeepbookPublicIndexer(baseUrl: string) {
       if (params?.maker_balance_manager_id) sp.set('maker_balance_manager_id', params.maker_balance_manager_id);
       if (params?.taker_balance_manager_id) sp.set('taker_balance_manager_id', params.taker_balance_manager_id);
       const q = sp.toString();
-      return j(`/trades/${poolName}${q ? `?${q}` : ''}`) as Promise<any[]>;
+      return j(`/trades/${poolName}${q ? `?${q}` : ''}`) as Promise<Array<{ price: number; qty: number; ts: number }>>;
     },
     orderUpdates: (poolName: string, params?: { limit?: number; start_time?: number; end_time?: number; status?: 'Placed' | 'Canceled'; balance_manager_id?: string }) => {
       const sp = new URLSearchParams();
@@ -229,7 +222,7 @@ export function buildDeepbookPublicIndexer(baseUrl: string) {
       if (params?.status) sp.set('status', params.status);
       if (params?.balance_manager_id) sp.set('balance_manager_id', params.balance_manager_id);
       const q = sp.toString();
-      return j(`/order_updates/${poolName}${q ? `?${q}` : ''}`) as Promise<any[]>;
+      return j(`/order_updates/${poolName}${q ? `?${q}` : ''}`) as Promise<Array<{ order_id: string; status: string; ts: number }>>;
     },
     orderbook: (poolName: string, params?: { level?: 1 | 2; depth?: number }) => {
       const sp = new URLSearchParams();
@@ -238,7 +231,7 @@ export function buildDeepbookPublicIndexer(baseUrl: string) {
       const q = sp.toString();
       return j(`/orderbook/${poolName}${q ? `?${q}` : ''}`) as Promise<{ timestamp: string; bids: [string, string][]; asks: [string, string][] }>;
     },
-    assets: () => j('/assets') as Promise<Record<string, any>>,
+    assets: () => j('/assets') as Promise<Record<string, unknown>>,
   };
 }
 
