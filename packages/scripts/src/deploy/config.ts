@@ -21,6 +21,19 @@ export type DeployConfig = {
     burnShareBps: number;
     treasury: string;
   };
+  /** Optional: configure staking tiers (thresholds/discount bps) */
+  feeTiers?: {
+    t1: number; b1: number;
+    t2: number; b2: number;
+    t3: number; b3: number;
+    t4: number; b4: number;
+    t5: number; b5: number;
+    t6: number; b6: number;
+  };
+  /** Optional: set lending fee and collateral bonus caps */
+  lendingParams?: { borrowFeeBps: number; collateralBonusMaxBps: number };
+  /** Optional: set UNXV amount charged for permissionless pool creation */
+  poolCreationFeeUnxv?: number;
   tradeFees?: {
     dex?: { takerBps: number; makerBps: number };
     futures?: { takerBps: number; makerBps: number };
@@ -29,6 +42,21 @@ export type DeployConfig = {
   oracleFeeds?: Array<{ symbol: string; aggregatorId: string }>;
   oracleMaxAgeSec?: number;
   usdu?: { perAddressLimit?: number; paused?: boolean };
+  /**
+   * Initialize lending pools (isolated, per asset)
+   */
+  lending?: Array<{
+    poolId?: string;
+    asset: TypeTag;
+    baseRateBps: number;
+    multiplierBps: number;
+    jumpMultiplierBps: number;
+    kinkUtilBps: number;
+    reserveFactorBps: number;
+    collateralFactorBps: number;
+    liquidationCollateralBps: number;
+    liquidationBonusBps: number;
+  }>;
   options?: Array<{
     marketId?: string;
     base: TypeTag;
@@ -89,10 +117,14 @@ export const deployConfig: DeployConfig = {
   oracleRegistryId: '',
   additionalAdmins: [],
   feeParams: undefined,
+  feeTiers: undefined,
+  lendingParams: undefined,
+  poolCreationFeeUnxv: undefined,
   tradeFees: undefined,
   oracleFeeds: [],
   oracleMaxAgeSec: 60,
   usdu: undefined,
+  lending: [],
   options: [],
   futures: [],
   gasFutures: [],

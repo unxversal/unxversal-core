@@ -9,6 +9,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "cron": "node dist/cron.js",
+    "deploy": "node dist/deploy/index.js",
     "deploy:example": "node dist/deploy/example.js",
     "clean": "rimraf dist",
     "typecheck": "tsc --noEmit -p tsconfig.json",

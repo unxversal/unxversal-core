@@ -366,7 +366,7 @@ module unxversal::perpetuals {
         let pen = ((notional_1e6 * (market.liquidation_fee_bps as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64;
         let have = balance::value(&acc.collat);
         let pay = if (pen <= have) { pen } else { have };
-        if (pay > 0) { let part = balance::split(&mut acc.collat, pay); fees::accrue_generic<Collat>(vault, coin::from_balance(part, ctx), clock, ctx); };
+        if (pay > 0) { let part = balance::split(&mut acc.collat, pay); fees::pnl_deposit<Collat>(vault, coin::from_balance(part, ctx)); };
 
         store_account<Collat>(market, victim, acc);
         event::emit(Liquidated { market_id: object::id(market), who: victim, qty_closed: closed, exec_price_1e6: px, penalty_collat: pay, timestamp_ms: clock.timestamp_ms() });
@@ -444,7 +444,21 @@ module unxversal::perpetuals {
     }
     fun wavg(prev_px: u64, prev_qty: u64, new_px: u64, new_qty: u64): u64 { if (prev_qty == 0) { new_px } else { (((prev_px as u128) * (prev_qty as u128) + (new_px as u128) * (new_qty as u128)) / ((prev_qty + new_qty) as u128)) as u64 } }
 
-    fun apply_realized_to_collat<Collat>(_balc: &mut Balance<Collat>, _gain: u64, _loss: u64, _vault: &mut FeeVault, _clock: &Clock, _ctx: &mut TxContext) { }
+    fun apply_realized_to_collat<Collat>(balc: &mut Balance<Collat>, gain: u64, loss: u64, vault: &mut FeeVault, _clock: &Clock, ctx: &mut TxContext) {
+        if (loss > 0) {
+            let have = balance::value(balc);
+            let pay_loss = if (loss <= have) { loss } else { have };
+            if (pay_loss > 0) {
+                let bal_loss = balance::split(balc, pay_loss);
+                let coin_loss = coin::from_balance(bal_loss, ctx);
+                fees::pnl_deposit<Collat>(vault, coin_loss);
+            };
+        };
+        if (gain > 0) {
+            let coin_gain = fees::pnl_withdraw<Collat>(vault, gain, ctx);
+            balc.join(coin::into_balance(coin_gain));
+        };
+    }
 
     fun load_or_new_account<Collat>(market: &mut PerpMarket<Collat>, who: address): PerpAccount<Collat> {
         if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { PerpAccount { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0, last_cum_long_pay_1e6: market.cum_long_pay_1e6, last_cum_short_pay_1e6: market.cum_short_pay_1e6, funding_credit: 0 } }

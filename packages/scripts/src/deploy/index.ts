@@ -11,18 +11,35 @@ function kpFromEnv(): Ed25519Keypair {
 }
 
 async function execTx(client: SuiClient, tx: Transaction, keypair: Ed25519Keypair, label: string) {
-  const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
+  const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true, showObjectChanges: true } });
   await client.waitForTransaction({ digest: res.digest });
   logger.info(`${label}: ${res.digest}`);
   return res;
+}
+
+function extractCreatedId(res: any, typeContains: string): string | undefined {
+  const changes: any[] = res.objectChanges || [];
+  for (const oc of changes) {
+    if (oc.type === 'created' && typeof oc.objectType === 'string' && oc.objectType.includes(typeContains)) {
+      return oc.objectId as string;
+    }
+  }
+  const effectsCreated: any[] = res.effects?.created || [];
+  for (const c of effectsCreated) {
+    if (c.reference?.objectId) return c.reference.objectId as string;
+  }
+  return undefined;
 }
 
 async function ensureOracleRegistry(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair): Promise<string> {
   if (cfg.oracleRegistryId) return cfg.oracleRegistryId;
   const tx = new Transaction();
   tx.moveCall({ target: `${cfg.pkgId}::oracle::init_registry`, arguments: [tx.object(cfg.adminRegistryId)] });
-  await execTx(client, tx, keypair, 'oracle.init_registry');
-  return cfg.oracleRegistryId || '';
+  const res = await execTx(client, tx, keypair, 'oracle.init_registry');
+  const id = extractCreatedId(res, `${cfg.pkgId}::utils::oracle::OracleRegistry`)
+    || extractCreatedId(res, `${cfg.pkgId}::oracle::OracleRegistry`)
+    || '';
+  return id;
 }
 
 async function setOracleParams(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
@@ -37,6 +54,15 @@ async function setOracleParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
       tx.moveCall({ target: `${cfg.pkgId}::oracle::set_feed`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.string(f.symbol), tx.object(f.aggregatorId)] });
       await execTx(client, tx, keypair, `oracle.set_feed ${f.symbol}`);
     }
+  }
+}
+
+async function addAdditionalAdmins(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
+  if (!cfg.additionalAdmins || cfg.additionalAdmins.length === 0) return;
+  for (const addr of cfg.additionalAdmins) {
+    const tx = new Transaction();
+    tx.moveCall({ target: `${cfg.pkgId}::admin::add_admin`, arguments: [tx.object(cfg.adminRegistryId), tx.pure.address(addr)] });
+    await execTx(client, tx, keypair, `admin.add_admin ${addr}`);
   }
 }
 
@@ -61,6 +87,24 @@ async function updateFeeParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
     });
     await execTx(client, tx, keypair, 'fees.set_params');
   }
+  if (cfg.feeTiers) {
+    const t = cfg.feeTiers;
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${cfg.pkgId}::fees::set_staking_tiers`,
+      arguments: [
+        tx.object(cfg.adminRegistryId),
+        tx.object(cfg.feeConfigId),
+        tx.pure.u64(t.t1), tx.pure.u64(t.b1),
+        tx.pure.u64(t.t2), tx.pure.u64(t.b2),
+        tx.pure.u64(t.t3), tx.pure.u64(t.b3),
+        tx.pure.u64(t.t4), tx.pure.u64(t.b4),
+        tx.pure.u64(t.t5), tx.pure.u64(t.b5),
+        tx.pure.u64(t.t6), tx.pure.u64(t.b6),
+      ],
+    });
+    await execTx(client, tx, keypair, 'fees.set_staking_tiers');
+  }
   if (cfg.tradeFees?.dex) {
     const t = cfg.tradeFees.dex;
     const tx = new Transaction();
@@ -78,6 +122,17 @@ async function updateFeeParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
     const tx = new Transaction();
     tx.moveCall({ target: `${cfg.pkgId}::fees::set_gasfutures_trade_fees`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(t.takerBps), tx.pure.u64(t.makerBps)] });
     await execTx(client, tx, keypair, 'fees.set_gasfutures_trade_fees');
+  }
+  if (cfg.lendingParams) {
+    const lp = cfg.lendingParams;
+    const tx = new Transaction();
+    tx.moveCall({ target: `${cfg.pkgId}::fees::set_lending_params`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(lp.borrowFeeBps), tx.pure.u64(lp.collateralBonusMaxBps)] });
+    await execTx(client, tx, keypair, 'fees.set_lending_params');
+  }
+  if (typeof cfg.poolCreationFeeUnxv === 'number') {
+    const tx = new Transaction();
+    tx.moveCall({ target: `${cfg.pkgId}::fees::set_pool_creation_fee_unxv`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(cfg.poolCreationFeeUnxv)] });
+    await execTx(client, tx, keypair, 'fees.set_pool_creation_fee_unxv');
   }
 }
 
@@ -103,7 +158,9 @@ async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25
     if (!marketId) {
       const tx = new Transaction();
       tx.moveCall({ target: `${cfg.pkgId}::options::init_market`, arguments: [tx.object(cfg.adminRegistryId)] });
-      await execTx(client, tx, keypair, 'options.init_market');
+      const res = await execTx(client, tx, keypair, 'options.init_market');
+      marketId = extractCreatedId(res, `${cfg.pkgId}::options::OptionsMarket<`) || marketId;
+      if (marketId) logger.info(`options.market created id=${marketId}`);
     }
     if (m.series?.length && marketId) {
       for (const s of m.series) {
@@ -147,7 +204,9 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
           tx.pure.u64(f.liquidationFeeBps),
         ],
       });
-      await execTx(client, tx, keypair, `futures.init_market ${f.symbol}`);
+      const res = await execTx(client, tx, keypair, `futures.init_market ${f.symbol}`);
+      const id = extractCreatedId(res, `${cfg.pkgId}::futures::FuturesMarket<`);
+      if (id) logger.info(`futures.market created id=${id}`);
     }
   }
 }
@@ -169,7 +228,9 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
           tx.pure.u64(g.liquidationFeeBps),
         ],
       });
-      await execTx(client, tx, keypair, 'gas_futures.init_market');
+      const res = await execTx(client, tx, keypair, 'gas_futures.init_market');
+      const id = extractCreatedId(res, `${cfg.pkgId}::gas_futures::GasMarket<`);
+      if (id) logger.info(`gas_futures.market created id=${id}`);
     }
   }
 }
@@ -192,7 +253,36 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
           tx.pure.u64(p.liquidationFeeBps),
         ],
       });
-      await execTx(client, tx, keypair, `perpetuals.init_market ${p.symbol}`);
+      const res = await execTx(client, tx, keypair, `perpetuals.init_market ${p.symbol}`);
+      const id = extractCreatedId(res, `${cfg.pkgId}::perpetuals::PerpMarket<`);
+      if (id) logger.info(`perpetuals.market created id=${id}`);
+    }
+  }
+}
+
+async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
+  if (!cfg.lending?.length) return;
+  for (const l of cfg.lending) {
+    if (!l.poolId) {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${cfg.pkgId}::lending::init_pool`,
+        typeArguments: [l.asset],
+        arguments: [
+          tx.object(cfg.adminRegistryId),
+          tx.pure.u64(l.baseRateBps),
+          tx.pure.u64(l.multiplierBps),
+          tx.pure.u64(l.jumpMultiplierBps),
+          tx.pure.u64(l.kinkUtilBps),
+          tx.pure.u64(l.reserveFactorBps),
+          tx.pure.u64(l.collateralFactorBps),
+          tx.pure.u64(l.liquidationCollateralBps),
+          tx.pure.u64(l.liquidationBonusBps),
+        ],
+      });
+      const res = await execTx(client, tx, keypair, `lending.init_pool ${l.asset}`);
+      const id = extractCreatedId(res, `${cfg.pkgId}::lending::LendingPool<`);
+      if (id) logger.info(`lending.pool created id=${id}`);
     }
   }
 }
@@ -224,10 +314,15 @@ export async function main(): Promise<void> {
   const keypair = kpFromEnv();
   const client = new SuiClient({ url: getFullnodeUrl(deployConfig.network) });
 
-  await ensureOracleRegistry(client, deployConfig, keypair);
+  const ensuredOracleId = await ensureOracleRegistry(client, deployConfig, keypair);
+  if (ensuredOracleId && !deployConfig.oracleRegistryId) {
+    deployConfig.oracleRegistryId = ensuredOracleId;
+  }
+  await addAdditionalAdmins(client, deployConfig, keypair);
   await setOracleParams(client, deployConfig, keypair);
   await updateFeeParams(client, deployConfig, keypair);
   await applyUsduFaucetSettings(client, deployConfig, keypair);
+  await deployLending(client, deployConfig, keypair);
   await deployOptions(client, deployConfig, keypair);
   await deployFutures(client, deployConfig, keypair);
   await deployGasFutures(client, deployConfig, keypair);

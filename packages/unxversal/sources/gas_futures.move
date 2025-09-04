@@ -20,13 +20,14 @@ module unxversal::gas_futures {
 
     const E_NOT_ADMIN: u64 = 1;
     const E_ZERO: u64 = 2;
+    const E_EXPIRED: u64 = 7;
     const E_NO_ACCOUNT: u64 = 3;
     const E_INSUFF: u64 = 4;
     const E_UNDER_IM: u64 = 5;
     const E_UNDER_MM: u64 = 6;
 
-    /// Price scaling: we take RGP (u64 in MIST per unit gas) and scale it to 1e6 by multiplying, then
-    /// apply `contract_size` to convert to collateral units. For simplicity, let contract size be in units of MIST.
+    /// Price scaling: treat reference gas price (MIST) as 1e6-scaled units for simplicity,
+    /// and divide by 1_000_000 when converting notional to whole collateral units via `contract_size`.
     public struct GasSeries has copy, drop, store {
         /// If >0, series expires at this ms; else perpetual-like
         expiry_ms: u64,
@@ -107,7 +108,7 @@ module unxversal::gas_futures {
     fun trade_internal<Collat>(market: &mut GasMarket<Collat>, is_buy: bool, qty: u64, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, maybe_unxv: &mut Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext) {
         assert!(qty > 0, E_ZERO);
         let now = clock.timestamp_ms();
-        if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_ZERO); };
+        if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
         let px_1e6 = current_gas_price_1e6(ctx);
         let notional_1e6 = (qty as u128) * (px_1e6 as u128) * (market.series.contract_size as u128);
         // fees
@@ -168,7 +169,7 @@ module unxversal::gas_futures {
         let pen = ((notional_1e6 * (market.liquidation_fee_bps as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64;
         let have = balance::value(&acc.collat);
         let pay = if (pen <= have) { pen } else { have };
-        if (pay > 0) { let part = balance::split(&mut acc.collat, pay); fees::accrue_generic<Collat>(vault, coin::from_balance(part, ctx), clock, ctx); };
+        if (pay > 0) { let part = balance::split(&mut acc.collat, pay); fees::pnl_deposit<Collat>(vault, coin::from_balance(part, ctx)); };
         store_account<Collat>(market, victim, acc);
         event::emit(Liquidated { market_id: object::id(market), who: victim, qty_closed: closed, exec_price_1e6: px, penalty_collat: pay, timestamp_ms: clock.timestamp_ms() });
     }
@@ -213,10 +214,21 @@ module unxversal::gas_futures {
                 if (dec > 0) {
                     let bal_loss = balance::split(&mut acc.collat, dec);
                     let coin_loss = coin::from_balance(bal_loss, ctx);
-                    fees::accrue_generic<Collat>(vault, coin_loss, clock, ctx);
+                    // route realized losses to PnL bucket
+                    fees::pnl_deposit<Collat>(vault, coin_loss);
                 };
             };
+        } else if (exit_1e6 > acc.avg_long_1e6) {
+            let diff_g = (exit_1e6 - acc.avg_long_1e6) as u128;
+            let gain_1e6 = diff_g * (qty as u128) * (cs as u128);
+            let gain = (gain_1e6 / 1_000_000u128) as u64;
+            if (gain > 0) {
+                // pay realized gains from PnL bucket into user's collateral
+                let coin_gain = fees::pnl_withdraw<Collat>(vault, gain, ctx);
+                acc.collat.join(coin::into_balance(coin_gain));
+            };
         };
+        let _ = clock; // silence unused param
     }
 
     fun realize_short_into_collateral<Collat>(acc: &mut Account<Collat>, exit_1e6: u64, qty: u64, cs: u64, vault: &mut FeeVault, clock: &Clock, ctx: &mut TxContext) {
@@ -231,10 +243,19 @@ module unxversal::gas_futures {
                 if (dec > 0) {
                     let bal_loss2 = balance::split(&mut acc.collat, dec);
                     let coin_loss2 = coin::from_balance(bal_loss2, ctx);
-                    fees::accrue_generic<Collat>(vault, coin_loss2, clock, ctx);
+                    fees::pnl_deposit<Collat>(vault, coin_loss2);
                 };
             };
+        } else if (exit_1e6 < acc.avg_short_1e6) {
+            let diff_g = (acc.avg_short_1e6 - exit_1e6) as u128;
+            let gain_1e6 = diff_g * (qty as u128) * (cs as u128);
+            let gain = (gain_1e6 / 1_000_000u128) as u64;
+            if (gain > 0) {
+                let coin_gain2 = fees::pnl_withdraw<Collat>(vault, gain, ctx);
+                acc.collat.join(coin::into_balance(coin_gain2));
+            };
         };
+        let _ = clock;
     }
 
     fun realize_long_ul(entry_1e6: u64, exit_1e6: u64, qty: u64, cs: u64): (u64, u64) {

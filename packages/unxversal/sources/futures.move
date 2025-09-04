@@ -422,14 +422,20 @@ module unxversal::futures {
     fun apply_realized_to_collat<Collat>(balc: &mut Balance<Collat>, gain: u64, loss: u64, vault: &mut FeeVault, clock: &Clock, ctx: &mut TxContext) {
         if (loss > 0) {
             let have = balance::value(balc);
-            let burn = if (loss <= have) { loss } else { have };
-            if (burn > 0) {
-                let bal_loss = balance::split(balc, burn);
+            let pay_loss = if (loss <= have) { loss } else { have };
+            if (pay_loss > 0) {
+                let bal_loss = balance::split(balc, pay_loss);
                 let coin_loss = coin::from_balance(bal_loss, ctx);
-                fees::accrue_generic<Collat>(vault, coin_loss, clock, ctx);
+                // route realized losses to PnL bucket
+                fees::pnl_deposit<Collat>(vault, coin_loss);
             };
         };
-        let _ = gain;
+        if (gain > 0) {
+            // pull realized gains from PnL bucket into user's collateral
+            let coin_gain = fees::pnl_withdraw<Collat>(vault, gain, ctx);
+            balc.join(coin::into_balance(coin_gain));
+        };
+        let _ = clock;
     }
 
     fun take_or_new_account<Collat>(market: &mut FuturesMarket<Collat>, who: address): Account<Collat> {
@@ -452,5 +458,6 @@ module unxversal::futures {
         string::utf8(out)
     }
 }
+
 
 

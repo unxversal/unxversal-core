@@ -82,6 +82,9 @@ module unxversal::fees {
     /// Generic key wrapper for storing balances in a Bag
     public struct FeeKey<phantom T> has copy, drop, store {}
 
+    /// PnL key wrapper for storing loser funds to pay winners (segregated from fee balances)
+    public struct PnlKey<phantom T> has copy, drop, store {}
+
     /// Fee vault that can hold balances of arbitrary assets
     public struct FeeVault has key, store {
         id: UID,
@@ -268,6 +271,39 @@ module unxversal::fees {
         } else {
             vault.store.add(key, bal);
         };
+    }
+    
+    /// Deposit realized PnL losses into the vault under the PnL bucket for asset T.
+    public fun pnl_deposit<T>(vault: &mut FeeVault, amount: Coin<T>) {
+        let key = PnlKey<T> {};
+        let bal = coin::into_balance(amount);
+        if (bag::contains(&vault.store, key)) {
+            let b: &mut Balance<T> = &mut vault.store[key];
+            b.join(bal);
+        } else {
+            vault.store.add(key, bal);
+        };
+    }
+
+    /// Return available PnL balance for asset T in the vault
+    public fun pnl_available<T>(vault: &FeeVault): u64 {
+        let key = PnlKey<T> {};
+        if (bag::contains(&vault.store, key)) {
+            let b: &Balance<T> = &vault.store[key];
+            balance::value(b)
+        } else { 0 }
+    }
+
+    /// Withdraw PnL to pay realized gains to winners. Aborts if insufficient funds.
+    public fun pnl_withdraw<T>(vault: &mut FeeVault, amount: u64, ctx: &mut TxContext): Coin<T> {
+        let key = PnlKey<T> {};
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        assert!(bag::contains(&vault.store, key), E_ZERO_AMOUNT);
+        let b: &mut Balance<T> = &mut vault.store[key];
+        let avail = balance::value(b);
+        assert!(avail >= amount, E_ZERO_AMOUNT);
+        let part = balance::split(b, amount);
+        coin::from_balance(part, ctx)
     }
     
     /// Accrue UNXV-denominated fee and split to stakers / treasury / burn buckets.
