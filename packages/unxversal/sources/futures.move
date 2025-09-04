@@ -64,10 +64,11 @@ module unxversal::futures {
         initial_margin_bps: u64,
         maintenance_margin_bps: u64,
         liquidation_fee_bps: u64,
+        keeper_incentive_bps: u64,
     }
 
     // Events
-    public struct MarketInitialized has copy, drop { market_id: ID, symbol: String, expiry_ms: u64, contract_size: u64, initial_margin_bps: u64, maintenance_margin_bps: u64, liquidation_fee_bps: u64 }
+    public struct MarketInitialized has copy, drop { market_id: ID, symbol: String, expiry_ms: u64, contract_size: u64, initial_margin_bps: u64, maintenance_margin_bps: u64, liquidation_fee_bps: u64, keeper_incentive_bps: u64 }
     public struct CollateralDeposited<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, timestamp_ms: u64 }
     public struct CollateralWithdrawn<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, timestamp_ms: u64 }
     public struct PositionChanged has copy, drop { market_id: ID, who: address, is_long: bool, qty_delta: u64, exec_price_1e6: u64, realized_gain: u64, realized_loss: u64, new_long: u64, new_short: u64, timestamp_ms: u64 }
@@ -84,6 +85,7 @@ module unxversal::futures {
         initial_margin_bps: u64,
         maintenance_margin_bps: u64,
         liquidation_fee_bps: u64,
+        keeper_incentive_bps: u64,
         ctx: &mut TxContext,
     ) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
@@ -94,8 +96,9 @@ module unxversal::futures {
             initial_margin_bps,
             maintenance_margin_bps,
             liquidation_fee_bps,
+            keeper_incentive_bps,
         };
-        event::emit(MarketInitialized { market_id: object::id(&m), symbol: clone_string(&m.series.symbol), expiry_ms, contract_size, initial_margin_bps, maintenance_margin_bps, liquidation_fee_bps });
+        event::emit(MarketInitialized { market_id: object::id(&m), symbol: clone_string(&m.series.symbol), expiry_ms, contract_size, initial_margin_bps, maintenance_margin_bps, liquidation_fee_bps, keeper_incentive_bps });
         transfer::share_object(m);
     }
 
@@ -105,6 +108,11 @@ module unxversal::futures {
         market.initial_margin_bps = initial_bps;
         market.maintenance_margin_bps = maint_bps;
         market.liquidation_fee_bps = liq_fee_bps;
+    }
+
+    public fun set_keeper_incentive_bps<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, keeper_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        market.keeper_incentive_bps = keeper_bps;
     }
 
     // === Collateral management ===
@@ -319,12 +327,20 @@ module unxversal::futures {
         };
         apply_realized_to_collat(&mut acc.collat, realized_gain, realized_loss, vault, clock, ctx);
 
-        // Penalty taken from victim remaining collateral and sent to fee vault
-        let notional_1e6 = (closed as u128) * (px_1e6 as u128) * (market.series.contract_size as u128);
+        // Penalty taken from victim remaining collateral; split keeper incentive and deposit remainder to PnL bucket
+        // Overflow-safe notional: ((px * cs)/1e6) * qty * 1e6
+        let per_unit_1e6: u128 = ((px_1e6 as u128) * (market.series.contract_size as u128)) / 1_000_000u128;
+        let notional_1e6 = (closed as u128) * per_unit_1e6 * 1_000_000u128;
         let pen = ((notional_1e6 * (market.liquidation_fee_bps as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64;
         let available = balance::value(&acc.collat);
         let pay = if (pen <= available) { pen } else { available };
-        if (pay > 0) { let b = balance::split(&mut acc.collat, pay); let c = coin::from_balance(b, ctx); fees::accrue_generic<Collat>(vault, c, clock, ctx); };
+        if (pay > 0) {
+            let keeper_bps: u64 = market.keeper_incentive_bps;
+            let keeper_cut: u64 = ((pay as u128) * (keeper_bps as u128) / (fees::bps_denom() as u128)) as u64;
+            let mut pen_coin = coin::from_balance(balance::split(&mut acc.collat, pay), ctx);
+            if (keeper_cut > 0) { let kc = coin::split(&mut pen_coin, keeper_cut, ctx); transfer::public_transfer(kc, ctx.sender()); };
+            fees::pnl_deposit<Collat>(vault, pen_coin);
+        };
 
         store_account<Collat>(market, victim, acc);
         event::emit(Liquidated { market_id: object::id(market), who: victim, qty_closed: closed, exec_price_1e6: px_1e6, penalty_collat: pay, timestamp_ms: clock.timestamp_ms() });

@@ -8,9 +8,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 type DeployedOptions = { marketId: string; base: string; quote: string; series: Array<{ expiryMs: number; strike1e6: number; isCall: boolean; symbol: string }> };
-type DeployedFutures = { marketId: string; collat: string; symbol: string; contractSize: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number };
-type DeployedGasFutures = { marketId: string; collat: string; expiryMs: number; contractSize: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number };
-type DeployedPerp = { marketId: string; collat: string; symbol: string; contractSize: number; fundingIntervalMs: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number };
+type DeployedFutures = { marketId: string; collat: string; symbol: string; contractSize: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number; keeperIncentiveBps: number };
+type DeployedGasFutures = { marketId: string; collat: string; expiryMs: number; contractSize: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number; keeperIncentiveBps: number };
+type DeployedPerp = { marketId: string; collat: string; symbol: string; contractSize: number; fundingIntervalMs: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number; keeperIncentiveBps: number };
 type DeployedDexPool = { poolId: string; base: string; quote: string; tickSize: number; lotSize: number; minSize: number; registryId: string; feeConfigId: string; feeVaultId: string; stakingPoolId: string };
 
 type DeploymentSummary = {
@@ -240,14 +240,20 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
           tx.pure.u64(f.initialMarginBps),
           tx.pure.u64(f.maintenanceMarginBps),
           tx.pure.u64(f.liquidationFeeBps),
+          tx.pure.u64((f as any).keeperIncentiveBps ?? 0),
         ],
       });
       const res = await execTx(client, tx, keypair, `futures.init_market ${f.symbol}`);
       const id = extractCreatedId(res, `${cfg.pkgId}::futures::FuturesMarket<`);
       if (id) logger.info(`futures.market created id=${id}`);
-      if (id) summary.futures.push({ marketId: id, collat: f.collat, symbol: f.symbol, contractSize: f.contractSize, initialMarginBps: f.initialMarginBps, maintenanceMarginBps: f.maintenanceMarginBps, liquidationFeeBps: f.liquidationFeeBps });
+      if (id) summary.futures.push({ marketId: id, collat: f.collat, symbol: f.symbol, contractSize: f.contractSize, initialMarginBps: f.initialMarginBps, maintenanceMarginBps: f.maintenanceMarginBps, liquidationFeeBps: f.liquidationFeeBps, keeperIncentiveBps: (f as any).keeperIncentiveBps ?? 0 });
     } else {
-      summary.futures.push({ marketId: f.marketId, collat: f.collat, symbol: f.symbol, contractSize: f.contractSize, initialMarginBps: f.initialMarginBps, maintenanceMarginBps: f.maintenanceMarginBps, liquidationFeeBps: f.liquidationFeeBps });
+      summary.futures.push({ marketId: f.marketId, collat: f.collat, symbol: f.symbol, contractSize: f.contractSize, initialMarginBps: f.initialMarginBps, maintenanceMarginBps: f.maintenanceMarginBps, liquidationFeeBps: f.liquidationFeeBps, keeperIncentiveBps: (f as any).keeperIncentiveBps ?? 0 });
+      if (typeof (f as any).keeperIncentiveBps === 'number' && f.marketId) {
+        const tx = new Transaction();
+        tx.moveCall({ target: `${cfg.pkgId}::futures::set_keeper_incentive_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).keeperIncentiveBps)] });
+        await execTx(client, tx, keypair, `futures.set_keeper_incentive_bps ${f.symbol}`);
+      }
     }
   }
 }
@@ -267,14 +273,20 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
           tx.pure.u64(g.initialMarginBps),
           tx.pure.u64(g.maintenanceMarginBps),
           tx.pure.u64(g.liquidationFeeBps),
+          tx.pure.u64((g as any).keeperIncentiveBps ?? 0),
         ],
       });
       const res = await execTx(client, tx, keypair, 'gas_futures.init_market');
       const id = extractCreatedId(res, `${cfg.pkgId}::gas_futures::GasMarket<`);
       if (id) logger.info(`gas_futures.market created id=${id}`);
-      if (id) summary.gasFutures.push({ marketId: id, collat: g.collat, expiryMs: g.expiryMs, contractSize: g.contractSize, initialMarginBps: g.initialMarginBps, maintenanceMarginBps: g.maintenanceMarginBps, liquidationFeeBps: g.liquidationFeeBps });
+      if (id) summary.gasFutures.push({ marketId: id, collat: g.collat, expiryMs: g.expiryMs, contractSize: g.contractSize, initialMarginBps: g.initialMarginBps, maintenanceMarginBps: g.maintenanceMarginBps, liquidationFeeBps: g.liquidationFeeBps, keeperIncentiveBps: (g as any).keeperIncentiveBps ?? 0 });
     } else {
-      summary.gasFutures.push({ marketId: g.marketId, collat: g.collat, expiryMs: g.expiryMs, contractSize: g.contractSize, initialMarginBps: g.initialMarginBps, maintenanceMarginBps: g.maintenanceMarginBps, liquidationFeeBps: g.liquidationFeeBps });
+      summary.gasFutures.push({ marketId: g.marketId, collat: g.collat, expiryMs: g.expiryMs, contractSize: g.contractSize, initialMarginBps: g.initialMarginBps, maintenanceMarginBps: g.maintenanceMarginBps, liquidationFeeBps: g.liquidationFeeBps, keeperIncentiveBps: (g as any).keeperIncentiveBps ?? 0 });
+      if (typeof (g as any).keeperIncentiveBps === 'number' && g.marketId) {
+        const tx = new Transaction();
+        tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_keeper_incentive_bps`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.u64((g as any).keeperIncentiveBps)] });
+        await execTx(client, tx, keypair, 'gas_futures.set_keeper_incentive_bps');
+      }
     }
   }
 }
@@ -295,14 +307,20 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
           tx.pure.u64(p.initialMarginBps),
           tx.pure.u64(p.maintenanceMarginBps),
           tx.pure.u64(p.liquidationFeeBps),
+          tx.pure.u64((p as any).keeperIncentiveBps ?? 0),
         ],
       });
       const res = await execTx(client, tx, keypair, `perpetuals.init_market ${p.symbol}`);
       const id = extractCreatedId(res, `${cfg.pkgId}::perpetuals::PerpMarket<`);
       if (id) logger.info(`perpetuals.market created id=${id}`);
-      if (id) summary.perpetuals.push({ marketId: id, collat: p.collat, symbol: p.symbol, contractSize: p.contractSize, fundingIntervalMs: p.fundingIntervalMs, initialMarginBps: p.initialMarginBps, maintenanceMarginBps: p.maintenanceMarginBps, liquidationFeeBps: p.liquidationFeeBps });
+      if (id) summary.perpetuals.push({ marketId: id, collat: p.collat, symbol: p.symbol, contractSize: p.contractSize, fundingIntervalMs: p.fundingIntervalMs, initialMarginBps: p.initialMarginBps, maintenanceMarginBps: p.maintenanceMarginBps, liquidationFeeBps: p.liquidationFeeBps, keeperIncentiveBps: (p as any).keeperIncentiveBps ?? 0 });
     } else {
-      summary.perpetuals.push({ marketId: p.marketId, collat: p.collat, symbol: p.symbol, contractSize: p.contractSize, fundingIntervalMs: p.fundingIntervalMs, initialMarginBps: p.initialMarginBps, maintenanceMarginBps: p.maintenanceMarginBps, liquidationFeeBps: p.liquidationFeeBps });
+      summary.perpetuals.push({ marketId: p.marketId, collat: p.collat, symbol: p.symbol, contractSize: p.contractSize, fundingIntervalMs: p.fundingIntervalMs, initialMarginBps: p.initialMarginBps, maintenanceMarginBps: p.maintenanceMarginBps, liquidationFeeBps: p.liquidationFeeBps, keeperIncentiveBps: (p as any).keeperIncentiveBps ?? 0 });
+      if (typeof (p as any).keeperIncentiveBps === 'number' && p.marketId) {
+        const tx = new Transaction();
+        tx.moveCall({ target: `${cfg.pkgId}::perpetuals::set_keeper_incentive_bps`, typeArguments: [p.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(p.marketId), tx.pure.u64((p as any).keeperIncentiveBps)] });
+        await execTx(client, tx, keypair, `perpetuals.set_keeper_incentive_bps ${p.symbol}`);
+      }
     }
   }
 }
@@ -411,17 +429,17 @@ async function writeDeploymentMarkdown(summary: DeploymentSummary) {
   }
   if (summary.futures.length) {
     lines.push('## Futures Markets');
-    for (const m of summary.futures) lines.push(`- **${m.symbol}**: market=\`${m.marketId}\`, collat=<${m.collat}>, cs=${m.contractSize}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}`);
+    for (const m of summary.futures) lines.push(`- **${m.symbol}**: market=\`${m.marketId}\`, collat=<${m.collat}>, cs=${m.contractSize}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}, KeeperBps=${m.keeperIncentiveBps}`);
     lines.push('');
   }
   if (summary.gasFutures.length) {
     lines.push('## Gas Futures Markets');
-    for (const m of summary.gasFutures) lines.push(`- market=\`${m.marketId}\`, collat=<${m.collat}>, expiry=${m.expiryMs}, cs=${m.contractSize}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}`);
+    for (const m of summary.gasFutures) lines.push(`- market=\`${m.marketId}\`, collat=<${m.collat}>, expiry=${m.expiryMs}, cs=${m.contractSize}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}, KeeperBps=${m.keeperIncentiveBps}`);
     lines.push('');
   }
   if (summary.perpetuals.length) {
     lines.push('## Perpetuals Markets');
-    for (const m of summary.perpetuals) lines.push(`- **${m.symbol}**: market=\`${m.marketId}\`, collat=<${m.collat}>, cs=${m.contractSize}, fundInt=${m.fundingIntervalMs}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}`);
+    for (const m of summary.perpetuals) lines.push(`- **${m.symbol}**: market=\`${m.marketId}\`, collat=<${m.collat}>, cs=${m.contractSize}, fundInt=${m.fundingIntervalMs}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}, KeeperBps=${m.keeperIncentiveBps}`);
     lines.push('');
   }
   if (summary.dexPools.length) {

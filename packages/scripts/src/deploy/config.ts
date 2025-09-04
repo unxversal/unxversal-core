@@ -74,6 +74,7 @@ export type DeployConfig = {
     initialMarginBps: number;
     maintenanceMarginBps: number;
     liquidationFeeBps: number;
+    keeperIncentiveBps?: number;
   }>;
   gasFutures?: Array<{
     marketId?: string;
@@ -83,6 +84,7 @@ export type DeployConfig = {
     initialMarginBps: number;
     maintenanceMarginBps: number;
     liquidationFeeBps: number;
+    keeperIncentiveBps?: number;
   }>;
   perpetuals?: Array<{
     marketId?: string;
@@ -93,6 +95,7 @@ export type DeployConfig = {
     initialMarginBps: number;
     maintenanceMarginBps: number;
     liquidationFeeBps: number;
+    keeperIncentiveBps?: number;
   }>;
   dexPools?: Array<{
     registryId: string;

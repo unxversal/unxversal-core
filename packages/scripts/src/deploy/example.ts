@@ -5,7 +5,8 @@ export async function run(): Promise<void> {
   // Implement deployment steps here, wiring to Sui SDK/CLI as needed.
 }
 
-if (import.meta.url === ) {
+// Run when executed directly (node --loader), not when imported
+if (import.meta.url === `file://${process.argv[1]}`) {
   run().catch((err) => {
     console.error(err);
     process.exit(1);
