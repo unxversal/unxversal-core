@@ -1,6 +1,6 @@
 import { db } from '../../lib/storage';
 
-export type MarketInitialized = { market_id: string; symbol: string; expiry_ms: number; contract_size: number; initial_margin_bps: number; maintenance_margin_bps: number; liquidation_fee_bps: number };
+export type MarketInitialized = { market_id: string; symbol: string; expiry_ms: number; contract_size: number; initial_margin_bps: number; maintenance_margin_bps: number; liquidation_fee_bps: number; keeper_incentive_bps: number };
 export type CollateralDeposited = { market_id: string; who: string; amount: number; timestamp_ms: number };
 export type CollateralWithdrawn = { market_id: string; who: string; amount: number; timestamp_ms: number };
 export type PositionChanged = { market_id: string; who: string; is_long: boolean; qty_delta: number; exec_price_1e6: number; realized_gain: number; realized_loss: number; new_long: number; new_short: number; timestamp_ms: number };
