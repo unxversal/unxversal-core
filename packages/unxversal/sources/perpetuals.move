@@ -64,14 +64,14 @@ module unxversal::perpetuals {
     }
 
     // Events
-    public struct PerpInitialized has copy, drop { symbol: String, contract_size: u64, funding_interval_ms: u64 }
-    public struct CollateralDeposited<phantom Collat> has copy, drop { who: address, amount: u64 }
-    public struct CollateralWithdrawn<phantom Collat> has copy, drop { who: address, amount: u64 }
-    public struct PositionChanged has copy, drop { who: address, is_long: bool, qty_delta: u64, exec_price_1e6: u64, realized_gain: u64, realized_loss: u64, new_long: u64, new_short: u64 }
-    public struct FeeCharged has copy, drop { who: address, notional_1e6: u128, fee_paid: u64, paid_in_unxv: bool }
-    public struct FundingIndexUpdated has copy, drop { longs_pay: bool, delta_1e6: u64, cum_long_pay_1e6: u128, cum_short_pay_1e6: u128, timestamp_ms: u64 }
-    public struct FundingSettled has copy, drop { who: address, amount_paid: u64, amount_credited: u64, credit_left: u64 }
-    public struct Liquidated has copy, drop { who: address, qty_closed: u64, exec_price_1e6: u64, penalty_collat: u64 }
+    public struct PerpInitialized has copy, drop { market_id: ID, symbol: String, contract_size: u64, funding_interval_ms: u64, initial_margin_bps: u64, maintenance_margin_bps: u64, liquidation_fee_bps: u64 }
+    public struct CollateralDeposited<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, timestamp_ms: u64 }
+    public struct CollateralWithdrawn<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, timestamp_ms: u64 }
+    public struct PositionChanged has copy, drop { market_id: ID, who: address, is_long: bool, qty_delta: u64, exec_price_1e6: u64, realized_gain: u64, realized_loss: u64, new_long: u64, new_short: u64, timestamp_ms: u64 }
+    public struct FeeCharged has copy, drop { market_id: ID, who: address, notional_1e6: u128, fee_paid: u64, paid_in_unxv: bool, timestamp_ms: u64 }
+    public struct FundingIndexUpdated has copy, drop { market_id: ID, longs_pay: bool, delta_1e6: u64, cum_long_pay_1e6: u128, cum_short_pay_1e6: u128, timestamp_ms: u64 }
+    public struct FundingSettled has copy, drop { market_id: ID, who: address, amount_paid: u64, amount_credited: u64, credit_left: u64, timestamp_ms: u64 }
+    public struct Liquidated has copy, drop { market_id: ID, who: address, qty_closed: u64, exec_price_1e6: u64, penalty_collat: u64, timestamp_ms: u64 }
 
     // === Init ===
     public fun init_market<Collat>(
@@ -97,7 +97,7 @@ module unxversal::perpetuals {
             last_funding_ms: sui::tx_context::epoch_timestamp_ms(ctx),
             funding_vault: balance::zero<Collat>(),
         };
-        event::emit(PerpInitialized { symbol: clone_string(&m.params.symbol), contract_size, funding_interval_ms });
+        event::emit(PerpInitialized { market_id: object::id(&m), symbol: clone_string(&m.params.symbol), contract_size, funding_interval_ms, initial_margin_bps, maintenance_margin_bps, liquidation_fee_bps });
         transfer::share_object(m);
     }
 
@@ -115,7 +115,7 @@ module unxversal::perpetuals {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         if (longs_pay) { market.cum_long_pay_1e6 = market.cum_long_pay_1e6 + (delta_1e6 as u128); } else { market.cum_short_pay_1e6 = market.cum_short_pay_1e6 + (delta_1e6 as u128); };
         market.last_funding_ms = sui::clock::timestamp_ms(clock);
-        event::emit(FundingIndexUpdated { longs_pay, delta_1e6, cum_long_pay_1e6: market.cum_long_pay_1e6, cum_short_pay_1e6: market.cum_short_pay_1e6, timestamp_ms: market.last_funding_ms });
+        event::emit(FundingIndexUpdated { market_id: object::id(market), longs_pay, delta_1e6, cum_long_pay_1e6: market.cum_long_pay_1e6, cum_short_pay_1e6: market.cum_short_pay_1e6, timestamp_ms: market.last_funding_ms });
     }
 
     // === Collateral ===
@@ -126,7 +126,7 @@ module unxversal::perpetuals {
         let (_paid0, _cred0) = settle_funding_user_internal<Collat>(market, &mut acc, clock, ctx);
         acc.collat.join(coin::into_balance(c));
         store_account<Collat>(market, ctx.sender(), acc);
-        event::emit(CollateralDeposited<Collat> { who: ctx.sender(), amount: amt });
+        event::emit(CollateralDeposited<Collat> { market_id: object::id(market), who: ctx.sender(), amount: amt, timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     public fun withdraw_collateral<Collat>(
@@ -149,7 +149,7 @@ module unxversal::perpetuals {
         let part = balance::split(&mut acc.collat, amount);
         let out = coin::from_balance(part, ctx);
         store_account<Collat>(market, ctx.sender(), acc);
-        event::emit(CollateralWithdrawn<Collat> { who: ctx.sender(), amount });
+        event::emit(CollateralWithdrawn<Collat> { market_id: object::id(market), who: ctx.sender(), amount, timestamp_ms: clock.timestamp_ms() });
         out
     }
 
@@ -261,12 +261,12 @@ module unxversal::perpetuals {
             let (stakers_coin, treasury_coin, _burn) = fees::accrue_unxv_and_split(cfg, vault, u, clock, ctx);
             staking::add_weekly_reward(staking_pool, stakers_coin, clock);
             transfer::public_transfer(treasury_coin, fees::treasury_address(cfg));
-            event::emit(FeeCharged { who: ctx.sender(), notional_1e6, fee_paid: 0, paid_in_unxv: true });
+            event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_1e6, fee_paid: 0, paid_in_unxv: true, timestamp_ms: clock.timestamp_ms() });
         } else {
             assert!(balance::value(&acc.collat) >= fee_amt, E_INSUFFICIENT);
             let part = balance::split(&mut acc.collat, fee_amt);
             fees::accrue_generic<Collat>(vault, coin::from_balance(part, ctx), clock, ctx);
-            event::emit(FeeCharged { who: ctx.sender(), notional_1e6, fee_paid: fee_amt, paid_in_unxv: false });
+            event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_1e6, fee_paid: fee_amt, paid_in_unxv: false, timestamp_ms: clock.timestamp_ms() });
         };
 
         // IM check
@@ -278,7 +278,7 @@ module unxversal::perpetuals {
         let final_long_qty = acc.long_qty;
         let final_short_qty = acc.short_qty;
         store_account<Collat>(market, ctx.sender(), acc);
-        event::emit(PositionChanged { who: ctx.sender(), is_long: is_buy, qty_delta: qty, exec_price_1e6: px, realized_gain: realized_gain, realized_loss: realized_loss, new_long: final_long_qty, new_short: final_short_qty });
+        event::emit(PositionChanged { market_id: object::id(market), who: ctx.sender(), is_long: is_buy, qty_delta: qty, exec_price_1e6: px, realized_gain: realized_gain, realized_loss: realized_loss, new_long: final_long_qty, new_short: final_short_qty, timestamp_ms: clock.timestamp_ms() });
     }
 
     // === Funding settlement ===
@@ -296,7 +296,7 @@ module unxversal::perpetuals {
         // Capture value for event before moving acc
         let final_funding_credit = acc.funding_credit;
         store_account<Collat>(market, ctx.sender(), acc);
-        event::emit(FundingSettled { who: ctx.sender(), amount_paid: paid_long, amount_credited: credited_short + paid_out, credit_left: final_funding_credit });
+        event::emit(FundingSettled { market_id: object::id(market), who: ctx.sender(), amount_paid: paid_long, amount_credited: credited_short + paid_out, credit_left: final_funding_credit, timestamp_ms: sui::clock::timestamp_ms(clock) });
         credited_short + paid_out
     }
 
@@ -369,7 +369,7 @@ module unxversal::perpetuals {
         if (pay > 0) { let part = balance::split(&mut acc.collat, pay); fees::accrue_generic<Collat>(vault, coin::from_balance(part, ctx), clock, ctx); };
 
         store_account<Collat>(market, victim, acc);
-        event::emit(Liquidated { who: victim, qty_closed: closed, exec_price_1e6: px, penalty_collat: pay });
+        event::emit(Liquidated { market_id: object::id(market), who: victim, qty_closed: closed, exec_price_1e6: px, penalty_collat: pay, timestamp_ms: clock.timestamp_ms() });
     }
 
     // === Views & helpers ===

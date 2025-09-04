@@ -59,6 +59,7 @@ module unxversal::staking {
 
     /// Events
     public struct Staked has copy, drop {
+        pool_id: ID,
         who: address,
         amount: u64,
         activate_week: u64,
@@ -66,6 +67,7 @@ module unxversal::staking {
     }
 
     public struct Unstaked has copy, drop {
+        pool_id: ID,
         who: address,
         amount: u64,
         effective_week: u64,
@@ -73,12 +75,14 @@ module unxversal::staking {
     }
 
     public struct RewardAdded has copy, drop {
+        pool_id: ID,
         amount: u64,
         week: u64,
         timestamp_ms: u64,
     }
 
     public struct RewardsClaimed has copy, drop {
+        pool_id: ID,
         who: address,
         from_week: u64,
         to_week: u64,
@@ -122,7 +126,7 @@ module unxversal::staking {
         add_delta(&mut pool.pos_delta_by_week, next_week, amt);
         // Persist staker
         write_staker(pool, ctx.sender(), staker);
-        event::emit(Staked { who: ctx.sender(), amount: amt, activate_week: next_week, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        event::emit(Staked { pool_id: object::id(pool), who: ctx.sender(), amount: amt, activate_week: next_week, timestamp_ms: sui::clock::timestamp_ms(clock) });
     }
 
     /// Unstake active UNXV. Effective at next week boundary.
@@ -141,7 +145,7 @@ module unxversal::staking {
         // Transfer principal out immediately
         let bal_part = balance::split(&mut pool.stake_vault, amount);
         let c = coin::from_balance(bal_part, ctx);
-        event::emit(Unstaked { who: ctx.sender(), amount, effective_week: eff_week, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        event::emit(Unstaked { pool_id: object::id(pool), who: ctx.sender(), amount, effective_week: eff_week, timestamp_ms: sui::clock::timestamp_ms(clock) });
         c
     }
 
@@ -158,7 +162,7 @@ module unxversal::staking {
         let cur = if (table::contains(&pool.reward_by_week, w)) { *table::borrow(&pool.reward_by_week, w) } else { 0 };
         if (table::contains(&pool.reward_by_week, w)) { let _ = table::remove(&mut pool.reward_by_week, w); };
         table::add(&mut pool.reward_by_week, w, cur + amt);
-        event::emit(RewardAdded { amount: amt, week: w, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        event::emit(RewardAdded { pool_id: object::id(pool), amount: amt, week: w, timestamp_ms: sui::clock::timestamp_ms(clock) });
     }
 
     /// Claim rewards for all fully completed weeks since last claim.
@@ -205,7 +209,7 @@ module unxversal::staking {
         if (acc == 0) { return coin::zero(ctx) };
         let balp = balance::split(&mut pool.reward_vault, acc);
         let c = coin::from_balance(balp, ctx);
-        event::emit(RewardsClaimed { who: ctx.sender(), from_week: start, to_week: end, amount: acc, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        event::emit(RewardsClaimed { pool_id: object::id(pool), who: ctx.sender(), from_week: start, to_week: end, amount: acc, timestamp_ms: sui::clock::timestamp_ms(clock) });
         c
     }
 
@@ -284,6 +288,24 @@ module unxversal::staking {
 
     fun store_u64(tbl: &mut Table<u64, u64>, k: u64, v: u64) { if (table::contains(tbl, k)) { let _ = table::remove(tbl, k); }; table::add(tbl, k, v) }
 
+    #[test_only]
+    public fun new_staking_pool_for_testing(ctx: &mut TxContext): StakingPool {
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        let week = week_of(now);
+        StakingPool {
+            id: object::new(ctx),
+            current_week: week,
+            total_active_stake: 0,
+            pos_delta_by_week: table::new<u64, u64>(ctx),
+            neg_delta_by_week: table::new<u64, u64>(ctx),
+            active_by_week: table::new<u64, u64>(ctx),
+            reward_by_week: table::new<u64, u64>(ctx),
+            stake_vault: balance::zero<UNXV>(),
+            reward_vault: balance::zero<UNXV>(),
+        }
+    }
+
 }
+
 
 

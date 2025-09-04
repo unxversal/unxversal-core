@@ -2,8 +2,10 @@ import type { IndexerTracker } from '../lib/indexer';
 import { dexEventTracker } from './dex';
 import { lendingEventTracker } from './lending';
 import { optionsEventTracker } from './options';
-import { futuresEventTracker } from './futures/index.ts';
-import { gasFuturesEventTracker } from './gas-futures/index.ts';
+import { futuresEventTracker } from './futures/index';
+import { gasFuturesEventTracker } from './gas-futures/index';
+import { perpsEventTracker } from './perpetuals/index';
+import { stakingEventTracker } from './staking/index';
 
 export function allProtocolTrackers(pkg: string): IndexerTracker[] {
   return [
@@ -12,6 +14,8 @@ export function allProtocolTrackers(pkg: string): IndexerTracker[] {
     optionsEventTracker(pkg),
     futuresEventTracker(pkg),
     gasFuturesEventTracker(pkg),
+    perpsEventTracker(pkg),
+    stakingEventTracker(pkg),
   ];
 }
 

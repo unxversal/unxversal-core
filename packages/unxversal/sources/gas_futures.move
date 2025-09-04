@@ -267,6 +267,21 @@ module unxversal::gas_futures {
 
     fun take_or_new_account<Collat>(market: &mut GasMarket<Collat>, who: address): Account<Collat> { if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { Account { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0 } } }
     fun store_account<Collat>(market: &mut GasMarket<Collat>, who: address, acc: Account<Collat>) { table::add(&mut market.accounts, who, acc); }
-}
 
+    // Test-only views
+    #[test_only]
+    public fun view_params<Collat>(market: &GasMarket<Collat>): (u64, u64, u64, u64, u64) {
+        (market.series.expiry_ms, market.series.contract_size, market.initial_margin_bps, market.maintenance_margin_bps, market.liquidation_fee_bps)
+    }
+
+    #[test_only]
+    public fun account_collateral<Collat>(market: &GasMarket<Collat>, who: address): u64 {
+        if (!table::contains(&market.accounts, who)) { 0 } else { let a = table::borrow(&market.accounts, who); balance::value(&a.collat) }
+    }
+
+    #[test_only]
+    public fun account_position<Collat>(market: &GasMarket<Collat>, who: address): (u64, u64, u64, u64) {
+        if (!table::contains(&market.accounts, who)) { (0, 0, 0, 0) } else { let a = table::borrow(&market.accounts, who); (a.long_qty, a.short_qty, a.avg_long_1e6, a.avg_short_1e6) }
+    }
+}
 

@@ -496,7 +496,36 @@ module unxversal::fees {
         if (bag::contains(&vault.store, key)) { let b: &mut Balance<T> = &mut vault.store[key]; b.join(bal); } else { vault.store.add(key, bal); };
     }
 
-    // maker rebates removed
+    #[test_only]
+    public fun new_fee_config_for_testing(ctx: &mut TxContext): FeeConfig {
+        FeeConfig {
+            id: object::new(ctx),
+            dex_fee_bps: 100,
+            dex_taker_fee_bps: 100,
+            dex_maker_fee_bps: 0,
+            futures_taker_fee_bps: 45,
+            futures_maker_fee_bps: 15,
+            gasfut_taker_fee_bps: 45,
+            gasfut_maker_fee_bps: 15,
+            unxv_discount_bps: 3000,
+            treasury: ctx.sender(),
+            prefer_deep_backend: true,
+            dist: FeeDistribution { stakers_share_bps: 4000, treasury_share_bps: 3000, burn_share_bps: 3000 },
+            pool_creation_fee_unxv: 0,
+            lending_borrow_fee_bps: 0,
+            lending_collateral_bonus_bps_max: 500,
+            sd_t1_thr: 10, sd_t1_bps: 500,
+            sd_t2_thr: 100, sd_t2_bps: 1000,
+            sd_t3_thr: 1_000, sd_t3_bps: 1500,
+            sd_t4_thr: 10_000, sd_t4_bps: 2000,
+            sd_t5_thr: 100_000, sd_t5_bps: 3000,
+            sd_t6_thr: 500_000, sd_t6_bps: 4000,
+        }
+    }
+
+    #[test_only]
+    public fun new_fee_vault_for_testing(ctx: &mut TxContext): FeeVault {
+        FeeVault { id: object::new(ctx), store: bag::new(ctx), unxv_to_burn: balance::zero<UNXV>() }
+    }
+    
 }
-
-

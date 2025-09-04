@@ -1,4 +1,4 @@
-import { db, type EventRow } from '../../lib/storage';
+import { db } from '../../lib/storage';
 
 export type SeriesCreated = { key: string; expiry_ms: number; strike_1e6: number; is_call: boolean };
 export type SeriesCreatedV2 = { market_id: string; key: string; expiry_ms: number; strike_1e6: number; is_call: boolean; symbol_bytes: string; tick_size: number; lot_size: number; min_size: number };

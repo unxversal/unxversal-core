@@ -2,7 +2,7 @@
   "name": "@unxversal/scripts",
   "version": "0.1.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc -p tsconfig.json",
@@ -13,7 +13,7 @@
     "clean": "rimraf dist",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint . --ext .ts",
-    "prepare": "husky",
+    "prepare": "husky install",
     "build:watch": "tsc -w -p tsconfig.json",
     "prebuild": "npm run clean"
   },
@@ -21,7 +21,7 @@
   "author": "",
   "license": "ISC",
   "type": "module",
-  "private": "true",
+  "private": true,
   "engines": {
     "node": ">=18"
   },
@@ -42,5 +42,7 @@
   },
   "lint-staged": {
     "*.{ts,tsx}": "eslint --fix"
-  }
+  },
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts"
 }
