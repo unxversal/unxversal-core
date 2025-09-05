@@ -3,6 +3,7 @@ import { Transaction } from '@mysten/sui/transactions';
 import type { StrategyConfig } from './config';
 import { devInspectOk, makeLoop, type Keeper, type TxExecutor } from '../protocols/common';
 import { buildDeepbookPublicIndexer } from '../lib/indexer';
+import { clampOrderQtyByCaps, readRiskCaps } from '../lib/riskCaps';
 
 function u64(n: number | bigint): bigint { return BigInt(Math.floor(Number(n))); }
 
@@ -42,6 +43,7 @@ export function createStaticRangeKeeper(client: SuiClient, sender: string, exec:
   async function step(): Promise<void> {
     const mid = await priceMid();
     const { bids, asks } = buildLadder(mid);
+    const caps = cfg.vaultId ? await readRiskCaps(client, (import.meta as any).env.VITE_UNXV_PKG, cfg.vaultId) : null;
     const tx = new Transaction();
     // Place a small subset per tick to avoid size; maker-only enforcement should be in Move
     let cid = BigInt(Date.now());
@@ -58,7 +60,7 @@ export function createStaticRangeKeeper(client: SuiClient, sender: string, exec:
           tx.pure.u8(0), // orderType GTC
           tx.pure.u8(0), // selfMatchingOption
           tx.pure.u64(b.price),
-          tx.pure.u64(b.qty),
+          tx.pure.u64(clampOrderQtyByCaps(b.qty, caps)),
           tx.pure.bool(true),
           tx.pure.bool(false),
           tx.pure.u64(BigInt(Math.floor(Date.now() / 1000) + 120)),
@@ -79,7 +81,7 @@ export function createStaticRangeKeeper(client: SuiClient, sender: string, exec:
           tx.pure.u8(0),
           tx.pure.u8(0),
           tx.pure.u64(a.price),
-          tx.pure.u64(a.qty),
+          tx.pure.u64(clampOrderQtyByCaps(a.qty, caps)),
           tx.pure.bool(false),
           tx.pure.bool(false),
           tx.pure.u64(BigInt(Math.floor(Date.now() / 1000) + 120)),

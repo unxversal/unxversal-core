@@ -20,6 +20,8 @@ export type StrategyConfig = {
     feeVaultId: string;
     deepbookIndexerUrl: string;
   };
+  // Optional: associated vault id to read risk caps
+  vaultId?: string;
   staticRange: StaticRangeConfig;
   ammOverlay?: {
     bandBps: number;

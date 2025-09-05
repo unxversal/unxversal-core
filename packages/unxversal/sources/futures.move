@@ -39,6 +39,9 @@ module unxversal::futures {
     const E_UNDER_INITIAL_MARGIN: u64 = 5;
     const E_UNDER_MAINT_MARGIN: u64 = 6;
     const E_EXPIRED: u64 = 7;
+    const E_CLOSE_ONLY: u64 = 8;
+    const E_PRICE_DEVIATION: u64 = 9;
+    const E_EXPOSURE_CAP: u64 = 10;
 
     /// Futures series parameters
     public struct FuturesSeries has copy, drop, store {
@@ -54,6 +57,9 @@ module unxversal::futures {
         short_qty: u64,
         avg_long_1e6: u64,
         avg_short_1e6: u64,
+        /// Realized gains that could not be paid immediately due to PnL vault shortfall
+        /// These are denominated in Collat units and can be claimed later
+        pending_credit: u64,
     }
 
     /// Market shared object
@@ -65,6 +71,26 @@ module unxversal::futures {
         maintenance_margin_bps: u64,
         liquidation_fee_bps: u64,
         keeper_incentive_bps: u64,
+        /// Close-only mode toggle (true allows only trades that reduce exposure for the account)
+        close_only: bool,
+        /// Max allowed price deviation vs last accepted price, in bps (0 disables gating)
+        max_deviation_bps: u64,
+        /// Last accepted oracle price (1e6); 0 until first update
+        last_price_1e6: u64,
+        /// Portion of Collat fees routed to PnL reserve, in bps of fee_amt (0 = all to fee bucket)
+        pnl_fee_share_bps: u64,
+        /// Target buffer over initial margin when liquidating (in bps)
+        liq_target_buffer_bps: u64,
+        /// Per-account gross contract cap (0 = unlimited)
+        account_max_gross_qty: u64,
+        /// Per-market gross contract cap across all users (0 = unlimited)
+        market_max_gross_qty: u64,
+        /// Open interest tracking (sum of outstanding contracts per side)
+        total_long_qty: u64,
+        total_short_qty: u64,
+        /// Imbalance surcharge parameters (bps). If abs(netOI)/OI > threshold, add up to max bps to IM
+        imbalance_surcharge_bps_max: u64,
+        imbalance_threshold_bps: u64,
     }
 
     // Events
@@ -75,6 +101,10 @@ module unxversal::futures {
     public struct FeeCharged has copy, drop { market_id: ID, who: address, notional_units: u64, fee_paid: u64, paid_in_unxv: bool, timestamp_ms: u64 }
     public struct Liquidated has copy, drop { market_id: ID, who: address, qty_closed: u64, exec_price_1e6: u64, penalty_collat: u64, timestamp_ms: u64 }
     public struct Settled has copy, drop { market_id: ID, who: address, price_1e6: u64, timestamp_ms: u64 }
+    /// Emitted when realized gain cannot be fully paid and is recorded as a credit
+    public struct PnlCreditAccrued<phantom Collat> has copy, drop { market_id: ID, who: address, credited: u64, remaining_credit: u64, timestamp_ms: u64 }
+    /// Emitted when realized gain is paid from the PnL vault to user collateral (either during trade/liq or via claim)
+    public struct PnlCreditPaid<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, remaining_credit: u64, timestamp_ms: u64 }
 
     // === Init ===
     public fun init_market<Collat>(
@@ -97,6 +127,17 @@ module unxversal::futures {
             maintenance_margin_bps,
             liquidation_fee_bps,
             keeper_incentive_bps,
+            close_only: false,
+            max_deviation_bps: 0,
+            last_price_1e6: 0,
+            pnl_fee_share_bps: 0,
+            liq_target_buffer_bps: 0,
+            account_max_gross_qty: 0,
+            market_max_gross_qty: 0,
+            total_long_qty: 0,
+            total_short_qty: 0,
+            imbalance_surcharge_bps_max: 0,
+            imbalance_threshold_bps: 0,
         };
         event::emit(MarketInitialized { market_id: object::id(&m), symbol: clone_string(&m.series.symbol), expiry_ms, contract_size, initial_margin_bps, maintenance_margin_bps, liquidation_fee_bps, keeper_incentive_bps });
         transfer::share_object(m);
@@ -113,6 +154,45 @@ module unxversal::futures {
     public fun set_keeper_incentive_bps<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, keeper_bps: u64, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         market.keeper_incentive_bps = keeper_bps;
+    }
+
+    /// Admin: set close-only mode
+    public fun set_close_only<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, enabled: bool, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        market.close_only = enabled;
+    }
+
+    /// Admin: set price deviation gate in bps (0 disables)
+    public fun set_price_deviation_bps<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, max_dev_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        market.max_deviation_bps = max_dev_bps;
+    }
+
+    /// Admin: set PnL reserve fee share (portion of Collat fees allocated to PnL bucket)
+    public fun set_pnl_fee_share_bps<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, share_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(share_bps <= fees::bps_denom(), E_EXPOSURE_CAP);
+        market.pnl_fee_share_bps = share_bps;
+    }
+
+    /// Admin: set liquidation target buffer over IM in bps
+    public fun set_liq_target_buffer_bps<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, buffer_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        market.liq_target_buffer_bps = buffer_bps;
+    }
+
+    /// Admin: set exposure caps
+    public fun set_exposure_caps<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, account_max_gross_qty: u64, market_max_gross_qty: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        market.account_max_gross_qty = account_max_gross_qty;
+        market.market_max_gross_qty = market_max_gross_qty;
+    }
+
+    /// Admin: set imbalance surcharge parameters
+    public fun set_imbalance_params<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, surcharge_max_bps: u64, threshold_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        market.imbalance_surcharge_bps_max = surcharge_max_bps;
+        market.imbalance_threshold_bps = threshold_bps;
     }
 
     // === Collateral management ===
@@ -135,7 +215,7 @@ module unxversal::futures {
         ctx: &mut TxContext,
     ): Coin<Collat> {
         assert!(amount > 0, E_ZERO);
-        let price_1e6 = current_price_1e6(&market.series, reg, agg, clock);
+        let price_1e6 = gated_price_and_update<Collat>(market, reg, agg, clock);
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         // compute equity and required initial margin after withdrawal
         let equity_before = equity_collat(&acc, price_1e6, market.series.contract_size);
@@ -239,7 +319,7 @@ module unxversal::futures {
         assert!(qty > 0, E_ZERO);
         let now = clock.timestamp_ms();
         if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
-        let px_1e6 = current_price_1e6(&market.series, reg, agg, clock);
+        let px_1e6 = gated_price_and_update<Collat>(market, reg, agg, clock);
         // Overflow-safe notional: ((px * cs)/1e6) * qty * 1e6
         let per_unit_1e6: u128 = ((px_1e6 as u128) * (market.series.contract_size as u128)) / 1_000_000u128;
         let notional_1e6 = (qty as u128) * per_unit_1e6 * 1_000_000u128;
@@ -250,22 +330,44 @@ module unxversal::futures {
         let fee_amt = ((notional_1e6 * (t_eff as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64; // convert from 1e6 to whole units
 
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
+        // Close-only mode enforcement: only allow reducing opposing side without adding new exposure
+        if (market.close_only) {
+            if (is_buy) { assert!(qty <= acc.short_qty, E_CLOSE_ONLY); } else { assert!(qty <= acc.long_qty, E_CLOSE_ONLY); };
+        };
 
         // Realize PnL if crossing sides
         let mut realized_gain: u64 = 0;
         let mut realized_loss: u64 = 0;
+        let mut reduced_long: u64 = 0; let mut reduced_short: u64 = 0; let mut add_long: u64 = 0; let mut add_short: u64 = 0;
         if (is_buy) {
-            let reduced = if (acc.short_qty > 0) { let r = if (qty <= acc.short_qty) { qty } else { acc.short_qty }; if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px_1e6, r, market.series.contract_size); realized_gain = realized_gain + g; realized_loss = realized_loss + l; acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; r } else { 0 } } else { 0 };
-            let add = if (qty > reduced) { qty - reduced } else { 0 };
-            if (add > 0) { acc.avg_long_1e6 = weighted_avg_price(acc.avg_long_1e6, acc.long_qty, px_1e6, add); acc.long_qty = acc.long_qty + add; };
+            let r = if (acc.short_qty > 0) { if (qty <= acc.short_qty) { qty } else { acc.short_qty } } else { 0 };
+            if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px_1e6, r, market.series.contract_size); realized_gain = realized_gain + g; realized_loss = realized_loss + l; acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; reduced_short = r; };
+            let a = if (qty > r) { qty - r } else { 0 };
+            if (a > 0) { acc.avg_long_1e6 = weighted_avg_price(acc.avg_long_1e6, acc.long_qty, px_1e6, a); acc.long_qty = acc.long_qty + a; add_long = a; };
         } else {
-            let reduced2 = if (acc.long_qty > 0) { let r2 = if (qty <= acc.long_qty) { qty } else { acc.long_qty }; if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px_1e6, r2, market.series.contract_size); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; r2 } else { 0 } } else { 0 };
-            let add2 = if (qty > reduced2) { qty - reduced2 } else { 0 };
-            if (add2 > 0) { acc.avg_short_1e6 = weighted_avg_price(acc.avg_short_1e6, acc.short_qty, px_1e6, add2); acc.short_qty = acc.short_qty + add2; };
+            let r2 = if (acc.long_qty > 0) { if (qty <= acc.long_qty) { qty } else { acc.long_qty } } else { 0 };
+            if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px_1e6, r2, market.series.contract_size); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; reduced_long = r2; };
+            let a2 = if (qty > r2) { qty - r2 } else { 0 };
+            if (a2 > 0) { acc.avg_short_1e6 = weighted_avg_price(acc.avg_short_1e6, acc.short_qty, px_1e6, a2); acc.short_qty = acc.short_qty + a2; add_short = a2; };
         };
 
-        // Apply realized PnL to collateral balance
-        apply_realized_to_collat(&mut acc.collat, realized_gain, realized_loss, vault, clock, ctx);
+        // Enforce exposure caps before finalizing adds
+        if (add_long > 0 || add_short > 0) {
+            let gross_acc = acc.long_qty + acc.short_qty;
+            if (market.account_max_gross_qty > 0) { assert!(gross_acc <= market.account_max_gross_qty, E_EXPOSURE_CAP); };
+            let gross_market_before = market.total_long_qty + market.total_short_qty;
+            let gross_market_after = gross_market_before - reduced_long - reduced_short + add_long + add_short;
+            if (market.market_max_gross_qty > 0) { assert!(gross_market_after <= market.market_max_gross_qty, E_EXPOSURE_CAP); };
+        };
+
+        // Update market OI totals (reductions first, then adds)
+        if (reduced_long > 0) { market.total_long_qty = market.total_long_qty - reduced_long; };
+        if (reduced_short > 0) { market.total_short_qty = market.total_short_qty - reduced_short; };
+        if (add_long > 0) { market.total_long_qty = market.total_long_qty + add_long; };
+        if (add_short > 0) { market.total_short_qty = market.total_short_qty + add_short; };
+
+        // Apply realized PnL to account (deposit losses to PnL vault; pay gains up to vault availability; credit remainder)
+        apply_realized_to_account<Collat>(market, &mut acc, realized_gain, realized_loss, vault, clock, ctx);
 
         // Charge protocol fee either in UNXV or Collat
         if (pay_with_unxv) {
@@ -280,14 +382,28 @@ module unxversal::futures {
             // Deduct from collateral balance
             assert!(balance::value(&acc.collat) >= fee_amt, E_INSUFFICIENT_BALANCE);
             let part = balance::split(&mut acc.collat, fee_amt);
-            let c = coin::from_balance(part, ctx);
-            fees::accrue_generic<Collat>(vault, c, clock, ctx);
+            let mut c = coin::from_balance(part, ctx);
+            let share_bps = market.pnl_fee_share_bps;
+            if (share_bps > 0) {
+                let share_amt: u64 = ((fee_amt as u128) * (share_bps as u128) / (fees::bps_denom() as u128)) as u64;
+                if (share_amt > 0 && share_amt < fee_amt) {
+                    let pnl_part = coin::split(&mut c, share_amt, ctx);
+                    fees::pnl_deposit<Collat>(vault, pnl_part);
+                    fees::accrue_generic<Collat>(vault, c, clock, ctx);
+                } else if (share_amt >= fee_amt) {
+                    fees::pnl_deposit<Collat>(vault, c);
+                } else {
+                    fees::accrue_generic<Collat>(vault, c, clock, ctx);
+                };
+            } else {
+                fees::accrue_generic<Collat>(vault, c, clock, ctx);
+            };
             event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_units: (notional_1e6 / 1_000_000u128) as u64, fee_paid: fee_amt, paid_in_unxv: false, timestamp_ms: clock.timestamp_ms() });
         };
 
         // Margin check post-trade
         let eq = equity_collat(&acc, px_1e6, market.series.contract_size);
-        let req_im = required_initial_margin_bps(&acc, px_1e6, market.series.contract_size, market.initial_margin_bps);
+        let req_im = required_initial_margin_effective<Collat>(market, &acc, px_1e6);
         assert!(eq >= req_im, E_UNDER_INITIAL_MARGIN);
 
         event::emit(PositionChanged { market_id: object::id(market), who: ctx.sender(), is_long: is_buy, qty_delta: qty, exec_price_1e6: px_1e6, realized_gain: realized_gain, realized_loss: realized_loss, new_long: acc.long_qty, new_short: acc.short_qty, timestamp_ms: clock.timestamp_ms() });
@@ -314,18 +430,49 @@ module unxversal::futures {
         let req_mm = required_initial_margin_bps(&acc, px_1e6, market.series.contract_size, market.maintenance_margin_bps);
         assert!(eq < req_mm, E_UNDER_MAINT_MARGIN);
 
-        // Close up to qty from the larger side
-        let mut closed: u64 = 0;
-        let mut realized_gain: u64 = 0;
-        let mut realized_loss: u64 = 0;
-        if (acc.long_qty >= acc.short_qty) {
-            let c = if (qty <= acc.long_qty) { qty } else { acc.long_qty };
-            if (c > 0) { let (g,l) = realize_long_ul(acc.avg_long_1e6, px_1e6, c, market.series.contract_size); realized_gain = realized_gain + g; realized_loss = realized_loss + l; acc.long_qty = acc.long_qty - c; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; closed = c; };
+        // Compute target IM bps = initial_margin_bps + buffer
+        let target_bps = market.initial_margin_bps + market.liq_target_buffer_bps;
+
+        // Determine minimal close qty to restore eq >= req_im(target)
+        let gross_before = ((acc.long_qty as u128) + (acc.short_qty as u128)) * (px_1e6 as u128) * (market.series.contract_size as u128) / 1_000_000u128;
+        let req0: u128 = (gross_before * (target_bps as u128)) / (fees::bps_denom() as u128);
+        let eq0: u128 = (eq as u128);
+        let shortfall: u128 = if (eq0 >= req0) { 0u128 } else { req0 - eq0 };
+
+        let per_contract_val: u64 = ((px_1e6 as u128) * (market.series.contract_size as u128) / 1_000_000u128) as u64;
+        let req_pc: u64 = ((per_contract_val as u128) * (target_bps as u128) / (fees::bps_denom() as u128)) as u64;
+        // Prefer closing the larger side to reduce gross exposure fastest
+        let close_long_pref = acc.long_qty >= acc.short_qty;
+
+        let mut closed: u64 = 0; let mut realized_gain: u64 = 0; let mut realized_loss: u64 = 0;
+        if (shortfall == 0) {
+            // Already above target; close min(qty, larger side) as safety noop
+            if (acc.long_qty >= acc.short_qty) {
+                let c = if (qty <= acc.long_qty) { qty } else { acc.long_qty };
+                if (c > 0) { let (g,l) = realize_long_ul(acc.avg_long_1e6, px_1e6, c, market.series.contract_size); realized_gain = realized_gain + g; realized_loss = realized_loss + l; acc.long_qty = acc.long_qty - c; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - c; closed = c; };
+            } else {
+                let c2 = if (qty <= acc.short_qty) { qty } else { acc.short_qty };
+                if (c2 > 0) { let (g2,l2) = realize_short_ul(acc.avg_short_1e6, px_1e6, c2, market.series.contract_size); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.short_qty = acc.short_qty - c2; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - c2; closed = c2; };
+            };
         } else {
-            let c2 = if (qty <= acc.short_qty) { qty } else { acc.short_qty };
-            if (c2 > 0) { let (g2,l2) = realize_short_ul(acc.avg_short_1e6, px_1e6, c2, market.series.contract_size); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.short_qty = acc.short_qty - c2; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; closed = c2; };
+            // conservative: assume margin freed per closed contract ≈ req_pc; ceil_div(shortfall, req_pc)
+            let need_c: u64 = if (req_pc > 0) {
+                let den = req_pc as u128;
+                let num = shortfall + den - 1u128;
+                (num / den) as u64
+            } else { qty };
+            if (close_long_pref && acc.long_qty > 0) {
+                let cmax = if (qty <= acc.long_qty) { qty } else { acc.long_qty };
+                let c = if (need_c > 0 && need_c <= cmax) { need_c } else { cmax };
+                if (c > 0) { let (g,l) = realize_long_ul(acc.avg_long_1e6, px_1e6, c, market.series.contract_size); realized_gain = realized_gain + g; realized_loss = realized_loss + l; acc.long_qty = acc.long_qty - c; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - c; closed = c; };
+            } else if (acc.short_qty > 0) {
+                let cmax2 = if (qty <= acc.short_qty) { qty } else { acc.short_qty };
+                let c2 = if (need_c > 0 && need_c <= cmax2) { need_c } else { cmax2 };
+                if (c2 > 0) { let (g2,l2) = realize_short_ul(acc.avg_short_1e6, px_1e6, c2, market.series.contract_size); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.short_qty = acc.short_qty - c2; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - c2; closed = c2; };
+            };
         };
-        apply_realized_to_collat(&mut acc.collat, realized_gain, realized_loss, vault, clock, ctx);
+
+        apply_realized_to_account<Collat>(market, &mut acc, realized_gain, realized_loss, vault, clock, ctx);
 
         // Penalty taken from victim remaining collateral; split keeper incentive and deposit remainder to PnL bucket
         // Overflow-safe notional: ((px * cs)/1e6) * qty * 1e6
@@ -361,6 +508,28 @@ module unxversal::futures {
         let _ = ctx; // silence
     }
 
+    /// User-triggered settlement to flatten positions and realize PnL with credit fallback
+    public fun settle_self<Collat>(
+        market: &mut FuturesMarket<Collat>,
+        reg: &OracleRegistry,
+        agg: &Aggregator,
+        vault: &mut FeeVault,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        assert!(table::contains(&market.accounts, ctx.sender()), E_NO_ACCOUNT);
+        let px = gated_price_and_update<Collat>(market, reg, agg, clock);
+        let mut acc = table::remove(&mut market.accounts, ctx.sender());
+        let lq = acc.long_qty; let sq = acc.short_qty;
+        let (g1,l1) = realize_long_ul(acc.avg_long_1e6, px, lq, market.series.contract_size);
+        let (g2,l2) = realize_short_ul(acc.avg_short_1e6, px, sq, market.series.contract_size);
+        let g = g1 + g2; let l = l1 + l2;
+        if (lq > 0) { market.total_long_qty = market.total_long_qty - lq; acc.long_qty = 0; acc.avg_long_1e6 = 0; };
+        if (sq > 0) { market.total_short_qty = market.total_short_qty - sq; acc.short_qty = 0; acc.avg_short_1e6 = 0; };
+        apply_realized_to_account<Collat>(market, &mut acc, g, l, vault, clock, ctx);
+        store_account<Collat>(market, ctx.sender(), acc);
+    }
+
     // === Views & helpers ===
     public fun account_equity_1e6<Collat>(market: &FuturesMarket<Collat>, who: address, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock): u128 {
         if (!table::contains(&market.accounts, who)) return 0;
@@ -368,6 +537,18 @@ module unxversal::futures {
         let px = current_price_1e6(&market.series, reg, agg, clock);
         let eq = equity_collat(acc, px, market.series.contract_size);
         (eq as u128) * 1_000_000u128
+    }
+
+    /// View: account pending credit in Collat units
+    public fun account_pending_credit<Collat>(market: &FuturesMarket<Collat>, who: address): u64 {
+        if (!table::contains(&market.accounts, who)) return 0;
+        let acc = table::borrow(&market.accounts, who);
+        acc.pending_credit
+    }
+
+    /// View: market open interest
+    public fun market_open_interest<Collat>(market: &FuturesMarket<Collat>): (u64, u64) {
+        (market.total_long_qty, market.total_short_qty)
     }
 
     fun equity_collat<Collat>(acc: &Account<Collat>, price_1e6: u64, contract_size: u64): u64 {
@@ -390,6 +571,26 @@ module unxversal::futures {
         let gross = size_u128 * (price_1e6 as u128) * (contract_size as u128);
         let im_1e6 = (gross * (bps as u128) / (fees::bps_denom() as u128));
         (im_1e6 / 1_000_000u128) as u64
+    }
+
+    fun required_initial_margin_effective<Collat>(market: &FuturesMarket<Collat>, acc: &Account<Collat>, price_1e6: u64): u64 {
+        let base = market.initial_margin_bps;
+        let total_long = market.total_long_qty as u128;
+        let total_short = market.total_short_qty as u128;
+        let oi = (market.total_long_qty as u128) + (market.total_short_qty as u128);
+        if (market.imbalance_surcharge_bps_max == 0 || oi == 0) {
+            return required_initial_margin_bps<Collat>(acc, price_1e6, market.series.contract_size, base);
+        };
+        let net = if (total_long >= total_short) { total_long - total_short } else { total_short - total_long };
+        let dev_bps: u64 = ((net * (fees::bps_denom() as u128) / oi) as u64);
+        if (dev_bps <= market.imbalance_threshold_bps) {
+            return required_initial_margin_bps<Collat>(acc, price_1e6, market.series.contract_size, base);
+        };
+        let excess_bps: u64 = dev_bps - market.imbalance_threshold_bps;
+        // scale surcharge proportionally up to max at 100% imbalance
+        let add_bps: u64 = ((excess_bps as u128) * (market.imbalance_surcharge_bps_max as u128) / (fees::bps_denom() as u128)) as u64;
+        let eff_bps = base + add_bps;
+        required_initial_margin_bps<Collat>(acc, price_1e6, market.series.contract_size, eff_bps)
     }
 
     fun realize_long_ul(entry_1e6: u64, exit_1e6: u64, qty: u64, contract_size: u64): (u64, u64) {
@@ -425,35 +626,82 @@ module unxversal::futures {
         (num / den) as u64
     }
 
-    fun apply_realized_to_collat<Collat>(balc: &mut Balance<Collat>, gain: u64, loss: u64, vault: &mut FeeVault, clock: &Clock, ctx: &mut TxContext) {
+    fun apply_realized_to_account<Collat>(market: &FuturesMarket<Collat>, acc: &mut Account<Collat>, gain: u64, loss: u64, vault: &mut FeeVault, clock: &Clock, ctx: &mut TxContext) {
         if (loss > 0) {
-            let have = balance::value(balc);
+            let have = balance::value(&acc.collat);
             let pay_loss = if (loss <= have) { loss } else { have };
             if (pay_loss > 0) {
-                let bal_loss = balance::split(balc, pay_loss);
+                let bal_loss = balance::split(&mut acc.collat, pay_loss);
                 let coin_loss = coin::from_balance(bal_loss, ctx);
                 // route realized losses to PnL bucket
                 fees::pnl_deposit<Collat>(vault, coin_loss);
             };
         };
         if (gain > 0) {
-            // pull realized gains from PnL bucket into user's collateral
-            let coin_gain = fees::pnl_withdraw<Collat>(vault, gain, ctx);
-            balc.join(coin::into_balance(coin_gain));
+            let avail = fees::pnl_available<Collat>(vault);
+            let pay = if (gain <= avail) { gain } else { avail };
+            if (pay > 0) {
+                let coin_gain = fees::pnl_withdraw<Collat>(vault, pay, ctx);
+                acc.collat.join(coin::into_balance(coin_gain));
+                let rem_after = if (acc.pending_credit > 0) { acc.pending_credit } else { 0 };
+                event::emit(PnlCreditPaid<Collat> { market_id: object::id(market), who: ctx.sender(), amount: pay, remaining_credit: rem_after, timestamp_ms: clock.timestamp_ms() });
+            };
+            if (gain > pay) {
+                let credit = gain - pay;
+                acc.pending_credit = acc.pending_credit + credit;
+                event::emit(PnlCreditAccrued<Collat> { market_id: object::id(market), who: ctx.sender(), credited: credit, remaining_credit: acc.pending_credit, timestamp_ms: clock.timestamp_ms() });
+            };
         };
-        let _ = clock;
     }
 
     fun take_or_new_account<Collat>(market: &mut FuturesMarket<Collat>, who: address): Account<Collat> {
-        if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { Account { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0 } }
+        if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { Account { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0, pending_credit: 0 } }
     }
 
     fun store_account<Collat>(market: &mut FuturesMarket<Collat>, who: address, acc: Account<Collat>) {
         table::add(&mut market.accounts, who, acc);
     }
 
+    /// Claim pending realized PnL credits up to `max_amount` (0 = claim all available)
+    public fun claim_pnl_credit<Collat>(
+        market: &mut FuturesMarket<Collat>,
+        vault: &mut FeeVault,
+        clock: &Clock,
+        ctx: &mut TxContext,
+        max_amount: u64,
+    ) {
+        assert!(table::contains(&market.accounts, ctx.sender()), E_NO_ACCOUNT);
+        let mut acc = table::remove(&mut market.accounts, ctx.sender());
+        let want = if (max_amount == 0 || max_amount > acc.pending_credit) { acc.pending_credit } else { max_amount };
+        if (want > 0) {
+            let avail = fees::pnl_available<Collat>(vault);
+            let pay = if (want <= avail) { want } else { avail };
+            if (pay > 0) {
+                let coin_gain = fees::pnl_withdraw<Collat>(vault, pay, ctx);
+                acc.collat.join(coin::into_balance(coin_gain));
+                acc.pending_credit = acc.pending_credit - pay;
+                event::emit(PnlCreditPaid<Collat> { market_id: object::id(market), who: ctx.sender(), amount: pay, remaining_credit: acc.pending_credit, timestamp_ms: clock.timestamp_ms() });
+            };
+        };
+        store_account<Collat>(market, ctx.sender(), acc);
+    }
+
     fun current_price_1e6(series: &FuturesSeries, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock): u64 {
         uoracle::get_price_for_symbol(reg, clock, &series.symbol, agg)
+    }
+
+    fun gated_price_and_update<Collat>(market: &mut FuturesMarket<Collat>, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock): u64 {
+        let cur = current_price_1e6(&market.series, reg, agg, clock);
+        let last = market.last_price_1e6;
+        if (last > 0 && market.max_deviation_bps > 0) {
+            let hi = if (cur >= last) { cur } else { last };
+            let lo = if (cur >= last) { last } else { cur };
+            let diff = hi - lo;
+            let dev_bps: u64 = ((diff as u128) * (fees::bps_denom() as u128) / (last as u128)) as u64;
+            assert!(dev_bps <= market.max_deviation_bps, E_PRICE_DEVIATION);
+        };
+        market.last_price_1e6 = cur;
+        cur
     }
 
     fun clone_string(s: &String): String {

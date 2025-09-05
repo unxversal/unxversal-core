@@ -1,6 +1,7 @@
 import type { SuiClient } from '@mysten/sui/client';
 import { devInspectOk, makeLoop, type Keeper, type TxExecutor } from '../../protocols/common';
 import { PerpetualsClient } from '../../protocols/perpetuals/client';
+import { readRiskCaps, clampOrderQtyByCaps } from '../../lib/riskCaps';
 import { buildDeepbookPublicIndexer } from '../../lib/indexer';
 import { db } from '../../lib/storage';
 
@@ -60,11 +61,13 @@ export function createPerpsTrendMakerKeeper(client: SuiClient, sender: string, e
     const uptrend = eFast > eSlow;
     const net = await estimateNetPosition();
 
+    const caps = await readRiskCaps(client, (import.meta as any).env.VITE_UNXV_PKG, (cfg as any).vaultId || '');
+    const adjQty = clampOrderQtyByCaps(cfg.qty, caps);
     if (uptrend && net <= 0) {
-      const tx = perp.openLong({ marketId: cfg.marketId, oracleRegistryId: cfg.oracleRegistryId, aggregatorId: cfg.aggregatorId, feeConfigId: cfg.feeConfigId, feeVaultId: cfg.feeVaultId, stakingPoolId: cfg.stakingPoolId, qty: cfg.qty });
+      const tx = perp.openLong({ marketId: cfg.marketId, oracleRegistryId: cfg.oracleRegistryId, aggregatorId: cfg.aggregatorId, feeConfigId: cfg.feeConfigId, feeVaultId: cfg.feeVaultId, stakingPoolId: cfg.stakingPoolId, qty: adjQty });
       if (await devInspectOk(client, sender, tx)) await exec(tx);
     } else if (!uptrend && net >= 0) {
-      const tx = perp.openShort({ marketId: cfg.marketId, oracleRegistryId: cfg.oracleRegistryId, aggregatorId: cfg.aggregatorId, feeConfigId: cfg.feeConfigId, feeVaultId: cfg.feeVaultId, stakingPoolId: cfg.stakingPoolId, qty: cfg.qty });
+      const tx = perp.openShort({ marketId: cfg.marketId, oracleRegistryId: cfg.oracleRegistryId, aggregatorId: cfg.aggregatorId, feeConfigId: cfg.feeConfigId, feeVaultId: cfg.feeVaultId, stakingPoolId: cfg.stakingPoolId, qty: adjQty });
       if (await devInspectOk(client, sender, tx)) await exec(tx);
     }
   }
