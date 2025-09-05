@@ -11,7 +11,7 @@ export type StaticRangeConfig = {
 };
 
 export type StrategyConfig = {
-  kind: 'static-range' | 'amm-overlay' | 'vol-adaptive' | 'inventory-skew' | 'pairing' | 'trend' | 'oracle-anchored' | 'time-regime' | 'delta-hedged-maker' | 'covered-calls' | 'cash-secured-puts' | 'options-vol-seller' | 'options-calendar-diagonal';
+  kind: 'static-range' | 'amm-overlay' | 'vol-adaptive' | 'inventory-skew' | 'pairing' | 'trend' | 'oracle-anchored' | 'time-regime' | 'delta-hedged-maker' | 'covered-calls' | 'cash-secured-puts' | 'options-vol-seller' | 'options-calendar-diagonal' | 'options-gamma-scalper' | 'options-skew-arb' | 'perps-auto' | 'futures-auto' | 'gas-futures-auto';
   dex: {
     poolId: string;
     balanceManagerId: string;
@@ -108,6 +108,13 @@ export type StrategyConfig = {
       maxHedgeQtyPerAction: number;
     };
   };
+  // Options strategies
+  coveredCalls?: CoveredCallsConfig;
+  cashSecuredPuts?: CashSecuredPutsConfig;
+  optionsVolSeller?: OptionsVolSellerConfig;
+  optionsCalendarDiagonal?: OptionsCalendarDiagonalConfig;
+  optionsGammaScalper?: OptionsGammaScalperConfig;
+  optionsSkewArb?: OptionsSkewArbConfig;
 };
 
 export type OptionsBaseConfig = {
