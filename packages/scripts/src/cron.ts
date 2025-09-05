@@ -140,15 +140,11 @@ async function oracleSetMaxAge(seconds: number): Promise<void> {
 async function runCron(): Promise<void> {
   logger.info(`Cron started on ${NETWORK}`);
   for (;;) {
-    // 1) Update oracle feeds (Switchboard)
-    await updateSwitchboardFeeds();
-
-    // 2) Sweep expired options orders
-    await sweepExpiredOptions();
-
-    // 3) Apply funding (if configured)
-    await applyPerpFunding();
-
+    await Promise.allSettled([
+      (async () => { await updateSwitchboardFeeds(); })(),
+      (async () => { await sweepExpiredOptions(); })(),
+      (async () => { await applyPerpFunding(); })(),
+    ]);
     await sleep(CRON_SLEEP_MS);
   }
 }

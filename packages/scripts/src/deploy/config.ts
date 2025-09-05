@@ -107,6 +107,10 @@ export type DeployConfig = {
     unxvFeeCoinId: string;
     tickSize: number; lotSize: number; minSize: number;
   }>;
+  vaults?: Array<{
+    asset: TypeTag;
+    caps?: { maxOrderSizeBase?: number; maxInventoryTiltBps?: number; minDistanceBps?: number; paused?: boolean };
+  }>;
 };
 
 export const deployConfig: DeployConfig = {
@@ -133,4 +137,5 @@ export const deployConfig: DeployConfig = {
   gasFutures: [],
   perpetuals: [],
   dexPools: [],
+  vaults: [],
 };

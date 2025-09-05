@@ -525,6 +525,17 @@ export async function main(): Promise<void> {
   await deployPerpetuals(client, deployConfig, keypair, summary);
   await deployDexPools(client, deployConfig, keypair, summary);
 
+  // Create vaults (optional)
+  if (deployConfig.vaults?.length) {
+    for (const v of deployConfig.vaults) {
+      const id = await createVault(client, deployConfig, keypair, v.asset);
+      if (id) {
+        summary.vaults.push({ id, asset: v.asset });
+        if (v.caps) await setVaultCaps(client, deployConfig, keypair, id, v.caps);
+      }
+    }
+  }
+
   await writeDeploymentMarkdown(summary);
 
   logger.info('Deploy completed');

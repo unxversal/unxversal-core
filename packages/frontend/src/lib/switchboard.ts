@@ -1,15 +1,22 @@
-// Switchboard Surge streaming integration in one place.
-// Users configure API key and symbols client-side (localStorage); we initialize once and stream updates.
+// Switchboard price feeds using REST API (browser-compatible)
+// Users configure symbols client-side; we poll for updates or use server-sent events
 
-import * as sb from '@switchboard-xyz/on-demand';
 import { SWITCHBOARD_CONFIG } from './switchboard.config';
 
 export type SurgeUpdate = { data: { symbol: string; price: number; source_ts_ms?: number } };
 
 // Shared cache of latest prices
 let currentPrice: Record<string, { price: number; ts: number }> = {};
-let client: sb.Surge | null = null;
-let isWired = false;
+let eventSource: EventSource | null = null;
+let pollingInterval: NodeJS.Timeout | null = null;
+
+// Switchboard price feed IDs mapping (you'll need to get these from docs)
+const FEED_IDS: Record<string, string> = {
+  'BTC/USD': '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
+  'ETH/USD': '0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
+  'SOL/USD': '0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+  'SUI/USD': '0x50c67b3fd225db8912a424dd4baed60ffdde625ed2feaaf283724f9608fea266'
+};
 
 function getStoredApiKey(): string | null {
   // Prefer explicit config if provided
@@ -36,27 +43,121 @@ export function configureSurge({ apiKey, symbols }: { apiKey: string; symbols: s
   setStoredSymbols(symbols);
 }
 
-export async function initSurgeFromSettings(): Promise<void> {
-  const apiKey = getStoredApiKey();
-  if (!apiKey) return; // not configured yet
-  if (!client) client = new sb.Surge({ apiKey });
-  if (!isWired) {
-    client.on('update', (u: SurgeUpdate) => applyUpdate(u));
-    isWired = true;
+// Fetch latest prices via REST API
+async function fetchLatestPrices(symbols: string[]): Promise<void> {
+  const feedIds = symbols
+    .map(symbol => FEED_IDS[symbol])
+    .filter(Boolean);
+  
+  if (feedIds.length === 0) return;
+  
+  try {
+    const params = new URLSearchParams();
+    feedIds.forEach(id => params.append('ids[]', id));
+    
+    const response = await fetch(`https://hermes.pyth.network/v2/updates/price/latest?${params}`);
+    const data = await response.json();
+    
+    if (data.parsed) {
+      data.parsed.forEach((priceData: any) => {
+        // Find symbol for this feed ID
+        const symbol = Object.keys(FEED_IDS).find(key => FEED_IDS[key] === priceData.id);
+        if (symbol) {
+          const price = parseFloat(priceData.price.price) / Math.pow(10, Math.abs(priceData.price.expo));
+          applyUpdate({
+            data: {
+              symbol,
+              price,
+              source_ts_ms: priceData.price.publish_time * 1000
+            }
+          });
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Failed to fetch prices:', error);
   }
+}
+
+// Start streaming via Server-Sent Events
+async function startStreaming(symbols: string[]): Promise<void> {
+  if (eventSource) {
+    eventSource.close();
+  }
+
+  const feedIds = symbols
+    .map(symbol => FEED_IDS[symbol])
+    .filter(Boolean);
+  
+  if (feedIds.length === 0) return;
+
+  const params = new URLSearchParams();
+  feedIds.forEach(id => params.append('ids[]', id));
+  
+  try {
+    eventSource = new EventSource(`https://hermes.pyth.network/v2/updates/price/stream?${params}`);
+    
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.parsed) {
+          data.parsed.forEach((priceData: any) => {
+            const symbol = Object.keys(FEED_IDS).find(key => FEED_IDS[key] === priceData.id);
+            if (symbol) {
+              const price = parseFloat(priceData.price.price) / Math.pow(10, Math.abs(priceData.price.expo));
+              applyUpdate({
+                data: {
+                  symbol,
+                  price,
+                  source_ts_ms: priceData.price.publish_time * 1000
+                }
+              });
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Failed to parse price update:', error);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error('EventSource error:', error);
+      // Fallback to polling on stream error
+      startPolling(symbols);
+    };
+  } catch (error) {
+    console.error('Failed to start streaming:', error);
+    // Fallback to polling
+    startPolling(symbols);
+  }
+}
+
+// Fallback polling method
+function startPolling(symbols: string[]): void {
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+  }
+  
+  // Poll every 5 seconds
+  pollingInterval = setInterval(() => {
+    fetchLatestPrices(symbols);
+  }, 5000);
+  
+  // Fetch immediately
+  fetchLatestPrices(symbols);
+}
+
+export async function initSurgeFromSettings(): Promise<void> {
   const symbols = getStoredSymbols();
-  await client.connectAndSubscribe(symbols.map((s) => ({ symbol: s })));
+  if (symbols.length === 0) return;
+  
+  // Try streaming first, fall back to polling
+  await startStreaming(symbols);
 }
 
 export async function subscribeSymbols(symbols: string[]): Promise<void> {
   setStoredSymbols(symbols);
-  if (!client) {
-    const apiKey = getStoredApiKey();
-    if (!apiKey) return;
-    client = new sb.Surge({ apiKey });
-    if (!isWired) { client.on('update', (u: SurgeUpdate) => applyUpdate(u)); isWired = true; }
-  }
-  await client.connectAndSubscribe(symbols.map((s) => ({ symbol: s })));
+  await startStreaming(symbols);
 }
 
 export function getLatestPrice(symbol: string): number | null {
@@ -73,4 +174,13 @@ export function applyUpdate(u: SurgeUpdate): void {
   currentPrice[u.data.symbol] = { price: u.data.price, ts: u.data.source_ts_ms ?? Date.now() };
 }
 
-
+export function cleanup(): void {
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
+}
