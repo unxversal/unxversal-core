@@ -11,7 +11,10 @@ export type StaticRangeConfig = {
 };
 
 export type StrategyConfig = {
-  kind: 'static-range' | 'amm-overlay' | 'vol-adaptive' | 'inventory-skew' | 'pairing' | 'trend' | 'oracle-anchored' | 'time-regime' | 'delta-hedged-maker' | 'covered-calls' | 'cash-secured-puts' | 'options-vol-seller' | 'options-calendar-diagonal' | 'options-gamma-scalper' | 'options-skew-arb' | 'perps-auto' | 'futures-auto' | 'gas-futures-auto';
+  kind: 'static-range' | 'amm-overlay' | 'vol-adaptive' | 'inventory-skew' | 'pairing' | 'trend' | 'oracle-anchored' | 'time-regime' | 'delta-hedged-maker'
+    | 'covered-calls' | 'cash-secured-puts' | 'options-vol-seller' | 'options-calendar-diagonal'
+    | 'options-sweep' | 'perps-auto' | 'perps-basis-osc' | 'perps-trend' | 'perps-cash-carry'
+    | 'futures-basis-mr' | 'futures-term-roll' | 'futures-seasonal' | 'gas-futures-basis';
   dex: {
     poolId: string;
     balanceManagerId: string;
@@ -108,13 +111,16 @@ export type StrategyConfig = {
       maxHedgeQtyPerAction: number;
     };
   };
-  // Options strategies
-  coveredCalls?: CoveredCallsConfig;
-  cashSecuredPuts?: CashSecuredPutsConfig;
-  optionsVolSeller?: OptionsVolSellerConfig;
-  optionsCalendarDiagonal?: OptionsCalendarDiagonalConfig;
-  optionsGammaScalper?: OptionsGammaScalperConfig;
-  optionsSkewArb?: OptionsSkewArbConfig;
+  // Derivatives strategy blocks (optional)
+  optionsSweep?: OptionsSweepConfig;
+  perpsAuto?: PerpsAutoConfig;
+  perpsBasisOsc?: PerpsBasisOscConfig;
+  perpsTrend?: PerpsTrendConfig;
+  perpsCashCarry?: PerpsCarryConfig;
+  futuresBasisMR?: FuturesBasisMRConfig;
+  futuresTermRoll?: FuturesTermRollConfig;
+  futuresSeasonal?: FuturesSeasonalEventConfig;
+  gasFuturesBasis?: GasFuturesBasisConfig;
 };
 
 export type OptionsBaseConfig = {
@@ -179,6 +185,126 @@ export type OptionsSkewArbConfig = OptionsBaseConfig & {
   limitPremiumQuoteCall: bigint;
   limitPremiumQuotePut: bigint;
   refreshSecs: number;
+};
+
+export type OptionsSweepConfig = {
+  pkg: string;
+  marketId: string;
+  seriesKeys: bigint[];
+  sweepMax?: number;
+  refreshSecs?: number;
+};
+
+// Perpetuals
+export type PerpsAutoConfig = {
+  pkg: string;
+  marketId: string;
+  oracleRegistryId: string;
+  aggregatorId: string;
+  feeVaultId: string;
+  maxVictims?: number;
+  refreshSecs?: number;
+  fundingEnabled?: boolean; // off-chain delta provider required to actually send updates
+};
+
+export type PerpsBasisOscConfig = {
+  pkg: string;
+  marketId: string;
+  oracleRegistryId: string;
+  aggregatorId: string;
+  feeConfigId: string;
+  feeVaultId: string;
+  stakingPoolId: string;
+  dexPoolId: string;
+  deepbookIndexerUrl: string;
+  entryBps: number;
+  exitBps?: number;
+  qty: bigint;
+  refreshSecs?: number;
+};
+
+export type PerpsTrendConfig = {
+  pkg: string;
+  marketId: string;
+  oracleRegistryId: string;
+  aggregatorId: string;
+  feeConfigId: string;
+  feeVaultId: string;
+  stakingPoolId: string;
+  deepbookIndexerUrl: string;
+  poolIdForMid: string;
+  emaFast: number;
+  emaSlow: number;
+  qty: bigint;
+  refreshSecs?: number;
+};
+
+export type PerpsCarryConfig = {
+  pkg: string;
+  marketId: string;
+  oracleRegistryId: string;
+  aggregatorId: string;
+  feeConfigId: string;
+  feeVaultId: string;
+  stakingPoolId: string;
+  dex: {
+    pkg: string;
+    poolId: string;
+    balanceManagerId: string;
+    tradeProofId: string;
+    feeConfigId: string;
+    feeVaultId: string;
+    deepbookIndexerUrl: string;
+  };
+  targetNotionalQuote: number;
+  refreshSecs?: number;
+};
+
+// Futures
+export type FuturesBasisMRConfig = {
+  pkg: string;
+  marketId: string;
+  oracleRegistryId: string;
+  aggregatorId: string;
+  feeConfigId: string;
+  feeVaultId: string;
+  stakingPoolId: string;
+  dexPoolId: string;
+  deepbookIndexerUrl: string;
+  entryBps: number;
+  qty: bigint;
+  refreshSecs?: number;
+};
+
+export type FuturesTermRollConfig = {
+  pkg: string;
+  front: { marketId: string; oracleRegistryId: string; aggregatorId: string; feeConfigId: string; feeVaultId: string; stakingPoolId: string };
+  back: { marketId: string; oracleRegistryId: string; aggregatorId: string; feeConfigId: string; feeVaultId: string; stakingPoolId: string };
+  qty: bigint;
+  refreshSecs?: number;
+};
+
+export type FuturesSeasonalEventConfig = {
+  pkg: string;
+  marketId: string;
+  oracleRegistryId: string;
+  aggregatorId: string;
+  feeConfigId: string;
+  feeVaultId: string;
+  stakingPoolId: string;
+  schedule: Array<{ startMs: number; endMs: number; bias: 'long' | 'short'; qty: bigint }>;
+  refreshSecs?: number;
+};
+
+// Gas Futures
+export type GasFuturesBasisConfig = {
+  pkg: string;
+  marketId: string;
+  feeVaultId: string;
+  realizedGasOracleUrl: string;
+  entryBps: number;
+  qty: bigint;
+  refreshSecs?: number;
 };
 
 

@@ -27,6 +27,7 @@ module unxversal::vaults {
     const E_NOT_OWNER: u64 = 1;
     const E_ZERO_AMOUNT: u64 = 2;
     const E_INVALID_CAPS: u64 = 3;
+    // Reserved error codes if we later add on-chain guarded routing
 
     /// Strategy vault for a single asset T
     public struct Vault<phantom T> has key, store {
@@ -97,6 +98,8 @@ module unxversal::vaults {
         by: address,
         timestamp_ms: u64,
     }
+
+    // Removed on-chain guarded routing per design: keepers run under vault owner key
 
     fun default_caps(): RiskCaps {
         RiskCaps { max_order_size_base: 0, max_inventory_tilt_bps: 7000, min_distance_bps: 5, paused: false }
@@ -228,6 +231,8 @@ module unxversal::vaults {
         v.risk_caps.paused = p;
         event::emit(RiskCapsUpdated { vault_id: object::id(v), caps: v.risk_caps, by: ctx.sender(), timestamp_ms: sui::clock::timestamp_ms(clock) });
     }
+
+    // (Guarded DEX wrappers removed per design; client-side checks + owner-only execution suffice.)
 
     /// Internal share helpers
     fun get_shares(tbl: &Table<address, u128>, who: address): u128 {
