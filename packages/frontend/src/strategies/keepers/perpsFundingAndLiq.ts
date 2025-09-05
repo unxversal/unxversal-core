@@ -2,6 +2,7 @@ import type { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { devInspectOk, makeLoop, type Keeper, type TxExecutor } from '../../protocols/common';
 import { db } from '../../lib/storage';
+import { readRiskCaps, clampOrderQtyByCaps } from '../../lib/riskCaps';
 
 export type PerpsAutoConfig = {
   pkg: string;
@@ -20,6 +21,8 @@ export function createPerpsAutoKeeper(client: SuiClient, sender: string, exec: T
   const pkg = cfg.pkg;
 
   async function step(): Promise<void> {
+    const caps = (cfg as any).vaultId ? await readRiskCaps(client, (import.meta as any).env.VITE_UNXV_PKG, (cfg as any).vaultId) : null;
+    if (caps?.paused) return;
     // Funding
     const f = cfg.fundingDelta1e6 ? await cfg.fundingDelta1e6() : null;
     if (f && f.delta1e6 > 0) {
@@ -35,7 +38,8 @@ export function createPerpsAutoKeeper(client: SuiClient, sender: string, exec: T
       const victim: string | undefined = p.who;
       if (!victim || seen.has(victim)) continue;
       seen.add(victim);
-      const qty: bigint = BigInt(Math.max(1, Number(p.new_long || 0) + Number(p.new_short || 0) > 0 ? Math.ceil((Number(p.new_long || 0) + Number(p.new_short || 0)) * 0.1) : 1));
+      const baseQty: bigint = BigInt(Math.max(1, Number(p.new_long || 0) + Number(p.new_short || 0) > 0 ? Math.ceil((Number(p.new_long || 0) + Number(p.new_short || 0)) * 0.1) : 1));
+      const qty = clampOrderQtyByCaps(baseQty, caps);
       const tx = new Transaction();
       tx.moveCall({ target: `${pkg}::perpetuals::liquidate`, arguments: [tx.object(cfg.marketId), tx.pure.address(victim), tx.object(cfg.oracleRegistryId), tx.object(cfg.aggregatorId), tx.object(cfg.feeVaultId), tx.object('0x6'), tx.object('0x6'), tx.pure.u64(qty)] });
       if (await devInspectOk(client, sender, tx)) await exec(tx);

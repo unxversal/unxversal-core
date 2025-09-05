@@ -3,6 +3,8 @@ import { Transaction } from '@mysten/sui/transactions';
 import type { StrategyConfig } from '../config';
 import { devInspectOk, makeLoop, type Keeper, type TxExecutor } from '../../protocols/common';
 import { buildDeepbookPublicIndexer } from '../../lib/indexer';
+import { clampOrderQtyByCaps, readRiskCaps } from '../../lib/riskCaps';
+import { getLatestPrice } from '../../lib/switchboard';
 
 function u64(n: number | bigint): bigint { return BigInt(Math.floor(Number(n))); }
 
@@ -14,9 +16,19 @@ export function createVolAdaptiveKeeper(client: SuiClient, sender: string, exec:
     const now = Date.now();
     const windowMs = p.lookbackMinutes * 60_000;
     const start = now - windowMs;
-    const trades = await db.trades(cfg.dex.poolId, { start_time: start, end_time: now, limit: 500 });
     const mids: number[] = [];
-    for (const t of trades) { mids.push(Number(t.price)); }
+    if ((cfg as any).marketData?.switchboardSymbol) {
+      // Use switchboard latest as base point and synthesize small history
+      const px = getLatestPrice((cfg as any).marketData.switchboardSymbol);
+      if (px && px > 0) {
+        // Create a flat series as fallback to avoid zero sigma; real impl can maintain a ring buffer
+        for (let i = 0; i < 10; i++) mids.push(px);
+      }
+    }
+    if (mids.length === 0) {
+      const trades = await db.trades(cfg.dex.poolId, { start_time: start, end_time: now, limit: 500 });
+      for (const t of trades) { mids.push(Number(t.price)); }
+    }
     return mids;
   }
 
@@ -38,9 +50,10 @@ export function createVolAdaptiveKeeper(client: SuiClient, sender: string, exec:
   }
 
   async function step(): Promise<void> {
+    const caps = cfg.vaultId ? await readRiskCaps(client, (import.meta as any).env.VITE_UNXV_PKG, cfg.vaultId) : null;
+    if (caps?.paused) return;
     const mids = await getMids();
     const sigma = estimateSigma(mids);
-    const bandBps = computeBand(sigma);
     if (!mids.length) return;
     const mid = u64(Math.floor(mids[mids.length - 1]));
     const stepBps = BigInt(p.stepBps);
@@ -51,8 +64,14 @@ export function createVolAdaptiveKeeper(client: SuiClient, sender: string, exec:
     for (let i = 1n; i <= levels; i++) {
       const off = (mid * (i * stepBps)) / 10_000n;
       const pb = mid - off; const pa = mid + off;
-      const qb = notional / (pb === 0n ? 1n : pb);
-      const qa = notional / (pa === 0n ? 1n : pa);
+      const qb = clampOrderQtyByCaps(notional / (pb === 0n ? 1n : pb), caps);
+      const qa = clampOrderQtyByCaps(notional / (pa === 0n ? 1n : pa), caps);
+      // Enforce min-distance vs mid if provided
+      if (caps?.min_distance_bps && Number(caps.min_distance_bps) > 0) {
+        const distB = pb > mid ? Number(((pb - mid) * 10_000n) / mid) : Number(((mid - pb) * 10_000n) / mid);
+        const distA = pa > mid ? Number(((pa - mid) * 10_000n) / mid) : Number(((mid - pa) * 10_000n) / mid);
+        if (distB < caps.min_distance_bps && distA < caps.min_distance_bps) continue;
+      }
       tx.moveCall({ target: `${import.meta.env.VITE_UNXV_PKG}::dex::place_limit_order`, arguments: [
         tx.object(cfg.dex.poolId), tx.object(cfg.dex.balanceManagerId), tx.object(cfg.dex.tradeProofId), tx.object(cfg.dex.feeConfigId), tx.object(cfg.dex.feeVaultId),
         tx.pure.u64(cid++), tx.pure.u8(0), tx.pure.u8(0), tx.pure.u64(pb), tx.pure.u64(qb), tx.pure.bool(true), tx.pure.bool(false), tx.pure.u64(BigInt(Math.floor(Date.now()/1000)+120)), tx.object('0x6')

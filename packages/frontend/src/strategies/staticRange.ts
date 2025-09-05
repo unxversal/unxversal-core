@@ -3,6 +3,7 @@ import { Transaction } from '@mysten/sui/transactions';
 import type { StrategyConfig } from './config';
 import { devInspectOk, makeLoop, type Keeper, type TxExecutor } from '../protocols/common';
 import { buildDeepbookPublicIndexer } from '../lib/indexer';
+import { getLatestPrice } from '../lib/switchboard';
 import { clampOrderQtyByCaps, readRiskCaps } from '../lib/riskCaps';
 
 function u64(n: number | bigint): bigint { return BigInt(Math.floor(Number(n))); }
@@ -13,6 +14,10 @@ export function createStaticRangeKeeper(client: SuiClient, sender: string, exec:
 
   const db = buildDeepbookPublicIndexer(cfg.dex.deepbookIndexerUrl);
   async function priceMid(): Promise<bigint> {
+    if (cfg.staticRange.midSource === 'switchboard' && cfg.marketData?.switchboardSymbol) {
+      const px = getLatestPrice(cfg.marketData.switchboardSymbol);
+      if (px && px > 0) return u64(Math.floor(px));
+    }
     const ob = await db.orderbook(cfg.dex.poolId, { level: 1, depth: 1 });
     if (ob.bids?.length && ob.asks?.length) {
       const bestBid = BigInt(ob.bids[0][0]);
@@ -42,8 +47,18 @@ export function createStaticRangeKeeper(client: SuiClient, sender: string, exec:
 
   async function step(): Promise<void> {
     const mid = await priceMid();
-    const { bids, asks } = buildLadder(mid);
+    let { bids, asks } = buildLadder(mid);
     const caps = cfg.vaultId ? await readRiskCaps(client, (import.meta as any).env.VITE_UNXV_PKG, cfg.vaultId) : null;
+    if (caps?.paused) return;
+    if (caps?.min_distance_bps && Number(caps.min_distance_bps) > 0) {
+      // Filter any legs too close to mid
+      const filterLegs = (price: bigint) => {
+        const dist = price > mid ? Number(((price - mid) * 10_000n) / mid) : Number(((mid - price) * 10_000n) / mid);
+        return dist >= caps.min_distance_bps;
+      };
+      bids = bids.filter((l) => filterLegs(l.price));
+      asks = asks.filter((l) => filterLegs(l.price));
+    }
     const tx = new Transaction();
     // Place a small subset per tick to avoid size; maker-only enforcement should be in Move
     let cid = BigInt(Date.now());

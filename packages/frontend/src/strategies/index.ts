@@ -25,5 +25,7 @@ export { createPerpsTrendMakerKeeper } from './keepers/perpsTrendMaker';
 export { createFuturesSeasonalEventKeeper } from './keepers/futuresSeasonalEvent';
 export { createOptionsGammaScalperKeeper } from './keepers/optionsGammaScalper';
 export { createOptionsSkewArbKeeper } from './keepers/optionsSkewArb';
+export { StrategyRegistry } from './registry.ts';
+export { KeeperManager } from './keeperManager.ts';
 
 

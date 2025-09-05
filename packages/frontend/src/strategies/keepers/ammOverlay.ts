@@ -42,8 +42,17 @@ export function createAmmOverlayKeeper(client: SuiClient, sender: string, exec: 
   async function step(): Promise<void> {
     const mid = await getMid();
     if (mid === 0n) return;
-    const { bids, asks } = ladder(mid);
+    let { bids, asks } = ladder(mid);
     const caps = cfg.vaultId ? await readRiskCaps(client, (import.meta as any).env.VITE_UNXV_PKG, cfg.vaultId) : null;
+    if (caps?.paused) return;
+    if (caps?.min_distance_bps && Number(caps.min_distance_bps) > 0) {
+      const filterLegs = (price: bigint) => {
+        const dist = price > mid ? Number(((price - mid) * 10_000n) / mid) : Number(((mid - price) * 10_000n) / mid);
+        return dist >= caps.min_distance_bps;
+      };
+      bids = bids.filter((l) => filterLegs(l.price));
+      asks = asks.filter((l) => filterLegs(l.price));
+    }
     const tx = new Transaction();
     let cid = BigInt(Date.now());
     const argsCommon = [cfg.dex.poolId, cfg.dex.balanceManagerId, cfg.dex.tradeProofId, cfg.dex.feeConfigId, cfg.dex.feeVaultId] as const;

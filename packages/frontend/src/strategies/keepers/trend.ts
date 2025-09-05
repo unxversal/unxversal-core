@@ -3,6 +3,7 @@ import { Transaction } from '@mysten/sui/transactions';
 import type { StrategyConfig } from '../config';
 import { devInspectOk, makeLoop, type Keeper, type TxExecutor } from '../../protocols/common';
 import { buildDeepbookPublicIndexer } from '../../lib/indexer';
+import { clampOrderQtyByCaps, readRiskCaps } from '../../lib/riskCaps';
 
 function ema(arr: number[], n: number): number {
   if (arr.length === 0) return 0;
@@ -21,6 +22,8 @@ export function createTrendKeeper(client: SuiClient, sender: string, exec: TxExe
     const trades = await db.trades(cfg.dex.poolId, { start_time: now - 15 * 60_000, end_time: now, limit: 500 });
     const px: number[] = trades.map((t: any) => Number(t.price));
     if (px.length < Math.max(p.emaFast, p.emaSlow)) return;
+    const caps = cfg.vaultId ? await readRiskCaps(client, (import.meta as any).env.VITE_UNXV_PKG, cfg.vaultId) : null;
+    if (caps?.paused) return;
     const eFast = ema(px, p.emaFast);
     const eSlow = ema(px, p.emaSlow);
     const uptrend = eFast > eSlow;
@@ -33,8 +36,13 @@ export function createTrendKeeper(client: SuiClient, sender: string, exec: TxExe
     for (let i = 1n; i <= levels; i++) {
       const off = (mid * (i * levelStep)) / 10_000n;
       const pb = mid - off; const pa = mid + off;
-      const qb = notional / (pb === 0n ? 1n : pb);
-      const qa = notional / (pa === 0n ? 1n : pa);
+      const qb = clampOrderQtyByCaps(notional / (pb === 0n ? 1n : pb), caps);
+      const qa = clampOrderQtyByCaps(notional / (pa === 0n ? 1n : pa), caps);
+      if (caps?.min_distance_bps && Number(caps.min_distance_bps) > 0) {
+        const distB = pb > mid ? Number(((pb - mid) * 10_000n) / mid) : Number(((mid - pb) * 10_000n) / mid);
+        const distA = pa > mid ? Number(((pa - mid) * 10_000n) / mid) : Number(((mid - pa) * 10_000n) / mid);
+        if (distB < caps.min_distance_bps && distA < caps.min_distance_bps) continue;
+      }
       // In uptrend, prefer selling into strength (asks tighter via stepFastBps)
       tx.moveCall({ target: `${import.meta.env.VITE_UNXV_PKG}::dex::place_limit_order`, arguments: [
         tx.object(cfg.dex.poolId), tx.object(cfg.dex.balanceManagerId), tx.object(cfg.dex.tradeProofId), tx.object(cfg.dex.feeConfigId), tx.object(cfg.dex.feeVaultId),

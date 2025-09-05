@@ -11,4 +11,14 @@ export function getContracts(): ContractsEnv {
   };
 }
 
+export type SwitchboardSettings = {
+  symbols: string[];
+};
+
+export function loadSwitchboardSettings(): SwitchboardSettings {
+  const s = String(import.meta.env.VITE_SURGE_SYMBOLS ?? 'SUI/USD');
+  const symbols = s.split(',').map((x) => x.trim()).filter(Boolean);
+  return { symbols };
+}
+
 

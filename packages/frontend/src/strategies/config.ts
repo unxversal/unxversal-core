@@ -1,7 +1,9 @@
 export type PriceSource = 'mid' | 'oracle' | 'twap';
+export type MidSource = 'orderbook' | 'switchboard';
 
 export type StaticRangeConfig = {
   priceSource: PriceSource;
+  midSource?: MidSource;         // user choice for mid source
   bandBps: number;              // ± band in bps
   levelsPerSide: number;        // number of ticks per side
   stepBps: number;              // spacing between ticks
@@ -25,6 +27,10 @@ export type StrategyConfig = {
   };
   // Optional: associated vault id to read risk caps
   vaultId?: string;
+  // Optional: off-chain market data source preferences
+  marketData?: {
+    switchboardSymbol?: string; // e.g., 'SUI/USD'
+  };
   staticRange: StaticRangeConfig;
   ammOverlay?: {
     bandBps: number;

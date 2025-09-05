@@ -579,12 +579,12 @@ module unxversal::futures {
         let total_short = market.total_short_qty as u128;
         let oi = (market.total_long_qty as u128) + (market.total_short_qty as u128);
         if (market.imbalance_surcharge_bps_max == 0 || oi == 0) {
-            return required_initial_margin_bps<Collat>(acc, price_1e6, market.series.contract_size, base);
+            return required_initial_margin_bps<Collat>(acc, price_1e6, market.series.contract_size, base)
         };
         let net = if (total_long >= total_short) { total_long - total_short } else { total_short - total_long };
         let dev_bps: u64 = ((net * (fees::bps_denom() as u128) / oi) as u64);
         if (dev_bps <= market.imbalance_threshold_bps) {
-            return required_initial_margin_bps<Collat>(acc, price_1e6, market.series.contract_size, base);
+            return required_initial_margin_bps<Collat>(acc, price_1e6, market.series.contract_size, base)
         };
         let excess_bps: u64 = dev_bps - market.imbalance_threshold_bps;
         // scale surcharge proportionally up to max at 100% imbalance

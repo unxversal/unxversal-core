@@ -7,11 +7,20 @@ import { startTrackers } from './lib/indexer'
 import { db } from './lib/storage'
 import { getContracts } from './lib/env'
 import { allProtocolTrackers } from './protocols'
+import { KeeperManager } from './strategies/keeperManager.ts'
+import { buildKeeperFromStrategy } from './strategies/factory.ts'
+import { SuiClient } from '@mysten/sui/client'
+import { Transaction } from '@mysten/sui/transactions'
+import { initSurgeFromSettings } from './lib/switchboard'
+import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
 
 function App() {
   const [network, setNetwork] = useState<'testnet' | 'mainnet'>('testnet')
   const [started, setStarted] = useState(false)
+  const [surgeReady, setSurgeReady] = useState(false)
   const { networkConfig } = makeDappNetworks()
+  const account = useCurrentAccount()
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction()
 
   useEffect(() => {
     if (started) return
@@ -23,6 +32,35 @@ function App() {
     setStarted(true)
     startTrackers(client, trackers).catch(() => {})
   }, [network, started])
+
+  // Auto-resume ephemeral keepers in this tab (leader) after wallet connects
+  useEffect(() => {
+    // crude leader election using BroadcastChannel
+    const bc = new BroadcastChannel('uxv-keepers')
+    let isLeader = true
+    let pong = false
+    bc.onmessage = (ev) => { if (ev.data === 'pong') pong = true }
+    bc.postMessage('ping')
+    setTimeout(async () => {
+      if (pong) { isLeader = false }
+      if (!isLeader || !account?.address) return
+      const rpc = defaultRpc(network)
+      const sui = createSuiClient(rpc)
+      const exec = async (tx: Transaction) => {
+        await signAndExecute({ transactionBlock: tx, options: { showEffects: true } })
+      }
+      const sender = account.address
+      const km = new KeeperManager()
+      await km.autoResume((cfg) => buildKeeperFromStrategy(sui as unknown as SuiClient, sender, exec, cfg)!)
+    }, 300)
+    return () => { bc.close() }
+  }, [network, account?.address, signAndExecute])
+
+  // Switchboard init from stored settings
+  useEffect(() => {
+    if (surgeReady) return
+    initSurgeFromSettings().then(() => setSurgeReady(true)).catch(() => {})
+  }, [surgeReady])
 
   return (
     <SuiClientProvider networks={networkConfig} network={network} onNetworkChange={(n) => setNetwork(n as 'testnet' | 'mainnet')}>
