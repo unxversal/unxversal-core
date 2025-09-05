@@ -32,6 +32,7 @@ module unxversal::lending {
     const E_HEALTH_VIOLATION: u64 = 5;
     const E_NO_SHARES: u64 = 6;
     const E_INSUFFICIENT_SHARES: u64 = 7;
+    const E_FLASH_UNDERPAY: u64 = 8;
 
     /// 1e18 scalar for indices
     const WAD: u128 = 1_000_000_000_000_000_000;
@@ -68,6 +69,8 @@ module unxversal::lending {
         liquidation_collateral_bps: u64,
         /// Liquidation bonus (bps) given to liquidator on seized shares
         liquidation_bonus_bps: u64,
+        /// Flash loan fee in basis points (applied to principal, immediate repayment required)
+        flash_fee_bps: u64,
         /// Interest model
         irm: InterestRateModel,
         /// Timestamp ms last accrual
@@ -91,6 +94,12 @@ module unxversal::lending {
     public struct Liquidated has copy, drop { borrower: address, liquidator: address, repay_amount: u64, shares_seized: u128, bonus_bps: u64, timestamp_ms: u64 }
     public struct Accrued has copy, drop { interest_index: u128, dt_ms: u64, new_reserves: u64, timestamp_ms: u64 }
     public struct ParamsUpdated has copy, drop { reserve_bps: u64, collat_bps: u64, liq_bonus_bps: u64, timestamp_ms: u64 }
+    public struct FlashFeeUpdated has copy, drop { flash_fee_bps: u64, timestamp_ms: u64 }
+    public struct FlashLoan has copy, drop { who: address, amount: u64, fee: u64, timestamp_ms: u64 }
+    public struct FlashRepaid has copy, drop { who: address, principal: u64, fee: u64, timestamp_ms: u64 }
+
+    /// Non-storable, non-droppable capability enforcing same-transaction flash repay
+    public struct FlashLoanCap<phantom T> { principal: u64, fee: u64 }
 
     /// Initialize a new lending pool for asset T
     public fun init_pool<T>(
@@ -117,6 +126,7 @@ module unxversal::lending {
             collateral_factor_bps,
             liquidation_collateral_bps,
             liquidation_bonus_bps,
+            flash_fee_bps: 0,
             irm,
             last_accrued_ms: sui::tx_context::epoch_timestamp_ms(ctx),
             total_supply_shares: 0,
@@ -149,6 +159,13 @@ module unxversal::lending {
     ) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         pool.irm = InterestRateModel { base_rate_bps, multiplier_bps, jump_multiplier_bps, kink_util_bps };
+    }
+
+    /// Admin: set flash loan fee (bps)
+    public fun set_flash_fee<T>(reg_admin: &AdminRegistry, pool: &mut LendingPool<T>, flash_fee_bps: u64, clock: &Clock, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        pool.flash_fee_bps = flash_fee_bps;
+        event::emit(FlashFeeUpdated { flash_fee_bps, timestamp_ms: sui::clock::timestamp_ms(clock) });
     }
 
     /// Public: deposit liquidity and receive shares (acts as collateral)
@@ -319,6 +336,39 @@ module unxversal::lending {
         add_shares(&mut pool.supplier_shares, ctx.sender(), actual_seize);
         event::emit(Liquidated { borrower, liquidator: ctx.sender(), repay_amount: to_repay, shares_seized: actual_seize, bonus_bps: pool.liquidation_bonus_bps, timestamp_ms: sui::clock::timestamp_ms(clock) });
         // return leftover of repay coin
+        repay
+    }
+
+    /// Flash loan: borrow `amount` with immediate same-transaction repayment requirement.
+    /// Returns the borrowed coin and a capability that must be consumed by `flash_repay` in the same transaction.
+    public fun flash_loan<T>(pool: &mut LendingPool<T>, amount: u64, clock: &Clock, ctx: &mut TxContext): (Coin<T>, FlashLoanCap<T>) {
+        accrue<T>(pool, clock);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        assert!(balance::value(&pool.liquidity) >= amount, E_INSUFFICIENT_LIQUIDITY);
+        let fee: u64 = ((amount as u128) * (pool.flash_fee_bps as u128) / (fees::bps_denom() as u128)) as u64;
+        let part = balance::split(&mut pool.liquidity, amount);
+        let loan = coin::from_balance(part, ctx);
+        event::emit(FlashLoan { who: ctx.sender(), amount, fee, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        (loan, FlashLoanCap<T> { principal: amount, fee })
+    }
+
+    /// Repay a flash loan. Requires the capability returned by `flash_loan`.
+    /// Returns any leftover of the provided repay coin.
+    public fun flash_repay<T>(pool: &mut LendingPool<T>, mut repay: Coin<T>, cap: FlashLoanCap<T>, clock: &Clock, ctx: &mut TxContext): Coin<T> {
+        let FlashLoanCap { principal, fee } = cap;
+        let due: u64 = principal + fee;
+        let have = coin::value(&repay);
+        assert!(have >= due, E_FLASH_UNDERPAY);
+        // Take exactly what is due
+        let mut to_use = coin::split(&mut repay, due, ctx);
+        if (fee > 0) {
+            let fee_coin = coin::split(&mut to_use, fee, ctx);
+            pool.reserves.join(coin::into_balance(fee_coin));
+        };
+        // Return principal to liquidity
+        pool.liquidity.join(coin::into_balance(to_use));
+        event::emit(FlashRepaid { who: ctx.sender(), principal, fee, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        // Return leftover
         repay
     }
 

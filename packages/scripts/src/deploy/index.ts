@@ -37,6 +37,7 @@ type DeploymentSummary = {
   gasFutures: DeployedGasFutures[];
   perpetuals: DeployedPerp[];
   dexPools: DeployedDexPool[];
+  vaults: Array<{ id: string; asset: string }>;
 };
 
 function kpFromEnv(): Ed25519Keypair {
@@ -380,6 +381,22 @@ async function deployDexPools(client: SuiClient, cfg: DeployConfig, keypair: Ed2
   }
 }
 
+async function createVault<T extends string>(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, assetType: string): Promise<string> {
+  const tx = new Transaction();
+  // NOTE: Replace generic with actual type param via typeArguments if your Move function is generic
+  tx.moveCall({ target: `${cfg.pkgId}::vaults::create_vault`, typeArguments: [assetType], arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.object(cfg.feeVaultId), tx.pure.bool(false), tx.object('0x6'), tx.object('0x6')] });
+  const res = await execTx(client, tx, keypair, 'vaults.create_vault');
+  const id = extractCreatedId(res, `${cfg.pkgId}::vaults::Vault<`) || '';
+  return id;
+}
+
+async function setVaultCaps(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, vaultId: string, caps: { maxOrderSizeBase?: number; maxInventoryTiltBps?: number; minDistanceBps?: number; paused?: boolean }) {
+  const tx = new Transaction();
+  // Build RiskCaps struct args inline
+  tx.moveCall({ target: `${cfg.pkgId}::vaults::set_risk_caps`, arguments: [tx.object(cfg.adminRegistryId), tx.object(vaultId), tx.pure.u64(caps.maxOrderSizeBase ?? 0), tx.pure.u64(caps.maxInventoryTiltBps ?? 7000), tx.pure.u64(caps.minDistanceBps ?? 5), tx.pure.bool(caps.paused ?? false), tx.object('0x6')] as any });
+  await execTx(client, tx, keypair, `vaults.set_risk_caps ${vaultId}`);
+}
+
 function getOutputPath(): string {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
@@ -447,6 +464,11 @@ async function writeDeploymentMarkdown(summary: DeploymentSummary) {
     for (const p of summary.dexPools) lines.push(`- pool=\`${p.poolId}\`, <${p.base}>/<${p.quote}>, tick=${p.tickSize}, lot=${p.lotSize}, min=${p.minSize}`);
     lines.push('');
   }
+  if (summary.vaults.length) {
+    lines.push('## Vaults');
+    for (const v of summary.vaults) lines.push(`- vault=<${v.id}> asset=<${v.asset}>`);
+    lines.push('');
+  }
   lines.push('## Raw summary');
   lines.push('```json');
   lines.push(JSON.stringify(summary, null, 2));
@@ -493,6 +515,7 @@ export async function main(): Promise<void> {
     gasFutures: [],
     perpetuals: [],
     dexPools: [],
+    vaults: [],
   };
 
   await deployLending(client, deployConfig, keypair, summary);

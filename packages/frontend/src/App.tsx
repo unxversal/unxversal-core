@@ -46,9 +46,7 @@ function App() {
       if (!isLeader || !account?.address) return
       const rpc = defaultRpc(network)
       const sui = createSuiClient(rpc)
-      const exec = async (tx: Transaction) => {
-        await signAndExecute({ transactionBlock: tx, options: { showEffects: true } })
-      }
+      const exec = async (tx: Transaction) => { await signAndExecute({ transaction: tx }) }
       const sender = account.address
       const km = new KeeperManager()
       await km.autoResume((cfg) => buildKeeperFromStrategy(sui as unknown as SuiClient, sender, exec, cfg)!)
