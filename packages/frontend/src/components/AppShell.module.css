@@ -1,0 +1,47 @@
+.appRoot {
+  background: #06070b;
+  color: #e5e7eb;
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: 56px 1fr 36px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid #1b1e27;
+  background: #0a0c12;
+}
+
+.brand { display: flex; gap: 8px; align-items: center; font-weight: 600; }
+
+.nav { display: flex; gap: 8px; }
+.nav > button {
+  background: #11141b;
+  border: 1px solid #1e2230;
+  color: #cbd5e1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  display: flex; gap: 6px; align-items: center;
+}
+.nav > button.active, .nav > button:hover { border-color: #3b82f6; color: #fff; }
+.active { border-color: #3b82f6 !important; color: #fff !important; }
+
+.tools { display: flex; gap: 12px; align-items: center; }
+.netToggle { display: flex; gap: 6px; }
+.netToggle > button { padding: 6px 10px; background: #11141b; border: 1px solid #1e2230; border-radius: 8px; color: #cbd5e1; }
+.netToggle > button.active { border-color: #10b981; color: #eafff5; }
+
+.main { height: calc(100vh - 56px - 36px); }
+
+.footer {
+  border-top: 1px solid #1b1e27;
+  color: #818cf8;
+  font-size: 12px;
+  display: flex; align-items: center; justify-content: center;
+}
+
+
+

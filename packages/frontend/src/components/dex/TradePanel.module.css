@@ -1,0 +1,17 @@
+.root { display: grid; gap: 8px; }
+.tabs, .mode { display: grid; grid-auto-flow: column; gap: 6px; }
+.tabs > button, .mode > button { background: #11141b; border: 1px solid #1e2230; color: #cbd5e1; padding: 6px 10px; border-radius: 8px; }
+.active { border-color: #3b82f6 !important; color: #fff !important; }
+.field { display: grid; gap: 4px; font-size: 12px; color: #a1a1aa; }
+.field input { background: #0f131a; border: 1px solid #1f2432; color: #e5e7eb; border-radius: 6px; padding: 8px; }
+.submit { background: #1a2235; border: 1px solid #2a3450; color: #e5e7eb; border-radius: 8px; padding: 10px; }
+.submit:hover { border-color: #3b82f6; }
+.note { font-size: 12px; color: #9ca3af; }
+.root { display: grid; grid-template-rows: 24px repeat(3, auto) 1fr; gap: 8px; }
+.header { font-size: 12px; color: #9ca3af; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.row > input { flex: 1; background: #0f131a; color: #e5e7eb; border: 1px solid #1e2230; border-radius: 6px; padding: 6px 8px; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.buy { background: rgba(16,185,129,0.15); border: 1px solid #065f46; }
+.sell { background: rgba(239,68,68,0.15); border: 1px solid #7f1d1d; }
+

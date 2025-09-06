@@ -1,0 +1,10 @@
+.root { padding: 12px; display: grid; gap: 16px; color: #e5e7eb; }
+.section { background: #0a0c12; border: 1px solid #1b1e27; border-radius: 8px; padding: 12px; display: grid; gap: 12px; }
+.title { font-weight: 600; }
+.row { display: grid; grid-template-columns: 160px 1fr; gap: 8px; align-items: center; }
+.grid { display: grid; grid-template-columns: 160px 1fr; gap: 8px; }
+label { color: #a1a1aa; font-size: 12px; }
+input, select { background: #0f131a; border: 1px solid #1f2432; color: #e5e7eb; border-radius: 6px; padding: 8px; }
+.actions { display: flex; justify-content: flex-end; gap: 8px; }
+.actions > button { background: #1a2235; border: 1px solid #2a3450; color: #e5e7eb; border-radius: 8px; padding: 8px 12px; }
+

@@ -1,0 +1,19 @@
+.root { height: 100%; display: grid; grid-template-rows: 44px 1fr 40px auto; }
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid #1b1e27; background: #0a0c12; }
+.pair { font-weight: 600; }
+.metrics { display: flex; gap: 16px; font-size: 12px; color: #9ca3af; }
+
+.middle { display: grid; grid-template-columns: 1.5fr 0.9fr 0.8fr; gap: 8px; padding: 8px; height: calc(100% - 0px); }
+.left { background: #0a0c12; border: 1px solid #1b1e27; border-radius: 8px; overflow: hidden; }
+.center { display: grid; grid-template-rows: 1fr 1fr; gap: 8px; }
+.right { background: #0a0c12; border: 1px solid #1b1e27; border-radius: 8px; padding: 8px; }
+.chart { width: 100%; height: 100%; }
+
+.bottomTabs { display: flex; gap: 8px; padding: 8px; border-top: 1px solid #1b1e27; background: #0a0c12; }
+.bottomTabs > button { background: #11141b; border: 1px solid #1e2230; padding: 6px 10px; border-radius: 6px; color: #cbd5e1; }
+.bottomTabs > button.active { border-color: #3b82f6; color: #fff; }
+.bottomBody { padding: 8px; }
+.placeholder { border: 1px dashed #1f2432; border-radius: 8px; padding: 16px; color: #94a3b8; text-align: center; }
+
+
+

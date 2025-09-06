@@ -78,14 +78,14 @@ module unxversal::usdu {
     }
 
     /// Admin: set or update the per-address faucet claim limit (in base units).
-    entry fun set_per_address_limit(reg_admin: &AdminRegistry, faucet: &mut Faucet, new_limit: u64, clock: &Clock, ctx: &TxContext) {
+    public fun set_per_address_limit(reg_admin: &AdminRegistry, faucet: &mut Faucet, new_limit: u64, clock: &Clock, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         faucet.max_per_address = new_limit;
         event::emit(PerAddressLimitUpdated { new_limit, by: ctx.sender(), timestamp_ms: sui::clock::timestamp_ms(clock) });
     }
 
     /// Admin: pause or unpause the faucet.
-    entry fun set_paused(reg_admin: &AdminRegistry, faucet: &mut Faucet, paused: bool, clock: &Clock, ctx: &TxContext) {
+    public fun set_paused(reg_admin: &AdminRegistry, faucet: &mut Faucet, paused: bool, clock: &Clock, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         faucet.paused = paused;
         event::emit(Paused { paused, by: ctx.sender(), timestamp_ms: sui::clock::timestamp_ms(clock) });
@@ -93,7 +93,8 @@ module unxversal::usdu {
 
     /// Public: claim USDU from the faucet up to the per-address limit and global cap.
     /// - `amount` is specified in base units (6 decimals)
-    entry fun claim(faucet: &mut Faucet, amount: u64, clock: &Clock, ctx: &mut TxContext) {
+    #[allow(lint(self_transfer))]
+    public fun claim(faucet: &mut Faucet, amount: u64, clock: &Clock, ctx: &mut TxContext) {
         assert!(!faucet.paused, E_PAUSED);
         assert!(faucet.max_per_address > 0, E_LIMIT_NOT_SET);
         assert!(amount > 0, E_AMOUNT_ZERO);

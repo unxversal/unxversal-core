@@ -1,9 +1,5 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
-}
+/* reset old demo styles; keep minimal utilities */
+#root { max-width: 100%; margin: 0; padding: 0; }
 
 .logo {
   height: 6em;
