@@ -54,20 +54,62 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
         <button className={side==='buy'?styles.active:''} onClick={()=>setSide('buy')}>Buy</button>
         <button className={side==='sell'?styles.active:''} onClick={()=>setSide('sell')}>Sell</button>
       </div>
+      
       <div className={styles.mode}>
-        <button className={mode==='market'?styles.active:''} onClick={()=>setMode('market')}>Market</button>
         <button className={mode==='limit'?styles.active:''} onClick={()=>setMode('limit')}>Limit</button>
+        <button className={mode==='market'?styles.active:''} onClick={()=>setMode('market')}>Market</button>
       </div>
+
       {mode==='limit' && (
-        <label className={styles.field}>Price
-          <input type="number" value={price} onChange={(e)=>setPrice(Number(e.target.value))} placeholder={mid?String(mid):'0'} />
-        </label>
+        <div className={styles.field}>
+          <label>Price</label>
+          <div className={styles.inputGroup}>
+            <input type="number" value={price || ''} onChange={(e)=>setPrice(Number(e.target.value))} placeholder={mid?String(mid):'0'} />
+            <span className={styles.currency}>SUI</span>
+          </div>
+        </div>
       )}
-      <label className={styles.field}>Quantity
-        <input type="number" value={qty} onChange={(e)=>setQty(Number(e.target.value))} />
-      </label>
-      <button disabled={disabled} className={styles.submit} onClick={() => void submit()}>{submitting? 'Submitting...' : `${side==='buy'?'Buy':'Sell'}`}</button>
-      {!acct?.address && <div className={styles.note}>Connect wallet to trade.</div>}
+
+      <div className={styles.field}>
+        <label>Amount</label>
+        <div className={styles.inputGroup}>
+          <input type="number" value={qty || ''} onChange={(e)=>setQty(Number(e.target.value))} placeholder="0.00" />
+          <span className={styles.currency}>DEEP</span>
+        </div>
+        <div className={styles.percentButtons}>
+          <button onClick={() => setQty(0)}>25%</button>
+          <button onClick={() => setQty(0)}>50%</button>
+          <button onClick={() => setQty(0)}>75%</button>
+          <button onClick={() => setQty(0)}>100%</button>
+        </div>
+      </div>
+
+      <div className={styles.field}>
+        <label>Order Value</label>
+        <div className={styles.valueDisplay}>
+          <span>{((qty || 0) * (price || mid || 0)).toFixed(2)}</span>
+          <span className={styles.currency}>SUI</span>
+        </div>
+      </div>
+
+      <div className={styles.feeSection}>
+        <div className={styles.feeRow}>
+          <span>Fee</span>
+          <span>- DEEP</span>
+        </div>
+        <div className={styles.feeRow}>
+          <span></span>
+          <span>- SUI</span>
+        </div>
+      </div>
+
+      {!acct?.address ? (
+        <button className={styles.connectWallet}>Connect Wallet</button>
+      ) : (
+        <button disabled={disabled} className={`${styles.submit} ${side==='buy'?styles.buyButton:styles.sellButton}`} onClick={() => void submit()}>
+          {submitting ? 'Submitting...' : `${side==='buy'?'Buy':'Sell'}`}
+        </button>
+      )}
     </div>
   );
 }

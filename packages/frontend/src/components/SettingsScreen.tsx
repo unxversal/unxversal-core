@@ -10,6 +10,27 @@ export function SettingsScreen({ onClose }: { onClose?: () => void }) {
   return (
     <div className={styles.root}>
       <div className={styles.section}>
+        <div className={styles.title}>Indexers</div>
+        <div className={styles.grid2}>
+          {Object.entries(s.indexers).map(([k, v]) => (
+            <label key={k} className={styles.switchRow}>
+              <input type="checkbox" checked={v} onChange={(e) => setS({ ...s, indexers: { ...s.indexers, [k]: e.target.checked } as any })} />
+              <span>{k}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.title}>Keepers</div>
+        <div className={styles.grid2}>
+          <label className={styles.switchRow}>
+            <input type="checkbox" checked={s.keepers.autoResume} onChange={(e) => setS({ ...s, keepers: { ...s.keepers, autoResume: e.target.checked } })} />
+            <span>Auto-resume in leader tab</span>
+          </label>
+        </div>
+      </div>
+      <div className={styles.section}>
         <div className={styles.title}>Network</div>
         <div className={styles.row}>
           <label>Network</label>

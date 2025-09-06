@@ -3,6 +3,8 @@
 .title { font-weight: 600; }
 .row { display: grid; grid-template-columns: 160px 1fr; gap: 8px; align-items: center; }
 .grid { display: grid; grid-template-columns: 160px 1fr; gap: 8px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.switchRow { display: flex; align-items: center; gap: 8px; background: #0f131a; border: 1px solid #1f2432; border-radius: 6px; padding: 8px; }
 label { color: #a1a1aa; font-size: 12px; }
 input, select { background: #0f131a; border: 1px solid #1f2432; color: #e5e7eb; border-radius: 6px; padding: 8px; }
 .actions { display: flex; justify-content: flex-end; gap: 8px; }

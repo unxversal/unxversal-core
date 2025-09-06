@@ -1,5 +1,5 @@
-.root { background: #0a0c12; border: 1px solid #1b1e27; border-radius: 8px; padding: 8px; height: 100%; display: grid; grid-template-rows: 24px 1fr; }
-.header { font-size: 12px; color: #9ca3af; }
+.root { background: #0a0c12; border: none; border-radius: 0 0 8px 8px; padding: 8px; height: 100%; display: grid; grid-template-rows: 0px 1fr; }
+.header { display: none; }
 .table { overflow: auto; display: grid; gap: 2px; }
 .row { display: grid; grid-template-columns: 1fr 1fr 1fr; font-size: 12px; padding: 2px 4px; border-radius: 4px; background: #0f131a; }
 

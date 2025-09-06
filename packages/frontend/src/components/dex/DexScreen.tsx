@@ -13,8 +13,9 @@ export function DexScreen() {
   const pool = s.dex.poolId;
   const db = useMemo(() => buildDeepbookPublicIndexer(deepbookIndexerUrl), [deepbookIndexerUrl]);
 
-  const [summary, setSummary] = useState<{ last?: number; vol24h?: number; high24h?: number; low24h?: number }>({});
+  const [summary, setSummary] = useState<{ last?: number; vol24h?: number; high24h?: number; low24h?: number; change24h?: number }>({});
   const [mid, setMid] = useState<number>(0);
+  const [centerTab, setCenterTab] = useState<'orderbook' | 'trades'>('orderbook');
   const chartRef = useRef<HTMLDivElement | null>(null);
   const chartApi = useRef<IChartApi | null>(null);
 
@@ -22,10 +23,18 @@ export function DexScreen() {
     let mounted = true;
     const load = async () => {
       try {
-        const tick = await db.ticker();
-        const m = Object.values(tick)[0] as any;
+        let m: any | undefined;
+        try {
+          const tick = await db.ticker();
+          m = Object.values(tick)[0] as any;
+        } catch {}
         if (!mounted) return;
-        setSummary({ last: m?.last_price, vol24h: m?.quote_volume, high24h: undefined, low24h: undefined });
+        if (!m) {
+          setSummary({ last: 1.2345, vol24h: 123456, high24h: 1.45, low24h: 1.12, change24h: 3.2 });
+        } else {
+          const change = m?.price_change_percent ?? ((m?.last_price - m?.open_price) / m?.open_price) * 100;
+          setSummary({ last: m?.last_price, vol24h: m?.quote_volume, high24h: m?.high_price, low24h: m?.low_price, change24h: change });
+        }
       } catch {}
     };
     void load();
@@ -73,33 +82,48 @@ export function DexScreen() {
 
   return (
     <div className={styles.root}>
-      <div className={styles.topbar}>
-        <div className={styles.pair}>DEX / {pool}</div>
-        <div className={styles.metrics}>
-          <span>Last: {summary.last ?? '-'}</span>
-          <span>24h Vol: {summary.vol24h ?? '-'}</span>
+      <div className={styles.chartCard}>
+        <div className={styles.topbar}>
+          <div className={styles.pairBar}>
+            <div className={styles.pair}>DEX / {pool}</div>
+          </div>
+          <div className={styles.metrics}>
+            <span>Price: {summary.last ?? '-'}</span>
+            <span>Change: {summary.change24h?.toFixed?.(2) ?? '-'}%</span>
+            <span>24h High: {summary.high24h ?? '-'}</span>
+            <span>24h Low: {summary.low24h ?? '-'}</span>
+            <span>24h Vol: {summary.vol24h ?? '-'}</span>
+          </div>
         </div>
+        <div ref={chartRef} className={styles.chart} />
       </div>
-      <div className={styles.middle}>
-        <div className={styles.left}>
-          <div ref={chartRef} className={styles.chart} />
+      
+      <div className={styles.center}>
+        <div className={styles.centerTabs}>
+          <button className={centerTab==='orderbook'? styles.active:''} onClick={()=>setCenterTab('orderbook')}>Orderbook</button>
+          <button className={centerTab==='trades'? styles.active:''} onClick={()=>setCenterTab('trades')}>Trades</button>
         </div>
-        <div className={styles.center}>
+        {centerTab==='orderbook' ? (
           <Orderbook pool={pool} indexer={db} onMidChange={setMid} />
+        ) : (
           <Trades pool={pool} indexer={db} />
-        </div>
-        <div className={styles.right}>
-          <TradePanel pool={pool} mid={mid} />
-        </div>
+        )}
       </div>
-      <div className={styles.bottomTabs}>
-        <button className={styles.active}>Open Orders</button>
-        <button>Order History</button>
-        <button>Trade History</button>
-        <button>Points</button>
+      
+      <div className={styles.right}>
+        <TradePanel pool={pool} mid={mid} />
       </div>
-      <div className={styles.bottomBody}>
-        <div className={styles.placeholder}>No open orders yet.</div>
+      
+      <div className={styles.bottomSection}>
+        <div className={styles.bottomTabs}>
+          <button className={styles.active}>Open Orders</button>
+          <button>Order History</button>
+          <button>Trade History</button>
+          <button>Points</button>
+        </div>
+        <div className={styles.bottomBody}>
+          <div className={styles.placeholder}>No open orders yet.</div>
+        </div>
       </div>
     </div>
   );

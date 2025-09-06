@@ -15,6 +15,19 @@ export type AppSettings = {
     pkgUnxversal: string;
     pkgDeepbook: string;
   };
+  indexers: {
+    dex: boolean;
+    lending: boolean;
+    options: boolean;
+    futures: boolean;
+    gasFutures: boolean;
+    perps: boolean;
+    staking: boolean;
+    prices: boolean; // start price feeds
+  };
+  keepers: {
+    autoResume: boolean;
+  };
   dex: DexSettings;
 };
 
@@ -25,6 +38,19 @@ const defaultSettings: AppSettings = {
   contracts: {
     pkgUnxversal: '',
     pkgDeepbook: '',
+  },
+  indexers: {
+    dex: false,
+    lending: false,
+    options: false,
+    futures: false,
+    gasFutures: false,
+    perps: false,
+    staking: false,
+    prices: false,
+  },
+  keepers: {
+    autoResume: false,
   },
   dex: {
     deepbookIndexerUrl: 'https://api.naviprotocol.io',

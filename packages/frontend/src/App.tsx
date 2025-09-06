@@ -33,15 +33,29 @@ function App() {
     if (started) return
     const rpc = defaultRpc(network)
     const client = createSuiClient(rpc)
-    const { contracts } = loadSettings()
+    const { contracts, indexers } = loadSettings()
     if (!contracts.pkgUnxversal) return
-    const trackers = allProtocolTrackers(contracts.pkgUnxversal).map((t) => ({ ...t, id: `${t.id}-${network}` }))
+    const trackers = allProtocolTrackers(contracts.pkgUnxversal)
+      .filter(t =>
+        (t.id.startsWith('dex:') && indexers.dex) ||
+        (t.id.includes(':lending') && indexers.lending) ||
+        (t.id.includes(':options') && indexers.options) ||
+        (t.id.includes(':futures') && indexers.futures) ||
+        (t.id.includes(':gas-futures') && indexers.gasFutures) ||
+        (t.id.includes(':perpetuals') && indexers.perps) ||
+        (t.id.includes(':staking') && indexers.staking)
+      )
+      .map((t) => ({ ...t, id: `${t.id}-${network}` }))
+    if (trackers.length === 0) return
     setStarted(true)
     startTrackers(client, trackers).catch(() => {})
   }, [network, started])
 
   // Auto-resume ephemeral keepers in this tab (leader) after wallet connects
   useEffect(() => {
+    const { keepers } = loadSettings()
+    if (!keepers.autoResume) return
+    
     // crude leader election using BroadcastChannel
     const bc = new BroadcastChannel('uxv-keepers')
     let isLeader = true
@@ -63,7 +77,8 @@ function App() {
 
   // Start price feeds when wallet connects
   useEffect(() => {
-    if (!account?.address || surgeReady) return
+    const { indexers } = loadSettings()
+    if (!account?.address || surgeReady || !indexers.prices) return
     startPriceFeeds().then(() => setSurgeReady(true)).catch(() => {})
   }, [account?.address, surgeReady])
 
