@@ -1,713 +1,214 @@
-\documentclass[12pt]{article}
+\documentclass[11pt]{article}
 \usepackage[margin=1.5in]{geometry}
 \usepackage{amsmath}
 \usepackage{amsfonts}
 \usepackage{amssymb}
 \usepackage{graphicx}
-\usepackage{fancyhdr}
-\usepackage{setspace}
-\usepackage{titlesec}
-\usepackage{tocloft}
-\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{url}
 
-% Header and footer setup
-\pagestyle{fancy}
-\fancyhf{}
-\fancyhead[C]{Unxversal Protocol Suite}
-\fancyfoot[C]{\thepage}
-
-% Title formatting
-\titleformat{\section}{\large\bfseries}{\thesection}{1em}{}
-\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{1em}{}
-
-% Line spacing
-\onehalfspacing
+\title{\vspace{2.5in}Systematic Market Making Strategies for Prediction Markets\\[0.5em]\large A Comprehensive Framework for Unxversal Fund}
+\author{Unxversal Labs}
+\date{\today}
 
 \begin{document}
 
-% Cover Page
-\begin{titlepage}
-\centering
-\vspace*{2in}
-
-{\Huge \textbf{Unxversal Protocol Suite}}
-
-\vspace{0.5in}
-{\Large A Comprehensive DeFi Ecosystem on Sui}
-
-\vspace{1in}
-{\large Technical Whitepaper}
-
-\vspace{1in}
-{\large Version 1.0}
-
-\vspace{1in}
-{\large \today}
-
-\vfill
-{\large Unxversal Team}
-
-\end{titlepage}
-
-% Abstract Page
-\newpage
-\section*{Abstract}
-\addcontentsline{toc}{section}{Abstract}
-
-The Unxversal Protocol Suite represents a comprehensive decentralized finance (DeFi) ecosystem built on the Sui blockchain. This whitepaper presents seven interconnected protocols that form a complete financial infrastructure: Staking, Decentralized Exchange (DEX), Lending, Options, Futures, Gas Futures, and Perpetual Swaps.
-
-Each protocol is designed with modularity and efficiency in mind, leveraging Sui's unique object model and Move programming language to deliver high-performance financial primitives. The ecosystem is unified through the UNXV token, which provides governance rights, fee discounts, and staking rewards across all protocols.
-
-Key innovations include:
-\begin{itemize}
-    \item Weekly-epoch staking with fair entry mechanisms
-    \item Thin integration layer over DeepBook V3 for enhanced trading
-    \item Isolated lending pools with dynamic interest rate models
-    \item European options with physical settlement and oracle-based pricing
-    \item Cash-settled futures with oracle price execution
-    \item Native gas price derivatives leveraging Sui's infrastructure
-    \item Perpetual swaps with funding rate mechanisms
-\end{itemize}
-
-The protocol suite emphasizes capital efficiency, risk management, and user experience while maintaining the security and decentralization principles fundamental to DeFi. All protocols integrate seamlessly with Switchboard oracles for reliable price feeds and implement comprehensive fee structures that reward long-term ecosystem participants.
+\maketitle
+\thispagestyle{empty}
 
 \newpage
-\tableofcontents
+\begin{abstract}
+This proposal presents a comprehensive market making framework specifically designed for prediction markets, addressing the unique constraints and opportunities of probability-based trading venues. The strategy adapts traditional Central Limit Order Book (CLOB) market making techniques to handle prices bounded in [0,1], employs log-odds space optimization for superior quote placement near boundaries, and implements robust liability management systems essential for sustainable operations.
+
+The framework encompasses static range making, volatility-adaptive positioning, inventory-aware skewing based on Avellaneda-Stoikov principles, and advanced features including paired mean-reversion strategies and time-to-resolution regime management. Key innovations include systematic cross-venue arbitrage detection, comprehensive risk controls through hard liability caps, and a modular implementation design suitable for institutional deployment.
+
+Expected outcomes include consistent positive carry from bid-ask spread capture, controlled maximum loss scenarios, enhanced returns through adaptive positioning, and reduced correlation with traditional asset classes. The strategy's systematic approach to managing the unique risk profile of prediction markets—where positions have clearly defined maximum loss/payout at resolution—provides Unxversal Fund with a competitive advantage in this rapidly growing asset class.
+
+The technical framework includes real-time liability monitoring, cross-venue connectivity, historical backtesting capabilities, and a comprehensive user interface for strategy configuration and risk management. Implementation follows a phased approach enabling incremental deployment while maintaining strict institutional risk controls.
+\end{abstract}
+\thispagestyle{empty}
 
 \newpage
+\setcounter{page}{1}
 
-% Protocol Sections
-\section{Staking Protocol}
+\section{Executive Summary}
 
-\subsection{Overview}
+This proposal outlines a sophisticated market making framework specifically adapted for prediction markets. The strategy ports traditional CLOB (Central Limit Order Book) market making techniques to the unique constraints of prediction markets, where prices represent probabilities bounded in [0,1] and positions have clearly defined maximum loss/payout profiles at resolution.
 
-The Unxversal Staking Protocol implements a weekly-epoch UNXV token staking mechanism designed to provide fair entry conditions and pro-rata reward distribution. The protocol serves as the foundational layer for the entire Unxversal ecosystem, offering staking rewards and fee discounts across all other protocols.
+The framework addresses key challenges including optimal quote spacing in log-odds space, inventory risk management, and liability capping mechanisms essential for sustainable prediction market operations.
 
-\subsection{Architecture}
+\section{Core Framework: CLOB to Prediction Market Mapping}
 
-The staking system operates on a weekly epoch model where:
+The fundamental adaptation involves three key modifications from traditional market making:
+
 \begin{itemize}
-    \item New stakes activate in the following week to prevent manipulation
-    \item Rewards are distributed proportionally based on active stake
-    \item Users can claim rewards from fully completed epochs
-    \item Unstaking is immediate but affects future reward calculations
+    \item \textbf{Price Domain:} $p \in [0,1]$ representing probabilities (e.g., YES share at \$0.60 implies 60\% probability)
+    \item \textbf{Position Structure:} Clear maximum loss/payout at resolution
+    \item \textbf{Quote Optimization:} Superior performance using log-odds space near boundaries
 \end{itemize}
 
-\subsection{Key Components}
+\subsection{Risk Profile}
+For a position buying YES shares at price $p$:
+\begin{align}
+\text{Maximum loss per share} &= p \text{ (if resolves NO)} \\
+\text{Maximum gain per share} &= 1-p \text{ (if resolves YES)}
+\end{align}
 
-\textbf{StakingPool:} The main shared object that tracks global staking state, including:
+\section{Strategy Implementation}
+
+\subsection{Static Range Making in Probability Space}
+
+\textbf{Base Configuration:}
 \begin{itemize}
-    \item Current week number and total active stake
-    \item Scheduled activation and deactivation deltas
-    \item Historical snapshots for reward calculations
-    \item Reward vault holding UNXV tokens for distribution
+    \item Mid probability: $p_0 = 0.60$
+    \item Band: $\pm 0.08 \rightarrow [0.52, 0.68]$
+    \item Levels per side: 3 (bids at 0.58, 0.56, 0.54; asks at 0.62, 0.64, 0.66)
+    \item Per-level notional: \$2,000
 \end{itemize}
 
-\textbf{Staker:} Per-account state tracking individual positions:
+\textbf{Liability Caps:}
 \begin{itemize}
-    \item Active stake amount currently earning rewards
-    \item Pending stake scheduled for next week activation
-    \item Pending unstake amounts and timing
-    \item Last claimed week for reward tracking
+    \item Maximum net cost (long YES): \$3,000
+    \item Maximum net liability from short YES: \$2,000
 \end{itemize}
 
-\subsection{Staking Mechanics}
+\textbf{Mean-Reversion Cycle Example:}
+\begin{enumerate}
+    \item Buy 3,448 YES @ 0.58 for \$2,000
+    \item Later sell 3,226 YES @ 0.62 for \$2,000
+    \item Realized profit: $(0.62-0.58) \times 3,226 \approx \$129$ (minus fees)
+    \item Residual inventory: 222 YES shares at 0.58 average cost
+\end{enumerate}
 
-\textbf{Stake Activation:} When users stake UNXV tokens, the stake enters a "pending" state and activates in the next weekly epoch. This prevents users from staking at the end of an epoch to claim rewards they didn't earn.
+\subsection{Log-Odds Space Implementation}
 
-\textbf{Reward Distribution:} Protocol fees from all Unxversal protocols are deposited into the current week's reward pool. Users earn rewards proportional to their active stake during each completed epoch.
+To address asymmetric behavior near probability boundaries, we employ logit transformation:
 
-\textbf{Fair Exit:} Unstaking is immediate, returning principal to users while updating future reward calculations. This design balances liquidity needs with fair reward distribution.
+\begin{align}
+\ell &= \text{logit}(p) = \ln\left(\frac{p}{1-p}\right) \\
+p &= \text{sigmoid}(\ell) = \frac{1}{1+e^{-\ell}}
+\end{align}
 
-\subsection{Mathematical Framework}
-
-The reward calculation for user $i$ in week $w$ is:
-$$R_{i,w} = \frac{S_{i,w} \times R_w}{S_{total,w}}$$
-
-Where:
+\textbf{Example Configuration:}
 \begin{itemize}
-    \item $R_{i,w}$ = Reward for user $i$ in week $w$
-    \item $S_{i,w}$ = Active stake of user $i$ in week $w$
-    \item $R_w$ = Total rewards distributed in week $w$
-    \item $S_{total,w}$ = Total active stake in week $w$
+    \item $p_0 = 0.60 \rightarrow \ell_0 = \ln(0.6/0.4) \approx 0.405$
+    \item Step size: $\Delta\ell = 0.1$
+    \item Bid levels: $\ell = 0.305, 0.205, 0.105 \rightarrow p \approx 0.576, 0.551, 0.526$
+    \item Ask levels: $\ell = 0.505, 0.605, 0.705 \rightarrow p \approx 0.624, 0.647, 0.669$
 \end{itemize}
 
-\subsection{Integration Benefits}
+\subsection{Volatility-Adaptive Ladder}
 
-The staking protocol provides system-wide benefits:
+Dynamically adjust quote spacing based on short-term volatility:
 \begin{itemize}
-    \item Fee discounts across all protocols based on staking tiers
-    \item Governance rights for protocol parameter changes
-    \item Revenue sharing from protocol fees
-    \item Long-term ecosystem alignment through token appreciation
+    \item Estimate $\sigma(\ell)$ for log-odds volatility
+    \item Set band = $\pm 3\sigma$ around $\ell_0$
+    \item Step size = $\sigma(\ell)$
+    \item Convert back to probability space for order placement
 \end{itemize}
 
-\section{Decentralized Exchange (DEX) Protocol}
+\subsection{Inventory-Aware Skewing (Avellaneda-Stoikov Adaptation)}
 
-\subsection{Overview}
-
-The Unxversal DEX Protocol serves as a thin integration layer over DeepBook V3, Sui's native central limit order book. Rather than building a separate AMM, the protocol enhances the existing order book infrastructure with additional fee structures, UNXV token integration, and convenience functions.
-
-\subsection{Architecture}
-
-The DEX protocol implements three primary enhancement layers:
-
-\textbf{Fee Layer:} Adds configurable protocol fees on top of DeepBook's native fees, with options for:
+Implement inventory management through center shifting:
 \begin{itemize}
-    \item Input token fee collection
-    \item UNXV token payments with discounts
-    \item Staking tier-based fee reductions
-    \item Fee distribution to stakers and treasury
+    \item \textbf{Long YES position:} Shift center down (more aggressive selling)
+    \item \textbf{Short YES position:} Shift center up (more aggressive buying)
+    \item \textbf{Skew rule:} $\delta\ell = k \cdot \text{inventory\_pct}$, capped at $|\delta\ell| \leq 0.15$
 \end{itemize}
 
-\textbf{Backend Routing:} Provides flexible fee payment mechanisms:
+\section{Advanced Features}
+
+\subsection{Paired Mean-Reversion Strategy}
+
+Upon fill execution, automatically place take-profit orders:
+\begin{enumerate}
+    \item Buy 3,333 YES @ 0.57 (\$1,900 notional)
+    \item Auto-place ask @ 0.585 for 3,333 YES
+    \item Expected round-trip profit: $(0.585 - 0.57) \times 3,333 \approx \$50$ per cycle
+\end{enumerate}
+
+\subsection{Time-to-Resolution Regime Management}
+
+Implement dynamic risk adjustment based on event timeline:
 \begin{itemize}
-    \item DEEP backend: Convert UNXV to DEEP for DeepBook fee discounts
-    \item Input token backend: Use trading tokens for fee payments
-    \item Auto-routing based on configuration preferences
+    \item \textbf{T > 7 days:} Normal band/step parameters
+    \item \textbf{T $\in$ [1,7] days:} Widen band by 50\%, reduce size by 30\%
+    \item \textbf{T < 24h:} Maker-only far from mid, minimize gap risk
 \end{itemize}
 
-\textbf{Convenience Layer:} Simplifies common trading operations through unified interfaces for market orders, limit orders, and pool creation.
+\subsection{Cross-Venue Arbitrage}
 
-\subsection{Trading Functions}
-
-\textbf{Limit Orders:} Users can place limit orders with enhanced fee handling while leveraging DeepBook's matching engine. The protocol optionally assesses fees on input token notionals.
-
-\textbf{Market Orders:} Immediate execution orders that consume available liquidity at current market prices, with integrated protocol fee collection.
-
-\textbf{Swap Functions:} Simplified swap interfaces that:
+Exploit structural opportunities:
 \begin{itemize}
-    \item Execute at DeepBook prices
-    \item Apply protocol fees with staking discounts
-    \item Handle UNXV fee payments automatically
-    \item Support slippage protection
+    \item \textbf{YES + NO Parity:} Ensure $\text{YES\_price} + \text{NO\_price} \leq 1$
+    \item \textbf{Multi-venue spread:} Quote around tighter venue, arbitrage via spread trades
+    \item \textbf{Categorical markets:} Enforce $\sum \text{outcome prices} \leq 1$
 \end{itemize}
 
-\subsection{Fee Structure}
+\section{Risk Management Framework}
 
-The protocol implements a multi-tiered fee system:
-
-\textbf{Base Fees:} Configurable basis points applied to trading volume
-\textbf{UNXV Discounts:} Users paying fees in UNXV receive reduced rates
-\textbf{Staking Tiers:} Active stakers receive additional fee reductions based on stake amount and duration
-
-Fee calculation formula:
-$$F = V \times \frac{(B - D_{UNXV} - D_{stake})}{10000}$$
-
-Where:
+\subsection{Liability Controls}
+Define hard limits per strategy:
 \begin{itemize}
-    \item $F$ = Final fee amount
-    \item $V$ = Trading volume
-    \item $B$ = Base fee in basis points
-    \item $D_{UNXV}$ = UNXV payment discount
-    \item $D_{stake}$ = Staking tier discount
+    \item Maximum net YES cost (long exposure) in \$
+    \item Maximum net short YES liability = $\sum(1 - p_{\text{sold}}) \times \text{quantity}$
+    \item Maximum per-order size and turnover/hour
+    \item Drawdown stop (mark-to-market vs reference mid)
 \end{itemize}
 
-\subsection{Pool Creation}
-
-The protocol enables permissionless pool creation with UNXV fee payments:
+\subsection{Bankroll Management Example}
+\textbf{Configuration:}
 \begin{itemize}
-    \item Users pay creation fees in UNXV tokens
-    \item Fees are split between stakers, treasury, and burn mechanisms
-    \item DeepBook handles the underlying pool infrastructure
-    \item Full integration with existing DeepBook ecosystem
+    \item Bankroll: \$10,000
+    \item Max net long cost: \$3,000
+    \item Max short liability: \$2,000
+    \item Per-level notional: \$1,500 (3 levels each side)
 \end{itemize}
 
-\subsection{Integration Benefits}
+\textbf{Execution Sequence:}
+\begin{enumerate}
+    \item Place bids at $p \approx 0.576, 0.551, 0.526$ (\$1,500 each)
+    \item Fills at 0.576 and 0.551 (spend \$3,000, hit long-cost cap)
+    \item Auto-place TP asks at 0.588 and 0.563
+    \item Expected profit: $(\$1,500 \times 0.012) + (\$1,500 \times 0.012) = \$36$ per cycle
+    \item Worst-case loss if resolves NO: \$3,000 (known and capped)
+\end{enumerate}
 
-By building on DeepBook rather than creating a separate exchange:
+\section{Implementation Roadmap}
+
+\subsection{Technical Infrastructure}
+\begin{enumerate}
+    \item Strategy configuration system with probability/log-odds toggle
+    \item Real-time liability monitoring and enforcement
+    \item Cross-venue connectivity and arbitrage detection
+    \item Historical backtesting framework with resolution-based P\&L simulation
+\end{enumerate}
+
+\subsection{User Interface Components}
 \begin{itemize}
-    \item Users access shared liquidity across the Sui ecosystem
-    \item No liquidity fragmentation compared to isolated AMMs
-    \item Professional trading features (advanced orders, institutional tools)
-    \item Lower gas costs through optimized infrastructure
-    \item Reduced smart contract risk through proven code base
+    \item Price axis editor (Probability vs Log-odds)
+    \item Band builder with volatility-adaptive sizing
+    \item Inventory management controls with skew parameters
+    \item Time regime configuration
+    \item Risk cap management interface
+    \item Monte Carlo simulation dashboard
 \end{itemize}
 
-\section{Lending Protocol}
+\section{Expected Performance Metrics}
 
-\subsection{Overview}
+Based on the framework's systematic approach to capturing bid-ask spreads while managing tail risks through liability caps, we anticipate:
 
-The Unxversal Lending Protocol implements isolated single-asset lending pools with time-based interest accrual, utilizing a utilization-based interest rate model. Each pool operates independently, supporting both supply-side liquidity provision and demand-side borrowing with overcollateralization requirements.
-
-\subsection{Architecture}
-
-\textbf{Isolated Pools:} Each asset has its own lending pool to prevent contagion between different asset markets. This design provides:
 \begin{itemize}
-    \item Risk isolation between asset types
-    \item Independent parameter configuration
-    \item Simpler liquidation mechanics
-    \item Clear collateral-to-debt relationships
-\end{itemize}
-
-\textbf{Share-Based Accounting:} Suppliers receive shares representing their portion of the pool, automatically compounding interest without additional transactions.
-
-\textbf{Interest Index System:} Borrowers' debt grows through an interest index that compounds over time based on utilization rates.
-
-\subsection{Interest Rate Model}
-
-The protocol implements a kinked interest rate model with four parameters:
-
-$$r = \begin{cases}
-r_{base} + \frac{U \times r_{multiplier}}{U_{kink}} & \text{if } U \leq U_{kink} \\
-r_{base} + r_{multiplier} + \frac{(U - U_{kink}) \times r_{jump}}{(1 - U_{kink})} & \text{if } U > U_{kink}
-\end{cases}$$
-
-Where:
-\begin{itemize}
-    \item $r$ = Current interest rate
-    \item $r_{base}$ = Base interest rate
-    \item $r_{multiplier}$ = Interest rate multiplier before kink
-    \item $r_{jump}$ = Additional multiplier after kink
-    \item $U$ = Utilization rate (borrowed / (borrowed + available))
-    \item $U_{kink}$ = Utilization threshold for rate jump
-\end{itemize}
-
-\subsection{Collateral and Borrowing}
-
-\textbf{Collateral Factor:} Determines maximum borrowing capacity as a percentage of supplied collateral. For example, a 75\% collateral factor allows borrowing up to 75\% of collateral value.
-
-\textbf{Health Factor:} Continuously monitored ratio ensuring borrowers maintain adequate collateral:
-$$H = \frac{Collateral \times CF}{Borrowed}$$
-
-Where $CF$ is the collateral factor. Health factors below 1.0 trigger liquidation eligibility.
-
-\textbf{Liquidation:} When borrowers fall below maintenance requirements, keepers can repay debt in exchange for collateral at a discount, incentivizing ecosystem health maintenance.
-
-\subsection{Fee Integration}
-
-\textbf{Staking Benefits:} Active UNXV stakers receive enhanced collateral factors, effectively allowing higher leverage ratios as a reward for ecosystem participation.
-
-\textbf{Origination Fees:} Optional fees on new borrows, with rates determined by governance and paid to the protocol treasury.
-
-\textbf{Reserve Factors:} Percentage of interest paid by borrowers that goes to protocol reserves rather than suppliers, providing sustainable revenue streams.
-
-\subsection{Risk Management}
-
-\textbf{Liquidation Parameters:} Each pool has configurable liquidation thresholds and bonus rates to ensure efficient liquidation processes while protecting borrowers from unnecessary liquidations.
-
-\textbf{Interest Rate Caps:} Maximum interest rates prevent extreme scenarios during high utilization periods.
-
-\textbf{Administrative Controls:} Multi-signature governance controls for critical parameter updates including collateral factors, interest rate models, and liquidation parameters.
-
-\section{Options Protocol}
-
-\subsection{Overview}
-
-The Unxversal Options Protocol implements European-style options with physical settlement, leveraging Switchboard oracles for accurate pricing and automated exercise decisions. The protocol supports both call and put options across multiple underlying assets with flexible expiration dates and strike prices.
-
-\subsection{Architecture}
-
-\textbf{Options Markets:} Each underlying asset pair (e.g., SUI/USDC) has a dedicated options market managing multiple option series.
-
-\textbf{Option Series:} Individual options contracts defined by:
-\begin{itemize}
-    \item Underlying asset pair
-    \item Strike price (1e6 scaled)
-    \item Expiration timestamp
-    \item Option type (call or put)
-    \item Oracle symbol for pricing
-\end{itemize}
-
-\textbf{Order Book System:} Each series maintains its own order book for price discovery and matching between buyers (option holders) and sellers (option writers).
-
-\subsection{Trading Mechanics}
-
-\textbf{Option Writing:} Sellers must deposit collateral when placing orders:
-\begin{itemize}
-    \item Call options: Deposit underlying asset (1:1 with contracts sold)
-    \item Put options: Deposit quote asset (strike price × contracts sold)
-    \item Collateral locked until option expires or is closed
-\end{itemize}
-
-\textbf{Option Buying:} Buyers pay premiums determined by order book matching:
-\begin{itemize}
-    \item Premium paid directly to option writers
-    \item Receive transferable option position tokens
-    \item Can exercise options before or at expiration
-\end{itemize}
-
-\textbf{Premium Collection:} All premium payments flow directly from buyers to writers, with protocol fees collected on trading volume.
-
-\subsection{Exercise and Settlement}
-
-\textbf{Physical Settlement:} Options exercise through actual asset delivery rather than cash settlement:
-
-For Call Options:
-\begin{itemize}
-    \item Buyer delivers quote asset at strike price
-    \item Receives underlying asset from collateral pool
-    \item Exercise only profitable when spot price > strike price
-\end{itemize}
-
-For Put Options:
-\begin{itemize}
-    \item Buyer delivers underlying asset
-    \item Receives quote asset at strike price
-    \item Exercise only profitable when strike price > spot price
-\end{itemize}
-
-\textbf{Oracle Integration:} Switchboard oracles provide reliable price feeds for:
-\begin{itemize}
-    \item Automatic exercise decision support
-    \item In-the-money verification
-    \item Fair value calculations for UI applications
-\end{itemize}
-
-\subsection{Collateral Management}
-
-\textbf{Writer Collateral:} Maintained in pooled vaults for efficiency:
-\begin{itemize}
-    \item Base asset vault for call option collateral
-    \item Quote asset vault for put option collateral and exercise proceeds
-    \item Pro-rata distribution of exercise proceeds to writers
-\end{itemize}
-
-\textbf{Exercise Proceeds:} When options are exercised, proceeds are pooled and writers can claim proportionally based on their exercised contracts.
-
-\textbf{Collateral Release:} Unused collateral from expired out-of-the-money options is automatically released to writers.
-
-\subsection{Fee Structure}
-
-\textbf{Protocol Fees:} Applied to premium payments with UNXV discount options:
-\begin{itemize}
-    \item Taker fees on option purchases
-    \item UNXV payment discounts for reduced fees
-    \item Staking tier additional discounts
-    \item Fee distribution to staking rewards and treasury
-\end{itemize}
-
-\textbf{Creation Fees:} New option series creation requires UNXV payment, preventing spam and supporting ecosystem economics.
-
-\subsection{Risk Management}
-
-\textbf{Collateral Requirements:} Full collateralization ensures all written options can be settled regardless of market movements.
-
-\textbf{Exercise Windows:} European-style options can only be exercised at expiration, simplifying risk calculations and reducing early exercise risks.
-
-\textbf{Oracle Dependencies:} Multiple oracle feeds and validation mechanisms ensure accurate pricing for exercise decisions.
-
-\section{Futures Protocol}
-
-\subsection{Overview}
-
-The Unxversal Futures Protocol provides cash-settled linear futures contracts with oracle-based price execution. Unlike traditional order book systems, trades execute at oracle mid prices, eliminating slippage and providing guaranteed execution at fair market values.
-
-\subsection{Architecture}
-
-\textbf{Market Structure:} Each futures market represents a specific underlying asset with defined parameters:
-\begin{itemize}
-    \item Underlying asset (e.g., SUI, BTC, ETH)
-    \item Oracle symbol for pricing
-    \item Contract size (units per contract)
-    \item Expiration date (or perpetual)
-    \item Collateral token type
-\end{itemize}
-
-\textbf{Account System:} Each user maintains a single account per market containing:
-\begin{itemize}
-    \item Collateral balance
-    \item Long position quantity and average price
-    \item Short position quantity and average price
-    \item Realized and unrealized PnL calculations
-\end{itemize}
-
-\subsection{Trading Mechanics}
-
-\textbf{Oracle Execution:} All trades execute at oracle prices:
-\begin{itemize}
-    \item No slippage or front-running concerns
-    \item Guaranteed fair market price execution
-    \item Immediate trade confirmation
-    \item No liquidity constraints
-\end{itemize}
-
-\textbf{Position Netting:} The protocol uses intelligent position netting:
-\begin{itemize}
-    \item Opening against existing opposite position first closes that position
-    \item Realizes PnL immediately upon position closure
-    \item New same-direction positions use weighted average pricing
-    \item Simplifies position management and PnL calculations
-\end{itemize}
-
-\textbf{Margin System:} Two-tiered margin requirements:
-\begin{itemize}
-    \item Initial Margin: Required for opening new positions
-    \item Maintenance Margin: Minimum required to avoid liquidation
-    \item Cross-margin system where collateral backs all positions
-\end{itemize}
-
-\subsection{PnL and Settlement}
-
-\textbf{Unrealized PnL:} Calculated in real-time using current oracle prices:
-$$PnL_{long} = (P_{current} - P_{avg}) \times Q_{long} \times Size_{contract}$$
-$$PnL_{short} = (P_{avg} - P_{current}) \times Q_{short} \times Size_{contract}$$
-
-\textbf{Realized PnL:} Locked in when positions are closed or reduced:
-\begin{itemize}
-    \item Added to collateral balance immediately
-    \item Used for calculating available margin
-    \item Permanent component of account equity
-\end{itemize}
-
-\textbf{Cash Settlement:} No physical delivery of underlying assets:
-\begin{itemize}
-    \item All settlements in collateral token
-    \item Automatic expiry settlement at oracle price
-    \item Simplified logistics compared to physical settlement
-\end{itemize}
-
-\subsection{Liquidation System}
-
-\textbf{Health Monitoring:} Continuous monitoring of account health:
-$$Health = \frac{Collateral + UnrealizedPnL}{MaintenanceMargin}$$
-
-\textbf{Liquidation Process:} When health falls below 1.0:
-\begin{itemize}
-    \item Keepers can liquidate positions at oracle prices
-    \item Partial liquidations allowed to minimize impact
-    \item Liquidation fees incentivize keeper participation
-    \item Liquidation penalties protect the ecosystem
-\end{itemize}
-
-\subsection{Fee Structure}
-
-\textbf{Trading Fees:} Applied to notional trading volume:
-\begin{itemize}
-    \item Taker-only fees (no maker rebates due to oracle execution)
-    \item Percentage of notional position size
-    \item UNXV payment discounts available
-    \item Staking tier additional reductions
-\end{itemize}
-
-\textbf{Funding:} For perpetual contracts (implemented in separate perpetuals protocol):
-\begin{itemize}
-    \item Regular funding payments between longs and shorts
-    \item Based on interest rate differentials
-    \item Automatic settlement through protocol
-\end{itemize}
-
-\section{Gas Futures Protocol}
-
-\subsection{Overview}
-
-The Gas Futures Protocol provides derivatives trading on Sui's native gas price mechanism. By leveraging Sui's on-chain reference gas price, the protocol offers a unique derivative product that allows speculation and hedging on network usage costs without requiring external oracles.
-
-\subsection{Architecture}
-
-\textbf{Native Price Source:} Unlike other futures that rely on external oracles, gas futures use Sui's built-in reference gas price:
-\begin{itemize}
-    \item Accessed via \texttt{sui::tx\_context::reference\_gas\_price()}
-    \item Represents the network's current gas price in MIST units
-    \item Updates automatically with network conditions
-    \item No oracle risk or external dependencies
-\end{itemize}
-
-\textbf{Contract Design:} Similar to standard futures but specialized for gas:
-\begin{itemize}
-    \item Contract size in MIST per contract per 1e6 price unit
-    \item Collateralized in specified token (e.g., SUI, USDC)
-    \item Cash settlement in collateral token
-    \item Support for both fixed expiry and perpetual-style contracts
-\end{itemize}
-
-\subsection{Use Cases}
-
-\textbf{Developer Hedging:} DApp developers can hedge against gas price volatility:
-\begin{itemize}
-    \item Lock in future gas costs for predictable expenses
-    \item Hedge against gas price spikes during high network usage
-    \item Budget planning for transaction-heavy applications
-    \item Risk management for gas-sensitive business models
-\end{itemize}
-
-\textbf{Speculation:} Traders can speculate on network activity:
-\begin{itemize}
-    \item Bet on increasing network adoption driving higher gas prices
-    \item Trade around known events that increase network usage
-    \item Arbitrage between predicted and actual gas price movements
-\end{itemize}
-
-\textbf{Network Analytics:} Gas futures provide market-based gas price predictions:
-\begin{itemize}
-    \item Forward-looking gas price expectations
-    \item Market sentiment on network growth
-    \item Price discovery for future network costs
-\end{itemize}
-
-\subsection{Trading Mechanics}
-
-\textbf{Price Discovery:} Gas price treated as a 1e6-scaled price unit:
-\begin{itemize}
-    \item Reference gas price directly used as execution price
-    \item No additional scaling or conversion needed
-    \item Real-time price updates with each transaction
-    \item Transparent and verifiable pricing mechanism
-\end{itemize}
-
-\textbf{Position Management:} Standard futures position mechanics:
-\begin{itemize}
-    \item Long positions profit when gas prices increase
-    \item Short positions profit when gas prices decrease
-    \item Position netting with weighted average pricing
-    \item Real-time PnL calculations
-\end{itemize}
-
-\subsection{Risk Considerations}
-
-\textbf{Gas Price Volatility:} Gas prices can be highly volatile during:
-\begin{itemize}
-    \item Network congestion periods
-    \item Major DApp launches or events
-    \item Network upgrades or changes
-    \item Market-wide crypto volatility affecting network usage
-\end{itemrix{
-
-\textbf{Systemic Risk:} Gas futures are directly tied to network health:
-\begin{itemize}
-    \item Network downtime affects price updates
-    \item Governance changes to gas mechanisms impact contracts
-    \item Close correlation between network success and gas demand
-\end{itemize}
-
-\subsection{Integration Benefits}
-
-\textbf{Native Integration:} Built specifically for Sui ecosystem:
-\begin{itemize}
-    \item No external dependencies or oracle risks
-    \item Perfect synchronization with network conditions
-    \item Gas costs of trading are part of the underlying market
-    \item Natural hedge for other Sui-based activities
-\end{itemize}
-
-\section{Perpetual Swaps Protocol}
-
-\subsection{Overview}
-
-The Unxversal Perpetual Swaps Protocol implements linear perpetual contracts with funding rate mechanisms, providing exposure to underlying assets without expiration dates. The protocol combines the benefits of futures trading with the flexibility of spot markets through continuous funding payments.
-
-\subsection{Architecture}
-
-\textbf{Perpetual Contracts:} Unlike traditional futures, perpetuals never expire:
-\begin{itemize}
-    \item Continuous trading without rollover requirements
-    \item Funding mechanisms keep prices anchored to spot
-    \item Oracle-based price execution
-    \item Cross-margin collateral system
-\end{itemize}
-
-\textbf{Funding System:} Maintains price stability through periodic funding payments:
-\begin{itemize}
-    \item Cumulative funding indices track payment obligations
-    \item Regular funding rate updates based on market conditions
-    \item Automatic settlement during account interactions
-    \item Funding vault manages payment flows between users
-\end{itemize}
-
-\subsection{Funding Mechanism}
-
-\textbf{Funding Rates:} Determine periodic payments between long and short holders:
-\begin{itemize}
-    \item Positive rates: Longs pay shorts
-    \item Negative rates: Shorts pay longs
-    \item Rates typically based on interest rate differentials and premiums
-    \item Regular updates by protocol administrators or automated systems
-\end{itemize}
-
-\textbf{Payment Calculation:} Funding payments proportional to position size:
-$$Payment = Position \times FundingRate \times ContractSize$$
-
-\textbf{Cumulative Index System:} Tracks total funding obligations over time:
-\begin{itemize}
-    \item Separate indices for long and short funding obligations
-    \item Users' last settlement points tracked individually
-    \item Automatic calculation of owed amounts during interactions
-\end{itemize}
-
-\subsection{Trading Operations}
-
-\textbf{Position Management:} Standard perpetual trading mechanics:
-\begin{itemize}
-    \item Open long/short positions at oracle prices
-    \item Close positions partially or fully
-    \item Cross-margin system supporting multiple positions
-    \item Real-time PnL calculations including funding effects
-\end{itemize}
-
-\textbf{Funding Settlement:} Automatic during any account interaction:
-\begin{itemize}
-    \item Calculate funding owed since last settlement
-    \item Deduct payments from collateral or add credits
-    \item Update user's funding settlement checkpoint
-    \item Maintain funding vault for payment flows
-\end{itemize}
-
-\subsection{Margin and Liquidation}
-
-\textbf{Cross-Margin System:} Single collateral pool backs all positions:
-\begin{itemize}
-    \item Efficient capital utilization
-    \item Automatic position offsetting reduces margin requirements
-    \item Complex risk calculations considering all positions
-\end{itemize}
-
-\textbf{Health Calculations:} Include funding effects in equity calculations:
-\begin{itemize}
-    \item Unrealized PnL from price movements
-    \item Accrued funding payments or credits
-    \item Available collateral balance
-    \item Total margin requirements across all positions
-\end{itemize}
-
-\textbf{Liquidation Process:} Similar to futures with funding considerations:
-\begin{itemize}
-    \item Health monitoring including funding effects
-    \item Partial liquidations to minimize impact
-    \item Automatic funding settlement during liquidation
-    \item Liquidation penalties to protect system health
-\end{itemize}
-
-\subsection{Economic Model}
-
-\textbf{Capital Efficiency:} Perpetuals provide leveraged exposure without capital lockup:
-\begin{itemize}
-    \item No expiration means no forced position closures
-    \item Funding payments instead of rollover costs
-    \item Continuous price discovery and liquidity
-\end{itemize}
-
-\textbf{Risk Management:} Multiple layers of protection:
-\begin{itemize}
-    \item Oracle-based execution eliminates slippage risks
-    \item Funding mechanism maintains price stability
-    \item Robust margin and liquidation systems
-    \item Administrative controls for emergency situations
-\end{itemize}
-
-\textbf{Fee Structure:} Comprehensive fee model:
-\begin{itemize}
-    \item Trading fees on notional volume
-    \item UNXV payment discounts
-    \item Staking tier benefits
-    \item No funding fees (handled through funding mechanism)
+    \item Consistent positive carry from mean-reversion cycles
+    \item Controlled maximum loss scenarios through hard liability caps
+    \item Enhanced returns from volatility-adaptive positioning
+    \item Reduced correlation with traditional asset classes
 \end{itemize}
 
 \section{Conclusion}
 
-The Unxversal Protocol Suite represents a comprehensive DeFi ecosystem that leverages the unique capabilities of the Sui blockchain to deliver efficient, secure, and user-friendly financial primitives. Through careful integration of seven specialized protocols, the suite provides a complete financial infrastructure while maintaining modularity and extensibility.
+This prediction market making framework represents a significant advancement in systematic trading strategies for the growing prediction market ecosystem. The combination of probability-aware quote optimization, robust risk management, and adaptive inventory control provides Unxversal Fund with a competitive edge in this emerging asset class.
 
-Key achievements of the protocol suite include:
-
-\textbf{Technical Innovation:} Each protocol leverages Sui's object model and Move programming language to achieve high performance and security. The integration with existing infrastructure like DeepBook demonstrates thoughtful architectural decisions that benefit from network effects rather than fragmenting liquidity.
-
-\textbf{Economic Alignment:} The UNXV token creates strong economic incentives across all protocols, rewarding long-term participants while providing sustainable revenue streams for continued development and security.
-
-\textbf{Risk Management:} Comprehensive risk management systems including oracle integration, margin requirements, liquidation mechanisms, and isolated pool architectures ensure system stability and user protection.
-
-\textbf{User Experience:} Simplified interfaces and automated processes reduce friction while maintaining the flexibility required by sophisticated users.
-
-The protocol suite is designed for long-term sustainability and growth, with governance mechanisms that allow for parameter adjustments and protocol evolution while maintaining security and decentralization principles.
-
-Future development will focus on cross-protocol synergies, additional asset support, and enhanced governance mechanisms as the Sui ecosystem continues to mature and expand.
+The strategy's modular design allows for incremental deployment and optimization while maintaining strict risk controls essential for institutional capital preservation.
 
 \end{document}
