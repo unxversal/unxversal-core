@@ -65,6 +65,7 @@ export function createStaticRangeKeeper(client: SuiClient, sender: string, exec:
     for (const b of bids.slice(0, 2)) {
       tx.moveCall({
         target: `${import.meta.env.VITE_UNXV_PKG}::dex::place_limit_order`,
+        typeArguments: [cfg.dex.baseType, cfg.dex.quoteType],
         arguments: [
           tx.object(poolId),
           tx.object(balanceManagerId),
@@ -86,6 +87,7 @@ export function createStaticRangeKeeper(client: SuiClient, sender: string, exec:
     for (const a of asks.slice(0, 2)) {
       tx.moveCall({
         target: `${import.meta.env.VITE_UNXV_PKG}::dex::place_limit_order`,
+        typeArguments: [cfg.dex.baseType, cfg.dex.quoteType],
         arguments: [
           tx.object(poolId),
           tx.object(balanceManagerId),

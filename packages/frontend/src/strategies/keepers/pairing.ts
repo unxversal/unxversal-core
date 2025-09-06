@@ -22,12 +22,12 @@ export function createPairingKeeper(client: SuiClient, sender: string, exec: TxE
       const tpUp = price + (price * tpBps) / 10_000n;
       const tpDn = price - (price * tpBps) / 10_000n;
       // Sell TP
-      tx.moveCall({ target: `${import.meta.env.VITE_UNXV_PKG}::dex::place_limit_order`, arguments: [
+      tx.moveCall({ target: `${import.meta.env.VITE_UNXV_PKG}::dex::place_limit_order`, typeArguments: [cfg.dex.baseType, cfg.dex.quoteType], arguments: [
         tx.object(cfg.dex.poolId), tx.object(cfg.dex.balanceManagerId), tx.object(cfg.dex.tradeProofId), tx.object(cfg.dex.feeConfigId), tx.object(cfg.dex.feeVaultId),
         tx.pure.u64(cid++), tx.pure.u8(0), tx.pure.u8(0), tx.pure.u64(tpUp), tx.pure.u64(qty), tx.pure.bool(false), tx.pure.bool(false), tx.pure.u64(BigInt(Math.floor(Date.now()/1000)+90)), tx.object('0x6')
       ]});
       // Buy TP
-      tx.moveCall({ target: `${import.meta.env.VITE_UNXV_PKG}::dex::place_limit_order`, arguments: [
+      tx.moveCall({ target: `${import.meta.env.VITE_UNXV_PKG}::dex::place_limit_order`, typeArguments: [cfg.dex.baseType, cfg.dex.quoteType], arguments: [
         tx.object(cfg.dex.poolId), tx.object(cfg.dex.balanceManagerId), tx.object(cfg.dex.tradeProofId), tx.object(cfg.dex.feeConfigId), tx.object(cfg.dex.feeVaultId),
         tx.pure.u64(cid++), tx.pure.u8(0), tx.pure.u8(0), tx.pure.u64(tpDn), tx.pure.u64(qty), tx.pure.bool(true), tx.pure.bool(false), tx.pure.u64(BigInt(Math.floor(Date.now()/1000)+90)), tx.object('0x6')
       ]});

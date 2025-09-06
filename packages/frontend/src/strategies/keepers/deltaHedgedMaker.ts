@@ -54,7 +54,7 @@ export function createDeltaHedgedMakerKeeper(client: SuiClient, sender: string, 
     let cid = BigInt(Date.now());
     for (const leg of ladder.slice(0, 4)) {
       const qty = clampOrderQtyByCaps(leg.qty, caps);
-      tx.moveCall({ target: `${import.meta.env.VITE_UNXV_PKG}::dex::place_limit_order`, arguments: [
+      tx.moveCall({ target: `${import.meta.env.VITE_UNXV_PKG}::dex::place_limit_order`, typeArguments: [cfg.dex.baseType, cfg.dex.quoteType], arguments: [
         tx.object(cfg.dex.poolId), tx.object(cfg.dex.balanceManagerId), tx.object(cfg.dex.tradeProofId), tx.object(cfg.dex.feeConfigId), tx.object(cfg.dex.feeVaultId),
         tx.pure.u64(cid++), tx.pure.u8(0), tx.pure.u8(0), tx.pure.u64(leg.price), tx.pure.u64(qty), tx.pure.bool(leg.isBid), tx.pure.bool(false), tx.pure.u64(BigInt(Math.floor(Date.now()/1000)+120)), tx.object('0x6')
       ]});

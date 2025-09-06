@@ -4,17 +4,19 @@ import { createRoot } from 'react-dom/client'
 import '@mysten/dapp-kit/dist/index.css'
 import './index.css'
 import App from './App.tsx'
-import { initSurgeFromSettings } from './lib/switchboard'
+import { SuiClientProvider, WalletProvider, makeDappNetworks } from './lib/wallet'
 
 const queryClient = new QueryClient()
-
-// Initialize Switchboard Surge streaming from user client-side settings (localStorage)
-void initSurgeFromSettings().catch(() => {})
+const { networkConfig } = makeDappNetworks()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <SuiClientProvider networks={networkConfig} network="testnet">
+        <WalletProvider>
+          <App />
+        </WalletProvider>
+      </SuiClientProvider>
     </QueryClientProvider>
   </StrictMode>,
 )

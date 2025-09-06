@@ -3,7 +3,7 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 function format(level: LogLevel, message: string): string {
   const ts = new Date().toISOString();
-  return ;
+  return `[${ts}] [${level.toUpperCase()}] ${message}`;
 }
 
 export const logger = {

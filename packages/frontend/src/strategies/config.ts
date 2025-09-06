@@ -18,6 +18,8 @@ export type StrategyConfig = {
     | 'options-sweep' | 'perps-auto' | 'perps-basis-osc' | 'perps-trend' | 'perps-cash-carry'
     | 'futures-basis-mr' | 'futures-term-roll' | 'futures-seasonal' | 'gas-futures-basis';
   dex: {
+    baseType: string;
+    quoteType: string;
     poolId: string;
     balanceManagerId: string;
     tradeProofId: string;

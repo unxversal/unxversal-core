@@ -14,6 +14,8 @@ export class DexClient {
   private pkg: string;
   constructor(pkg: string) { this.pkg = pkg; }
   placeLimitOrder(args: {
+    baseType: string;
+    quoteType: string;
     poolId: string;
     balanceManagerId: string;
     tradeProofId: string;
@@ -31,6 +33,7 @@ export class DexClient {
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.pkg}::dex::place_limit_order`,
+      typeArguments: [args.baseType, args.quoteType],
       arguments: [
         tx.object(args.poolId),
         tx.object(args.balanceManagerId),
@@ -52,6 +55,8 @@ export class DexClient {
   }
 
   placeMarketOrder(args: {
+    baseType: string;
+    quoteType: string;
     poolId: string;
     balanceManagerId: string;
     tradeProofId: string;
@@ -66,6 +71,7 @@ export class DexClient {
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.pkg}::dex::place_market_order`,
+      typeArguments: [args.baseType, args.quoteType],
       arguments: [
         tx.object(args.poolId),
         tx.object(args.balanceManagerId),
@@ -84,6 +90,8 @@ export class DexClient {
   }
 
   cancelOrder(args: {
+    baseType: string;
+    quoteType: string;
     poolId: string;
     balanceManagerId: string;
     tradeProofId: string;
@@ -92,6 +100,7 @@ export class DexClient {
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.pkg}::dex::cancel_order`,
+      typeArguments: [args.baseType, args.quoteType],
       arguments: [
         tx.object(args.poolId),
         tx.object(args.balanceManagerId),
@@ -104,6 +113,8 @@ export class DexClient {
   }
 
   modifyOrder(args: {
+    baseType: string;
+    quoteType: string;
     poolId: string;
     balanceManagerId: string;
     tradeProofId: string;
@@ -113,6 +124,7 @@ export class DexClient {
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.pkg}::dex::modify_order`,
+      typeArguments: [args.baseType, args.quoteType],
       arguments: [
         tx.object(args.poolId),
         tx.object(args.balanceManagerId),
@@ -126,6 +138,8 @@ export class DexClient {
   }
 
   withdrawSettledAmounts(args: {
+    baseType: string;
+    quoteType: string;
     poolId: string;
     balanceManagerId: string;
     tradeProofId: string;
@@ -133,6 +147,7 @@ export class DexClient {
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.pkg}::dex::withdraw_settled_amounts`,
+      typeArguments: [args.baseType, args.quoteType],
       arguments: [
         tx.object(args.poolId),
         tx.object(args.balanceManagerId),
@@ -142,6 +157,8 @@ export class DexClient {
     return tx;
   }
   createPermissionlessPool(args: {
+    baseType: string;
+    quoteType: string;
     registryId: string; // DeepBook registry
     feeConfigId: string;
     feeVaultId: string;
@@ -154,6 +171,7 @@ export class DexClient {
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.pkg}::dex::create_permissionless_pool`,
+      typeArguments: [args.baseType, args.quoteType],
       arguments: [
         tx.object(args.registryId),
         tx.object(args.feeConfigId),

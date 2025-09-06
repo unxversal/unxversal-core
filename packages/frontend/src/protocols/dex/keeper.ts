@@ -5,6 +5,8 @@ import { buildDeepbookPublicIndexer } from '../../lib/indexer';
 
 export type DexKeeperConfig = {
   pkg: string;
+  baseType: string;
+  quoteType: string;
   poolId: string;
   balanceManagerId: string;
   tradeProofId: string;
@@ -41,6 +43,7 @@ export function createDexKeeper(client: SuiClient, sender: string, exec: TxExecu
     // place bid
     tx.moveCall({
       target: `${pkg}::dex::place_limit_order`,
+      typeArguments: [cfg.baseType, cfg.quoteType],
       arguments: [
         tx.object(cfg.poolId),
         tx.object(cfg.balanceManagerId),
@@ -61,6 +64,7 @@ export function createDexKeeper(client: SuiClient, sender: string, exec: TxExecu
     // place ask
     tx.moveCall({
       target: `${pkg}::dex::place_limit_order`,
+      typeArguments: [cfg.baseType, cfg.quoteType],
       arguments: [
         tx.object(cfg.poolId),
         tx.object(cfg.balanceManagerId),
