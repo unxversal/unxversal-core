@@ -15,6 +15,9 @@ export type AppSettings = {
     pkgUnxversal: string;
     pkgDeepbook: string;
   };
+  staking?: {
+    poolId: string; // UNXV staking pool id
+  };
   indexers: {
     dex: boolean;
     lending: boolean;
@@ -28,6 +31,10 @@ export type AppSettings = {
   keepers: {
     autoResume: boolean;
   };
+  markets: {
+    autostartOnConnect: boolean;
+    watchlist: string[]; // pool symbols like "SUI/USDC"
+  };
   dex: DexSettings;
 };
 
@@ -39,6 +46,7 @@ const defaultSettings: AppSettings = {
     pkgUnxversal: '',
     pkgDeepbook: '',
   },
+  staking: { poolId: '' },
   indexers: {
     dex: false,
     lending: false,
@@ -51,6 +59,16 @@ const defaultSettings: AppSettings = {
   },
   keepers: {
     autoResume: false,
+  },
+  markets: {
+    autostartOnConnect: true,
+    watchlist: [
+      'UNXV/USDC','AUSD/USDC','BETH/USDC','CELO/USDC','DEEP/USDC','DRF/USDC','IKA/USDC','NS/USDC','SEND/USDC','SUI/USDC','TYPUS/USDC','USDT/USDC','WAL/USDC','WAVAX/USDC','WBNB/USDC','WBTC/USDC','WETH/USDC','WFTM/USDC','WGLMR/USDC','WMATIC/USDC','WSOL/USDC','WUSDC/USDC','WUSDT/USDC','XBTC/USDC',
+      'UNXV/USDT','AUSD/USDT','BETH/USDT','CELO/USDT','DEEP/USDT','DRF/USDT','IKA/USDT','NS/USDT','SEND/USDT','SUI/USDT','TYPUS/USDT','USDC/USDT','WAL/USDT','WAVAX/USDT','WBNB/USDT','WBTC/USDT','WETH/USDT','WFTM/USDT','WGLMR/USDT','WMATIC/USDT','WSOL/USDT','WUSDC/USDT','WUSDT/USDT','XBTC/USDT',
+      'AUSD/UNXV','BETH/UNXV','CELO/UNXV','DEEP/UNXV','DRF/UNXV','IKA/UNXV','NS/UNXV','SEND/UNXV','SUI/UNXV','TYPUS/UNXV','USDC/UNXV','WAL/UNXV','WAVAX/UNXV','WBNB/UNXV','WBTC/UNXV','WETH/UNXV','WFTM/UNXV','WGLMR/UNXV','WMATIC/UNXV','WSOL/UNXV','WUSDC/UNXV','WUSDT/UNXV','XBTC/UNXV',
+      'AUSD/SUI','BETH/SUI','CELO/SUI','DEEP/SUI','DRF/SUI','IKA/SUI','NS/SUI','SEND/SUI','SUI/SUI','TYPUS/SUI','USDC/SUI','WAL/SUI','WAVAX/SUI','WBNB/SUI','WBTC/SUI','WETH/SUI','WFTM/SUI','WGLMR/SUI','WMATIC/SUI','WSOL/SUI','WUSDC/SUI','WUSDT/SUI','XBTC/SUI',
+      'AUSD/USDC','AUSD/USDT','AUSD/WUSDC','AUSD/WUSDT','USDC/USDT','USDC/WUSDC','USDC/WUSDT','USDT/WUSDC','USDT/WUSDT','WUSDC/USDC','WUSDT/USDC','WUSDC/WUSDT'
+    ],
   },
   dex: {
     deepbookIndexerUrl: 'https://api.naviprotocol.io',
@@ -74,6 +92,8 @@ export function loadSettings(): AppSettings {
       ...defaultSettings,
       ...parsed,
       contracts: { ...defaultSettings.contracts, ...(parsed as any).contracts },
+      staking: { ...defaultSettings.staking, ...(parsed as any).staking },
+      markets: { ...defaultSettings.markets, ...(parsed as any).markets },
       dex: { ...defaultSettings.dex, ...parsed.dex },
     };
   } catch {

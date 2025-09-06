@@ -95,7 +95,7 @@
 }
 
 .bid .depthBar {
-  background: rgba(16,185,129,0.15);
+  background: linear-gradient(90deg, rgba(16,185,129,0.15) 0%, transparent 100%);
 }
 
 .ask { 
@@ -103,7 +103,7 @@
 }
 
 .ask .depthBar {
-  background: rgba(239,68,68,0.15);
+  background: linear-gradient(90deg, rgba(239,68,68,0.15) 0%, transparent 100%);
 }
 
 .bid:hover { 
@@ -127,5 +127,13 @@
 
 .spread span:first-child { text-align: left; }
 .spread span:last-child { text-align: right; }
+
+.bidPrice {
+  color: #10b981 !important; /* Green for bid prices */
+}
+
+.askPrice {
+  color: #ef4444 !important; /* Red for ask prices */
+}
 
 

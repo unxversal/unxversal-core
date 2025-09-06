@@ -2,7 +2,7 @@
   height: 100%; 
   display: grid; 
   grid-template-columns: 2fr 1fr 1fr; 
-  grid-template-rows: 1fr 160px; 
+  grid-template-rows: 1fr 240px; 
   gap: 8px; 
   padding: 8px; 
   overflow: hidden;
@@ -87,9 +87,8 @@
 .right { 
   grid-column: 3 / 4; 
   grid-row: 1 / 2; 
-  background: #0a0c12; 
-  border-radius: 8px; 
-  padding: 12px; 
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 

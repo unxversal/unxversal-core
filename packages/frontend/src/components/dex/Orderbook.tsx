@@ -54,7 +54,7 @@ export function Orderbook({ pool, indexer, onMidChange }: { pool: string; indexe
           return (
             <div key={`a-${i}`} className={styles.ask} style={{ '--depth': `${depthPercent}%` } as any}>
               <div className={styles.depthBar} />
-              <span>{p.toLocaleString()}</span>
+              <span className={styles.askPrice}>{p.toLocaleString()}</span>
               <span>{q.toLocaleString()}</span>
             </div>
           );
@@ -72,7 +72,7 @@ export function Orderbook({ pool, indexer, onMidChange }: { pool: string; indexe
           return (
             <div key={`b-${i}`} className={styles.bid} style={{ '--depth': `${depthPercent}%` } as any}>
               <div className={styles.depthBar} />
-              <span>{p.toLocaleString()}</span>
+              <span className={styles.bidPrice}>{p.toLocaleString()}</span>
               <span>{q.toLocaleString()}</span>
             </div>
           );

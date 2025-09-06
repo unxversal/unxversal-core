@@ -10,9 +10,10 @@ import { buildKeeperFromStrategy } from './strategies/factory.ts'
 import { SuiClient } from '@mysten/sui/client'
 import { Transaction } from '@mysten/sui/transactions'
 import { startPriceFeeds } from './lib/switchboard'
+import { startDefaultMarketWatcher } from './lib/marketWatcher'
 import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
 import styles from './components/AppShell.module.css'
-import { BarChart3, CandlestickChart, Factory, Fuel, Gauge, Home, Landmark, Settings } from 'lucide-react'
+import { BarChart3, CandlestickChart, Factory, Fuel, Gauge, Home, Landmark, Settings, Wifi, WifiOff, Activity, Pause } from 'lucide-react'
 import { DexScreen } from './components/dex/DexScreen'
 import { GasFuturesScreen } from './components/gas/GasFuturesScreen'
 import { LendingScreen } from './components/lending/LendingScreen'
@@ -82,6 +83,13 @@ function App() {
     startPriceFeeds().then(() => setSurgeReady(true)).catch(() => {})
   }, [account?.address, surgeReady])
 
+  // Autostart market watchers for base pools on connect
+  useEffect(() => {
+    if (!account?.address) return
+    const watcher = startDefaultMarketWatcher()
+    return () => { watcher?.stop() }
+  }, [account?.address])
+
   const handleNetworkChange = (newNetwork: 'testnet' | 'mainnet') => {
     setNetwork(newNetwork)
     selectNetwork(newNetwork)
@@ -121,7 +129,26 @@ function App() {
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>
       <footer className={styles.footer}>
-        <span>Polling on {network}. Set VITE_UNXV_PKG in .env for indexing filters.</span>
+        <div className={styles.statusBadges}>
+          <div className={`${styles.badge} ${account?.address ? styles.connected : styles.disconnected}`}>
+            {account?.address ? <Wifi size={10} /> : <WifiOff size={10} />}
+            <span>{account?.address ? 'Online' : 'Offline'}</span>
+          </div>
+          
+          <div className={`${styles.badge} ${started ? styles.active : styles.inactive}`}>
+            {started ? <Activity size={10} /> : <Pause size={10} />}
+            <span>IDX</span>
+          </div>
+          
+          <div className={`${styles.badge} ${surgeReady ? styles.active : styles.inactive}`}>
+            {surgeReady ? <Activity size={10} /> : <Pause size={10} />}
+            <span>PRC</span>
+          </div>
+        </div>
+        
+        <div className={styles.networkBadge}>
+          <span>{network.toUpperCase()}</span>
+        </div>
       </footer>
     </div>
   )

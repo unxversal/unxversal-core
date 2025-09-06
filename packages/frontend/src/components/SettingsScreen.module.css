@@ -10,3 +10,7 @@ input, select { background: #0f131a; border: 1px solid #1f2432; color: #e5e7eb; 
 .actions { display: flex; justify-content: flex-end; gap: 8px; }
 .actions > button { background: #1a2235; border: 1px solid #2a3450; color: #e5e7eb; border-radius: 8px; padding: 8px 12px; }
 
+.marketGroup { display: grid; gap: 6px; background: #0b0f16; border: 1px solid #1b2331; border-radius: 6px; padding: 8px; }
+.marketGroupTitle { font-size: 11px; color: #9ca3af; font-weight: 600; }
+.marketList { display: grid; gap: 6px; max-height: 220px; overflow: auto; }
+

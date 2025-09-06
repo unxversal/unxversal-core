@@ -10,7 +10,8 @@ import { loadSettings } from '../../lib/settings.config';
 export function DexScreen() {
   const s = loadSettings();
   const deepbookIndexerUrl = s.dex.deepbookIndexerUrl;
-  const pool = s.dex.poolId;
+  const pool = s.dex.poolId.replace(/[\/-]/g, '_').toUpperCase();
+  const displayPair = s.dex.poolId.replace(/[\/_]/g, '-').toUpperCase();
   const db = useMemo(() => buildDeepbookPublicIndexer(deepbookIndexerUrl), [deepbookIndexerUrl]);
 
   const [summary, setSummary] = useState<{ last?: number; vol24h?: number; high24h?: number; low24h?: number; change24h?: number }>({});
@@ -85,7 +86,7 @@ export function DexScreen() {
       <div className={styles.chartCard}>
         <div className={styles.topbar}>
           <div className={styles.pairBar}>
-            <div className={styles.pair}>DEX / {pool}</div>
+            <div className={styles.pair}>DEX / {displayPair}</div>
           </div>
           <div className={styles.metrics}>
             <span>Price: {summary.last ?? '-'}</span>

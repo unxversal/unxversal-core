@@ -163,8 +163,56 @@ export function buildDeepbookPublicIndexer(baseUrl: string) {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.json();
   }
+
+  const canon = (name: string) => name.replace(/[\/-]/g, '_').toUpperCase();
+
+  type PoolInfo = {
+    pool_id: string;
+    pool_name: string;
+    base_asset_id: string;
+    base_asset_decimals: number;
+    base_asset_symbol: string;
+    base_asset_name: string;
+    quote_asset_id: string;
+    quote_asset_decimals: number;
+    quote_asset_symbol: string;
+    quote_asset_name: string;
+    min_size: number;
+    lot_size: number;
+    tick_size: number;
+  };
+
+  type SummaryRow = {
+    trading_pairs: string;
+    quote_currency: string;
+    last_price: number;
+    lowest_price_24h: number;
+    highest_bid: number;
+    base_volume: number;
+    price_change_percent_24h: number;
+    quote_volume: number;
+    lowest_ask: number;
+    highest_price_24h: number;
+    base_currency: string;
+  };
+
+  type TradeRaw = {
+    trade_id: string;
+    base_volume: number;
+    quote_volume: number;
+    price: number | string;
+    type: 'buy' | 'sell' | string;
+    timestamp: number; // ms
+    maker_order_id: string;
+    taker_order_id: string;
+    maker_balance_manager_id: string;
+    taker_balance_manager_id: string;
+  };
+
+  type TradeNorm = { price: number; qty: number; ts: number; side: 'buy' | 'sell' };
+
   return {
-    getPools: () => j('/get_pools') as Promise<{ name: string }[]>,
+    getPools: () => j('/get_pools') as Promise<PoolInfo[]>,
     allHistoricalVolume: (params?: { start_time?: number; end_time?: number; volume_in_base?: boolean }) => {
       const sp = new URLSearchParams();
       if (params?.start_time != null) sp.set('start_time', String(params.start_time));
@@ -179,7 +227,8 @@ export function buildDeepbookPublicIndexer(baseUrl: string) {
       if (params?.end_time != null) sp.set('end_time', String(params.end_time));
       if (params?.volume_in_base != null) sp.set('volume_in_base', String(params.volume_in_base));
       const q = sp.toString();
-      return j(`/historical_volume/${poolNames.join(',')}${q ? `?${q}` : ''}`) as Promise<Record<string, number>>;
+      const pools = poolNames.map(canon).join(',');
+      return j(`/historical_volume/${pools}${q ? `?${q}` : ''}`) as Promise<Record<string, number>>;
     },
     historicalVolumeByBM: (poolNames: string[], balanceManagerId: string, params?: { start_time?: number; end_time?: number; volume_in_base?: boolean }) => {
       const sp = new URLSearchParams();
@@ -187,7 +236,8 @@ export function buildDeepbookPublicIndexer(baseUrl: string) {
       if (params?.end_time != null) sp.set('end_time', String(params.end_time));
       if (params?.volume_in_base != null) sp.set('volume_in_base', String(params.volume_in_base));
       const q = sp.toString();
-      return j(`/historical_volume_by_balance_manager_id/${poolNames.join(',')}/${balanceManagerId}${q ? `?${q}` : ''}`) as Promise<Record<string, [number, number]>>;
+      const pools = poolNames.map(canon).join(',');
+      return j(`/historical_volume_by_balance_manager_id/${pools}/${balanceManagerId}${q ? `?${q}` : ''}`) as Promise<Record<string, [number, number]>>;
     },
     historicalVolumeByBMWithInterval: (
       poolNames: string[],
@@ -200,11 +250,12 @@ export function buildDeepbookPublicIndexer(baseUrl: string) {
       if (params?.interval != null) sp.set('interval', String(params.interval));
       if (params?.volume_in_base != null) sp.set('volume_in_base', String(params.volume_in_base));
       const q = sp.toString();
-      return j(`/historical_volume_by_balance_manager_id_with_interval/${poolNames.join(',')}/${balanceManagerId}${q ? `?${q}` : ''}`) as Promise<Record<string, Record<string, [number, number]>>>;
+      const pools = poolNames.map(canon).join(',');
+      return j(`/historical_volume_by_balance_manager_id_with_interval/${pools}/${balanceManagerId}${q ? `?${q}` : ''}`) as Promise<Record<string, Record<string, [number, number]>>>;
     },
-    summary: () => j('/summary') as Promise<{ pool: string; base_volume: number; quote_volume: number; last_price: number }[]>,
+    summary: () => j('/summary') as Promise<SummaryRow[]>,
     ticker: () => j('/ticker') as Promise<Record<string, { base_volume: number; quote_volume: number; last_price: number; isFrozen: 0 | 1 }>>,
-    trades: (poolName: string, params?: { limit?: number; start_time?: number; end_time?: number; maker_balance_manager_id?: string; taker_balance_manager_id?: string }) => {
+    trades: async (poolName: string, params?: { limit?: number; start_time?: number; end_time?: number; maker_balance_manager_id?: string; taker_balance_manager_id?: string }): Promise<TradeNorm[]> => {
       const sp = new URLSearchParams();
       if (params?.limit != null) sp.set('limit', String(params.limit));
       if (params?.start_time != null) sp.set('start_time', String(params.start_time));
@@ -212,9 +263,11 @@ export function buildDeepbookPublicIndexer(baseUrl: string) {
       if (params?.maker_balance_manager_id) sp.set('maker_balance_manager_id', params.maker_balance_manager_id);
       if (params?.taker_balance_manager_id) sp.set('taker_balance_manager_id', params.taker_balance_manager_id);
       const q = sp.toString();
-      return j(`/trades/${poolName}${q ? `?${q}` : ''}`) as Promise<Array<{ price: number; qty: number; ts: number }>>;
+      const pools = canon(poolName);
+      const rows = await j(`/trades/${pools}${q ? `?${q}` : ''}`) as TradeRaw[];
+      return rows.map((t) => ({ price: Number(t.price), qty: Number(t.base_volume), ts: Math.floor(Number(t.timestamp) / 1000), side: (t.type === 'buy' || t.type === 'sell') ? t.type : 'buy' }));
     },
-    orderUpdates: (poolName: string, params?: { limit?: number; start_time?: number; end_time?: number; status?: 'Placed' | 'Canceled'; balance_manager_id?: string }) => {
+    orderUpdates: async (poolName: string, params?: { limit?: number; start_time?: number; end_time?: number; status?: 'Placed' | 'Canceled'; balance_manager_id?: string }) => {
       const sp = new URLSearchParams();
       if (params?.limit != null) sp.set('limit', String(params.limit));
       if (params?.start_time != null) sp.set('start_time', String(params.start_time));
@@ -222,14 +275,17 @@ export function buildDeepbookPublicIndexer(baseUrl: string) {
       if (params?.status) sp.set('status', params.status);
       if (params?.balance_manager_id) sp.set('balance_manager_id', params.balance_manager_id);
       const q = sp.toString();
-      return j(`/order_updates/${poolName}${q ? `?${q}` : ''}`) as Promise<Array<{ order_id: string; status: string; ts: number }>>;
+      const pools = canon(poolName);
+      const rows = await j(`/order_updates/${pools}${q ? `?${q}` : ''}`) as Array<{ order_id: string; balance_manager_id: string; timestamp: number; original_quantity: number; remaining_quantity: number; filled_quantity: number; price: number; status: string; type: string }>;
+      return rows.map((r) => ({ ...r, ts: Math.floor(Number(r.timestamp) / 1000) }));
     },
     orderbook: (poolName: string, params?: { level?: 1 | 2; depth?: number }) => {
       const sp = new URLSearchParams();
       if (params?.level != null) sp.set('level', String(params.level));
       if (params?.depth != null) sp.set('depth', String(params.depth));
       const q = sp.toString();
-      return j(`/orderbook/${poolName}${q ? `?${q}` : ''}`) as Promise<{ timestamp: string; bids: [string, string][]; asks: [string, string][] }>;
+      const pools = canon(poolName);
+      return j(`/orderbook/${pools}${q ? `?${q}` : ''}`) as Promise<{ timestamp: string; bids: [string, string][]; asks: [string, string][] }>;
     },
     assets: () => j('/assets') as Promise<Record<string, unknown>>,
   };

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import styles from './SettingsScreen.module.css';
 import { loadSettings, saveSettings, type AppSettings } from '../lib/settings.config';
+import { MARKETS, type MarketCategory } from '../lib/markets';
 
 export function SettingsScreen({ onClose }: { onClose?: () => void }) {
   const [s, setS] = useState<AppSettings>(loadSettings());
@@ -17,6 +18,41 @@ export function SettingsScreen({ onClose }: { onClose?: () => void }) {
               <input type="checkbox" checked={v} onChange={(e) => setS({ ...s, indexers: { ...s.indexers, [k]: e.target.checked } as any })} />
               <span>{k}</span>
             </label>
+          ))}
+        </div>
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.title}>Markets</div>
+        <div className={styles.row}>
+          <label>Autostart on connect</label>
+          <label className={styles.switchRow}>
+            <input type="checkbox" checked={s.markets.autostartOnConnect} onChange={(e)=>setS({ ...s, markets: { ...s.markets, autostartOnConnect: e.target.checked } })} />
+            <span>Warm charts and orderbooks automatically</span>
+          </label>
+        </div>
+        <div className={styles.title}>Watchlist</div>
+        <div className={styles.grid2}>
+          {Object.entries(MARKETS).map(([cat, pools]) => (
+            <div key={cat} className={styles.marketGroup}>
+              <div className={styles.marketGroupTitle}>{(cat as MarketCategory).toUpperCase()}</div>
+              <div className={styles.marketList}>
+                {pools.map((p)=>{
+                  const checked = s.markets.watchlist.includes(p);
+                  return (
+                    <label key={p} className={styles.switchRow}>
+                      <input type="checkbox" checked={checked} onChange={(e)=>{
+                        const next = e.target.checked
+                          ? Array.from(new Set([...s.markets.watchlist, p]))
+                          : s.markets.watchlist.filter(x=>x!==p);
+                        setS({ ...s, markets: { ...s.markets, watchlist: next } })
+                      }} />
+                      <span>{p}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
           ))}
         </div>
       </div>
@@ -78,6 +114,9 @@ export function SettingsScreen({ onClose }: { onClose?: () => void }) {
 
           <label>Deepbook Package Id</label>
           <input value={s.contracts.pkgDeepbook} onChange={(e) => setS({ ...s, contracts: { ...s.contracts, pkgDeepbook: e.target.value } })} />
+
+          <label>UNXV Staking Pool Id</label>
+          <input value={s.staking?.poolId ?? ''} onChange={(e) => setS({ ...s, staking: { ...(s.staking ?? { poolId: '' }), poolId: e.target.value } })} />
         </div>
       </div>
 
