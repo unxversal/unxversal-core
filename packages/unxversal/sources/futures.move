@@ -398,6 +398,12 @@ module unxversal::futures {
             i = i + 1;
         };
 
+        // Enforce exposure caps (account and market)
+        let gross_acc_post = acc.long_qty + acc.short_qty;
+        if (market.account_max_gross_qty > 0) { assert!(gross_acc_post <= market.account_max_gross_qty, E_EXPOSURE_CAP); };
+        let gross_mkt_post = market.total_long_qty + market.total_short_qty;
+        if (market.market_max_gross_qty > 0) { assert!(gross_mkt_post <= market.market_max_gross_qty, E_EXPOSURE_CAP); };
+
         // Protocol taker fee
         let taker_bps = fees::futures_taker_fee_bps(cfg);
         let pay_with_unxv = option::is_some(maybe_unxv_fee);

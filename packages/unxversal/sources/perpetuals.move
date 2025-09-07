@@ -30,6 +30,7 @@ module unxversal::perpetuals {
     const E_INSUFFICIENT: u64 = 4;
     const E_UNDER_IM: u64 = 5;
     const E_UNDER_MM: u64 = 6;
+    const E_EXPOSURE_CAP: u64 = 7;
 
     /// Market parameters
     public struct PerpParams has copy, drop, store {
@@ -64,6 +65,13 @@ module unxversal::perpetuals {
         last_funding_ms: u64,
         funding_vault: Balance<Collat>,
         keeper_incentive_bps: u64,
+        /// Per-account gross contract cap (0 = unlimited)
+        account_max_gross_qty: u64,
+        /// Per-market gross contract cap across all users (0 = unlimited)
+        market_max_gross_qty: u64,
+        /// Open interest tracking (sum of outstanding contracts per side)
+        total_long_qty: u64,
+        total_short_qty: u64,
         book: Book,
         owners: Table<u128, address>,
     }
@@ -106,6 +114,10 @@ module unxversal::perpetuals {
             last_funding_ms: sui::tx_context::epoch_timestamp_ms(ctx),
             funding_vault: balance::zero<Collat>(),
             keeper_incentive_bps,
+            account_max_gross_qty: 0,
+            market_max_gross_qty: 0,
+            total_long_qty: 0,
+            total_short_qty: 0,
             book: ubk::empty(tick_size, lot_size, min_size, ctx),
             owners: table::new<u128, address>(ctx),
         };
@@ -124,6 +136,13 @@ module unxversal::perpetuals {
     public fun set_keeper_incentive_bps<Collat>(reg_admin: &AdminRegistry, market: &mut PerpMarket<Collat>, keeper_bps: u64, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         market.keeper_incentive_bps = keeper_bps;
+    }
+
+    /// Admin: set exposure caps (gross contracts)
+    public fun set_exposure_caps<Collat>(reg_admin: &AdminRegistry, market: &mut PerpMarket<Collat>, account_max_gross_qty: u64, market_max_gross_qty: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        market.account_max_gross_qty = account_max_gross_qty;
+        market.market_max_gross_qty = market_max_gross_qty;
     }
 
     /// Admin/keeper: apply funding update (per contract, 1e6 scale).
@@ -290,22 +309,22 @@ module unxversal::perpetuals {
             let mut maker_acc = load_or_new_account<Collat>(market, maker_addr);
             if (is_buy) {
                 let r = if (acc.short_qty > 0) { if (fqty <= acc.short_qty) { fqty } else { acc.short_qty } } else { 0 };
-                if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px, r, market.params.contract_size); apply_realized_to_collat(&mut acc.collat, g, l, vault, clock, ctx); acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; };
+                if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px, r, market.params.contract_size); apply_realized_to_collat(&mut acc.collat, g, l, vault, clock, ctx); acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r; };
                 let a = if (fqty > r) { fqty - r } else { 0 };
-                if (a > 0) { acc.avg_long_1e6 = wavg(acc.avg_long_1e6, acc.long_qty, px, a); acc.long_qty = acc.long_qty + a; };
+                if (a > 0) { acc.avg_long_1e6 = wavg(acc.avg_long_1e6, acc.long_qty, px, a); acc.long_qty = acc.long_qty + a; market.total_long_qty = market.total_long_qty + a; };
                 let r_m = if (maker_acc.long_qty > 0) { if (fqty <= maker_acc.long_qty) { fqty } else { maker_acc.long_qty } } else { 0 };
-                if (r_m > 0) { let (g_m,l_m) = realize_long_ul(maker_acc.avg_long_1e6, px, r_m, market.params.contract_size); apply_realized_to_collat(&mut maker_acc.collat, g_m, l_m, vault, clock, ctx); maker_acc.long_qty = maker_acc.long_qty - r_m; if (maker_acc.long_qty == 0) { maker_acc.avg_long_1e6 = 0; }; };
+                if (r_m > 0) { let (g_m,l_m) = realize_long_ul(maker_acc.avg_long_1e6, px, r_m, market.params.contract_size); apply_realized_to_collat(&mut maker_acc.collat, g_m, l_m, vault, clock, ctx); maker_acc.long_qty = maker_acc.long_qty - r_m; if (maker_acc.long_qty == 0) { maker_acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r_m; };
                 let a_m = if (fqty > r_m) { fqty - r_m } else { 0 };
-                if (a_m > 0) { maker_acc.avg_short_1e6 = wavg(maker_acc.avg_short_1e6, maker_acc.short_qty, px, a_m); maker_acc.short_qty = maker_acc.short_qty + a_m; };
+                if (a_m > 0) { maker_acc.avg_short_1e6 = wavg(maker_acc.avg_short_1e6, maker_acc.short_qty, px, a_m); maker_acc.short_qty = maker_acc.short_qty + a_m; market.total_short_qty = market.total_short_qty + a_m; };
             } else {
                 let r2 = if (acc.long_qty > 0) { if (fqty <= acc.long_qty) { fqty } else { acc.long_qty } } else { 0 };
-                if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px, r2, market.params.contract_size); apply_realized_to_collat(&mut acc.collat, g2, l2, vault, clock, ctx); acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; };
+                if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px, r2, market.params.contract_size); apply_realized_to_collat(&mut acc.collat, g2, l2, vault, clock, ctx); acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r2; };
                 let a2 = if (fqty > r2) { fqty - r2 } else { 0 };
-                if (a2 > 0) { acc.avg_short_1e6 = wavg(acc.avg_short_1e6, acc.short_qty, px, a2); acc.short_qty = acc.short_qty + a2; };
+                if (a2 > 0) { acc.avg_short_1e6 = wavg(acc.avg_short_1e6, acc.short_qty, px, a2); acc.short_qty = acc.short_qty + a2; market.total_short_qty = market.total_short_qty + a2; };
                 let r_m2 = if (maker_acc.short_qty > 0) { if (fqty <= maker_acc.short_qty) { fqty } else { maker_acc.short_qty } } else { 0 };
-                if (r_m2 > 0) { let (g_m2,l_m2) = realize_short_ul(maker_acc.avg_short_1e6, px, r_m2, market.params.contract_size); apply_realized_to_collat(&mut maker_acc.collat, g_m2, l_m2, vault, clock, ctx); maker_acc.short_qty = maker_acc.short_qty - r_m2; if (maker_acc.short_qty == 0) { maker_acc.avg_short_1e6 = 0; }; };
+                if (r_m2 > 0) { let (g_m2,l_m2) = realize_short_ul(maker_acc.avg_short_1e6, px, r_m2, market.params.contract_size); apply_realized_to_collat(&mut maker_acc.collat, g_m2, l_m2, vault, clock, ctx); maker_acc.short_qty = maker_acc.short_qty - r_m2; if (maker_acc.short_qty == 0) { maker_acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r_m2; };
                 let a_m2 = if (fqty > r_m2) { fqty - r_m2 } else { 0 };
-                if (a_m2 > 0) { maker_acc.avg_long_1e6 = wavg(maker_acc.avg_long_1e6, maker_acc.long_qty, px, a_m2); maker_acc.long_qty = maker_acc.long_qty + a_m2; };
+                if (a_m2 > 0) { maker_acc.avg_long_1e6 = wavg(maker_acc.avg_long_1e6, maker_acc.long_qty, px, a_m2); maker_acc.long_qty = maker_acc.long_qty + a_m2; market.total_long_qty = market.total_long_qty + a_m2; };
             };
             let per_unit_1e6: u128 = ((px as u128) * (market.params.contract_size as u128)) / 1_000_000u128;
             total_notional_1e6 = total_notional_1e6 + (fqty as u128) * per_unit_1e6 * 1_000_000u128;
@@ -313,6 +332,12 @@ module unxversal::perpetuals {
             if (!ubk::has_order(&market.book, maker_id)) { let _ = table::remove(&mut market.owners, maker_id); };
             i = i + 1;
         };
+
+        // Enforce exposure caps after applying all fills
+        let gross_acc_post = acc.long_qty + acc.short_qty;
+        if (market.account_max_gross_qty > 0) { assert!(gross_acc_post <= market.account_max_gross_qty, E_EXPOSURE_CAP); };
+        let gross_market_post = market.total_long_qty + market.total_short_qty;
+        if (market.market_max_gross_qty > 0) { assert!(gross_market_post <= market.market_max_gross_qty, E_EXPOSURE_CAP); };
 
         let taker_bps = fees::futures_taker_fee_bps(cfg);
         let pay_with_unxv = option::is_some(maybe_unxv);
@@ -414,10 +439,10 @@ module unxversal::perpetuals {
         let mut closed = 0u64;
         if (acc.long_qty >= acc.short_qty) {
             let c = if (qty <= acc.long_qty) { qty } else { acc.long_qty };
-            if (c > 0) { let (_g,_l) = realize_long_ul(acc.avg_long_1e6, px, c, market.params.contract_size); /* only losses applied below */ acc.long_qty = acc.long_qty - c; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; closed = c; };
+            if (c > 0) { let (_g,_l) = realize_long_ul(acc.avg_long_1e6, px, c, market.params.contract_size); /* only losses applied below */ acc.long_qty = acc.long_qty - c; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - c; closed = c; };
         } else {
             let c2 = if (qty <= acc.short_qty) { qty } else { acc.short_qty };
-            if (c2 > 0) { let (_g2,_l2) = realize_short_ul(acc.avg_short_1e6, px, c2, market.params.contract_size); acc.short_qty = acc.short_qty - c2; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; closed = c2; };
+            if (c2 > 0) { let (_g2,_l2) = realize_short_ul(acc.avg_short_1e6, px, c2, market.params.contract_size); acc.short_qty = acc.short_qty - c2; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - c2; closed = c2; };
         };
         // re-evaluate equity losses are implicitly realized via later checks; liquidation penalty still applied
         // Penalty -> fee vault

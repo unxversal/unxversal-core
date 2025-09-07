@@ -11,10 +11,10 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   
   const [side, setSide] = useState<'long' | 'short'>('long');
-  const [mode, setMode] = useState<'market' | 'limit' | 'margin'>('market');
+  const [mode, setMode] = useState<'market' | 'limit'>('market');
   const [price, setPrice] = useState<number>(mid || 0.023);
   const [size, setSize] = useState<number>(0);
-  const [leverage, setLeverage] = useState<number>(2);
+  const [leverage, setLeverage] = useState<number>(10);
   const [submitting, setSubmitting] = useState(false);
   const [walletTab, setWalletTab] = useState<'assets' | 'staking'>('assets');
   const [usdcBal, setUsdcBal] = useState<number>(0);
@@ -22,10 +22,14 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
   const [marginRatio, setMarginRatio] = useState<number>(0);
   const [accountValue, setAccountValue] = useState<number>(0);
   const [activeStakeUnxv, setActiveStakeUnxv] = useState<number>(0);
+  const [takerBps, setTakerBps] = useState<number>(70); // fallback 0.70 bps
+  const [unxvDiscBps, setUnxvDiscBps] = useState<number>(3000); // fallback 30%
+  const [feeType, setFeeType] = useState<'unxv' | 'input'>('unxv');
 
 
   const s = loadSettings();
   const stakingPoolId = s.staking?.poolId ?? '';
+  const feeConfigId = s.dex?.feeConfigId ?? '';
   const disabled = !acct?.address || submitting;
 
   // Load balances and positions
@@ -76,6 +80,24 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
     void load();
   }, [acct?.address, stakingPoolId, client]);
 
+  // Load fee config (bps)
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      if (!feeConfigId) return;
+      try {
+        const o = await client.getObject({ id: feeConfigId, options: { showContent: true } });
+        const f = (o as any)?.data?.content?.fields;
+        const bps = Number(f?.dex_taker_fee_bps ?? 0) || Number(f?.dex_fee_bps ?? 0) || 70;
+        const disc = Number(f?.unxv_discount_bps ?? 3000);
+        if (!mounted) return;
+        setTakerBps(bps);
+        setUnxvDiscBps(disc);
+      } catch {}
+    };
+    void load();
+  }, [feeConfigId, client]);
+
   async function submit(): Promise<void> {
     if (size <= 0) return;
     setSubmitting(true);
@@ -103,13 +125,15 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
   // Derived calculations
   const effPrice = mode === 'limit' ? (price || mid || 0.023) : (mid || price || 0.023);
   const notionalValue = (size || 0) * effPrice;
-  const requiredMargin = notionalValue / (leverage || 1);
-  const tradingFee = notionalValue * 0.0005; // 0.05% trading fee
-  const borrowFee = mode === 'margin' ? (size || 0) * effPrice * 0.001 : 0;
-  const borrowAPR = 12.5; // Example APR - should come from protocol
+  const requiredMargin = leverage > 0 ? notionalValue / leverage : notionalValue;
+  const feeInput = notionalValue * (takerBps / 10000);
+  const feeUnxvDisc = notionalValue * ((takerBps * (1 - unxvDiscBps / 10000)) / 10000);
+  const inputFeeSym = 'USDC';
 
   const applyPercent = (p: number) => {
-    const maxSize = Math.floor((usdcBal * leverage * p) / (price || mid || 0.023));
+    const maxSize = leverage > 0 
+      ? Math.floor((usdcBal * leverage * p) / (price || mid || 0.023))
+      : Math.floor((usdcBal * p) / (price || mid || 0.023));
     setSize(maxSize);
   };
 
@@ -142,15 +166,14 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
         <div className={styles.modeToggle}>
           <button className={mode==='limit'?styles.active:''} onClick={()=>setMode('limit')}>Limit</button>
           <button className={mode==='market'?styles.active:''} onClick={()=>setMode('market')}>Market</button>
-          <button className={mode==='margin'?styles.active:''} onClick={()=>setMode('margin')}>Margin</button>
         </div>
         
         <div className={styles.tabs}>
           <button className={side==='long'?styles.active:''} onClick={()=>setSide('long')}>
-            {mode === 'margin' ? 'Buy / Long' : 'Long'}
+            Buy / Long
           </button>
           <button className={side==='short'?styles.active:''} onClick={()=>setSide('short')}>
-            {mode === 'margin' ? 'Sell / Short' : 'Short'}
+            Sell / Short
           </button>
         </div>
 
@@ -193,138 +216,132 @@ placeholder={mode==='market' ? 'Amount (Input)' : mode==='margin' ? 'Position Si
                 </svg>
               </div>
             </div>
-{mode !== 'margin' && (
-              <div className={styles.sliderContainer}>
-                <div className={styles.sliderWrapper}>
-                  <Slider
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={(() => {
-                      const maxSize = Math.floor((usdcBal * leverage) / (price || mid || 0.023));
-                      return maxSize > 0 ? Math.round((size / maxSize) * 100) : 0;
-                    })()}
-                    onChange={(value: number | number[]) => {
-                      const percent = (value as number) / 100;
-                      applyPercent(percent);
-                    }}
-                    dots
-                    marks={{
-                      0: '',
-                      25: '',
-                      50: '',
-                      75: '',
-                      100: ''
-                    }}
-                  />
-                </div>
-                <div className={styles.percentageDisplay}>
-                  {(() => {
-                    const maxSize = Math.floor((usdcBal * leverage) / (price || mid || 0.023));
+            <div className={styles.sliderContainer}>
+              <div className={styles.sliderWrapper}>
+                <Slider
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={(() => {
+                    const maxSize = leverage > 0 
+                      ? Math.floor((usdcBal * leverage) / (price || mid || 0.023))
+                      : Math.floor(usdcBal / (price || mid || 0.023));
                     return maxSize > 0 ? Math.round((size / maxSize) * 100) : 0;
-                  })()}%
-                </div>
+                  })()}
+                  onChange={(value: number | number[]) => {
+                    const percent = (value as number) / 100;
+                    applyPercent(percent);
+                  }}
+                  dots
+                  marks={{
+                    0: '',
+                    25: '',
+                    50: '',
+                    75: '',
+                    100: ''
+                  }}
+                  handleStyle={{
+                    backgroundColor: '#00d4aa',
+                    borderColor: '#00d4aa',
+                    width: 16,
+                    height: 16,
+                    marginTop: -6,
+                    opacity: 1,
+                    boxShadow: 'none'
+                  }}
+                  trackStyle={{
+                    backgroundColor: '#00d4aa',
+                    height: 4
+                  }}
+                  railStyle={{
+                    backgroundColor: '#1e2230',
+                    height: 4
+                  }}
+                />
               </div>
-            )}
+              <div className={styles.percentageDisplay}>
+                {(() => {
+                  const maxSize = leverage > 0 
+                    ? Math.floor((usdcBal * leverage) / (price || mid || 0.023))
+                    : Math.floor(usdcBal / (price || mid || 0.023));
+                  return maxSize > 0 ? Math.round((size / maxSize) * 100) : 0;
+                })()}%
+              </div>
+            </div>
           </div>
 
-{mode==='margin' && (
-            <>
-              <div className={styles.leverageControl}>
-                <div className={styles.leverageHeader}>
-                  <span className={styles.leverageLabel}>Leverage</span>
-                  <div className={styles.leverageInput}>
-                    <input 
-                      type="number" 
-                      value={leverage || ''} 
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-if (val >= 0 && val <= 10) setLeverage(val);
-                      }}
-min="0"
-                      max="10"
-                      step="0.1"
-                      className={styles.customLeverageInput}
-                      placeholder="2"
-                    />
-                    <span>×</span>
-                  </div>
-                </div>
-                <div className={styles.sliderContainer}>
-                  <div className={styles.sliderWrapper}>
-                    <Slider
-                      min={1}
-                      max={10}
-                      step={0.1}
-                      value={leverage}
-                      onChange={(value: number | number[]) => {
-                        setLeverage(value as number);
-                      }}
-                      marks={{
-                        1: '1×',
-                        2.5: '',
-                        5: '',
-                        7.5: '',
-                        10: '10×'
-                      }}
-                    />
-                  </div>
-                </div>
+          <div className={styles.leverageControl}>
+            <div className={styles.leverageHeader}>
+              <span className={styles.leverageLabel}>Leverage</span>
+              <div className={styles.leverageDisplay}>
+                {leverage}×
               </div>
+            </div>
+            <div className={styles.leverageButtons}>
+              {[0, 5, 10, 15, 20, 30, 40].map(lev => (
+                <button 
+                  key={lev}
+                  className={`${styles.leverageBtn} ${leverage === lev ? styles.activeLeverage : ''}`}
+                  onClick={() => setLeverage(lev)}
+                >
+                  {lev}×
+                </button>
+              ))}
+            </div>
+          </div>
 
-              <div className={styles.collateralInfo}>
-                <div className={styles.marginRow}>
-                  <span>Collateral (USDC)</span>
-                  <span>{leverage > 0 ? ((size || 0) * (price || mid || 0.023) / leverage).toFixed(2) : '0.00'} USDC</span>
-                </div>
-                <div className={styles.marginRow}>
-                  <span>Borrowing</span>
-                  <span>{(size || 0).toFixed(0)} {side === 'long' ? 'MIST' : 'USDC'}</span>
-                </div>
-              </div>
+          <div className={styles.collateralInfo}>
+            <div className={styles.marginRow}>
+              <span>Collateral (USDC)</span>
+              <span>
+                {leverage > 0 
+                  ? ((size || 0) * (price || mid || 0.023) / leverage).toFixed(2)
+                  : (size || 0) > 0 
+                    ? ((size || 0) * (price || mid || 0.023)).toFixed(2)
+                    : '0.00'
+                } USDC
+              </span>
+            </div>
+            <div className={styles.marginRow}>
+              <span>Position Size</span>
+              <span>{(size || 0).toFixed(0)} MIST</span>
+            </div>
+          </div>
 
-              <div className={styles.marginInfo}>
-                <div className={styles.marginRow}>
-                  <span>Liquidation Price</span>
-                  <span>
-                    {(() => {
-                      const entryPrice = price || mid || 0.023;
-                      const liqPrice = side === 'long' 
-                        ? entryPrice * (1 - 0.75/leverage)
-                        : entryPrice * (1 + 0.75/leverage);
-                      return liqPrice.toFixed(4);
-                    })()} USDC
-                  </span>
-                </div>
-              </div>
-            </>
-          )}
+          <div className={styles.marginInfo}>
+            <div className={styles.marginRow}>
+              <span>Liquidation Price</span>
+              <span>
+                {(() => {
+                  if (leverage === 0) return 'N/A';
+                  const entryPrice = price || mid || 0.023;
+                  const liqPrice = side === 'long' 
+                    ? entryPrice * (1 - 0.75/leverage)
+                    : entryPrice * (1 + 0.75/leverage);
+                  return liqPrice.toFixed(4) + ' USDC';
+                })()}
+              </span>
+            </div>
+          </div>
 
-
-          <div className={styles.feeDisplay}>
-            <div className={styles.feeRow}>
-              <span>Trading Fee</span>
-              <span>${tradingFee.toFixed(6)} USDC</span>
+          <div className={styles.feeSection}>
+            <div className={styles.feeSelector}>
+              <span className={styles.feeLabel}>Fee Payment</span>
+              <button 
+                className={`${styles.feeToggle} ${feeType === 'unxv' ? styles.active : ''}`}
+                onClick={() => setFeeType(feeType === 'unxv' ? 'input' : 'unxv')}
+              >
+                {feeType === 'unxv' ? 'UNXV' : inputFeeSym}
+              </button>
             </div>
             
-            {mode === 'margin' && (
-              <>
-                <div className={styles.feeRow}>
-                  <span>Borrow Fee</span>
-                  <span>${borrowFee.toFixed(6)} USDC</span>
-                </div>
-                <div className={styles.feeRow}>
-                  <span>Borrow APR</span>
-                  <span>{borrowAPR}%</span>
-                </div>
-                <div className={styles.feeRow}>
-                  <span className={styles.totalFeeLabel}>Total Fee</span>
-                  <span className={styles.totalFeeAmount}>
-                    ${(tradingFee + borrowFee).toFixed(6)} USDC
-                  </span>
-                </div>
-              </>
-            )}
+            <div className={styles.feeDisplay}>
+              <div className={styles.feeRow}>
+                <span>Trading Fee</span>
+                <span>{feeType === 'unxv' ? (feeUnxvDisc ? feeUnxvDisc.toFixed(6) : '-') + ' UNXV' : (feeInput ? feeInput.toFixed(6) : '-') + ' ' + inputFeeSym}</span>
+              </div>
+              
+            </div>
           </div>
         </div>
 

@@ -175,7 +175,8 @@ select:focus {
 
 .sliderWrapper {
   flex: 1;
-  margin: 0 4px;
+  margin: 0 8px;
+  overflow: hidden;
 }
 
 .percentageDisplay {
@@ -237,9 +238,21 @@ select:focus {
   border-color: #00d4aa;
 }
 
+.sliderWrapper :global(.rc-slider-mark) {
+  top: 18px;
+  font-size: 10px;
+  color: #9ca3af;
+}
+
+.sliderWrapper :global(.rc-slider-mark-text) {
+  color: #9ca3af;
+  font-size: 10px;
+}
+
 .leverageControl {
   display: grid;
   gap: 8px;
+  margin-top: 12px;
 }
 
 .leverageHeader {
@@ -293,6 +306,56 @@ select:focus {
   align-items: center;
 }
 
+.leverageDisplay {
+  color: #e5e7eb;
+  font-size: 12px;
+  font-weight: 600;
+  background: #1e2230;
+  padding: 4px 8px;
+  border-radius: 4px;
+  min-width: 40px;
+  text-align: center;
+}
+
+.leverageButtons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.leverageBtn {
+  background: #1e2230;
+  border: 1px solid #2a2d3a;
+  color: #9ca3af;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease;
+  min-width: 38px;
+  text-align: center;
+}
+
+.leverageBtn:hover {
+  background: #2a2d3a;
+  color: #e5e7eb;
+  border-color: #3a4553;
+}
+
+.leverageBtn.activeLeverage {
+  background: #00d4aa;
+  color: #ffffff;
+  border-color: #00d4aa;
+}
+
+.leverageBtn.activeLeverage:hover {
+  background: #00c199;
+  border-color: #00c199;
+}
+
 .orderOptions {
   display: grid;
   gap: 6px;
@@ -343,6 +406,7 @@ select:focus {
   padding: 8px;
   background: #151821;
   border-radius: 6px;
+  margin-top: 12px;
 }
 
 .marginInfo {
@@ -351,6 +415,7 @@ select:focus {
   padding: 8px;
   background: #151821;
   border-radius: 6px;
+  margin-top: 8px;
 }
 
 .marginRow {
@@ -390,6 +455,50 @@ select:focus {
 .totalFeeAmount {
   font-weight: 600 !important;
   color: #00d4aa !important;
+}
+
+.feeSection { 
+  display: grid; 
+  gap: 8px; 
+  font-size: 11px; 
+  color: #9ca3af; 
+  margin-top: 12px;
+}
+
+.feeSelector {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.feeLabel {
+  color: #9ca3af;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.feeToggle {
+  background: #1a1d29;
+  border: none;
+  color: #9ca3af;
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.feeToggle.active {
+  background: #00d4aa;
+  color: #ffffff;
+}
+
+.feeToggle:hover:not(.active) {
+  background: #2a2d3a;
+  color: #e5e7eb;
 }
 
 .orderSummary {

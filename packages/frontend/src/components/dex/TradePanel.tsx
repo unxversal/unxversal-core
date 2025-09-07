@@ -426,7 +426,10 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
                   <div className={styles.feeRow}>
                     <span className={styles.totalFeeLabel}>Total Fee</span>
                     <span className={styles.totalFeeAmount}>
-                      ${(feeInput + (borrowFee * (side === 'buy' ? (effPrice || 1) : 1))).toFixed(2)} USDC
+                      {feeType === 'unxv' 
+                        ? ((feeUnxvDisc || 0) + (borrowFee * (side === 'buy' ? (effPrice || 1) : 1))).toFixed(6) + ' UNXV'
+                        : ((feeInput || 0) + (borrowFee * (side === 'buy' ? (effPrice || 1) : 1))).toFixed(6) + ' ' + inputFeeSym
+                      }
                     </span>
                   </div>
                 </>

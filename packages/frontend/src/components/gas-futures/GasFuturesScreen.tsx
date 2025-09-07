@@ -74,14 +74,14 @@ export function GasFuturesScreen({ started, surgeReady, network }: { started?: b
         // Mock data for gas futures
         if (!mounted) return;
         setSummary({ 
-          last: 0.02345, 
+          last: 0.0234, 
           vol24h: 2150000, 
           high24h: 0.0256, 
           low24h: 0.0221, 
-          change24h: 4.7,
+          change24h: 4.70,
           openInterest: 15750000,
-          fundingRate: 0.0125,
-          nextFunding: Date.now() + 3600000 // 1 hour from now
+          fundingRate: 0.012500,
+          nextFunding: Date.now() + 3599000 // 59:59 from now
         });
       } catch {}
     };
@@ -305,17 +305,37 @@ export function GasFuturesScreen({ started, surgeReady, network }: { started?: b
           <div className={styles.pairBar}>
             <div className={styles.pair}>MIST Futures</div>
             <div className={styles.metrics}>
-              <span>Price: {summary.last?.toFixed(4) ?? '-'}</span>
-              <span className={summary.change24h && summary.change24h >= 0 ? styles.positive : styles.negative}>
-                Change: {summary.change24h?.toFixed(2) ?? '-'}%
-              </span>
-              <span>24h Vol: {summary.vol24h?.toLocaleString() ?? '-'}</span>
-              <span>OI: {summary.openInterest?.toLocaleString() ?? '-'}</span>
-              <span className={styles.fundingInfo}>
-                <Clock size={12} />
-                Funding: {summary.fundingRate ? (summary.fundingRate * 100).toFixed(4) + '%' : '-'} 
-                {summary.nextFunding && ` | ${formatCountdown(summary.nextFunding)}`}
-              </span>
+              <div className={styles.metricItem}>
+                <div className={styles.metricValue}>{summary.last?.toFixed(4) ?? '-'}</div>
+                <div className={styles.metricLabel}>Price</div>
+              </div>
+              <div className={styles.metricItem}>
+                <div className={`${styles.metricValue} ${summary.change24h && summary.change24h >= 0 ? styles.positive : styles.negative}`}>
+                  {summary.change24h?.toFixed(2) ?? '-'}%
+                </div>
+                <div className={styles.metricLabel}>Change</div>
+              </div>
+              <div className={styles.metricItem}>
+                <div className={styles.metricValue}>{summary.vol24h?.toLocaleString() ?? '-'}</div>
+                <div className={styles.metricLabel}>24h Vol</div>
+              </div>
+              <div className={styles.metricItem}>
+                <div className={styles.metricValue}>{summary.openInterest?.toLocaleString() ?? '-'}</div>
+                <div className={styles.metricLabel}>OI</div>
+              </div>
+              <div className={styles.metricItem}>
+                <div className={styles.metricValue}>
+                  {summary.fundingRate ? (summary.fundingRate * 100).toFixed(4) + '%' : '-'}
+                </div>
+                <div className={styles.metricLabel}>Funding</div>
+              </div>
+              <div className={`${styles.metricItem} ${styles.fundingItem}`}>
+                <div className={styles.metricValue}>
+                  <Clock size={10} />
+                  {summary.nextFunding ? formatCountdown(summary.nextFunding) : '--:--:--'}
+                </div>
+                <div className={styles.metricLabel}>Countdown</div>
+              </div>
             </div>
           </div>
         </div>

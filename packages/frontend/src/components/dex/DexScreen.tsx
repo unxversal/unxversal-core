@@ -305,11 +305,28 @@ export function DexScreen({ started, surgeReady, network }: { started?: boolean;
           <div className={styles.pairBar}>
             <div className={styles.pair}>DEX / {displayPair}</div>
             <div className={styles.metrics}>
-              <span>Price: {summary.last ?? '-'}</span>
-              <span>Change: {summary.change24h?.toFixed?.(2) ?? '-'}%</span>
-              <span>24h High: {summary.high24h ?? '-'}</span>
-              <span>24h Low: {summary.low24h ?? '-'}</span>
-              <span>24h Vol: {summary.vol24h ?? '-'}</span>
+              <div className={styles.metricItem}>
+                <div className={styles.metricValue}>{summary.last ?? '-'}</div>
+                <div className={styles.metricLabel}>Price</div>
+              </div>
+              <div className={styles.metricItem}>
+                <div className={`${styles.metricValue} ${summary.change24h && summary.change24h >= 0 ? styles.positive : styles.negative}`}>
+                  {summary.change24h?.toFixed?.(2) ?? '-'}%
+                </div>
+                <div className={styles.metricLabel}>Change</div>
+              </div>
+              <div className={styles.metricItem}>
+                <div className={styles.metricValue}>{summary.high24h ?? '-'}</div>
+                <div className={styles.metricLabel}>24h High</div>
+              </div>
+              <div className={styles.metricItem}>
+                <div className={styles.metricValue}>{summary.low24h ?? '-'}</div>
+                <div className={styles.metricLabel}>24h Low</div>
+              </div>
+              <div className={styles.metricItem}>
+                <div className={styles.metricValue}>{summary.vol24h ?? '-'}</div>
+                <div className={styles.metricLabel}>24h Vol</div>
+              </div>
             </div>
           </div>
         </div>

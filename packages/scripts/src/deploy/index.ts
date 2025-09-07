@@ -67,6 +67,16 @@ function extractCreatedId(res: any, typeContains: string): string | undefined {
   return undefined;
 }
 
+function resolveTypeTag(tag: string, pkgId: string): string {
+  if (!tag) return tag;
+  if (tag.startsWith('0x')) return tag;
+  if (tag.startsWith('::')) return `${pkgId}${tag}`;
+  // Common shorthand
+  if (tag === 'SUI') return '0x2::sui::SUI';
+  // If module path lacks address, prefix with pkgId
+  return `${pkgId}::${tag}`;
+}
+
 async function ensureOracleRegistry(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair): Promise<string> {
   if (cfg.oracleRegistryId) return cfg.oracleRegistryId;
   const tx = new Transaction();
@@ -333,7 +343,7 @@ async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25
       const tx = new Transaction();
       tx.moveCall({
         target: `${cfg.pkgId}::lending::init_pool`,
-        typeArguments: [l.asset],
+        typeArguments: [resolveTypeTag(l.asset, cfg.pkgId)],
         arguments: [
           tx.object(cfg.adminRegistryId),
           tx.pure.u64(l.baseRateBps),

@@ -19,6 +19,7 @@ module unxversal::lending {
         table::{Self as table, Table},
         clock::Clock,
     };
+    use std::type_name::{Self as type_name};
     // no option alias needed
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::fees::{Self as fees};
@@ -86,7 +87,7 @@ module unxversal::lending {
     }
 
     /// Events
-    public struct PoolInitialized has copy, drop { asset: vector<u8>, timestamp_ms: u64 }
+    public struct PoolInitialized has copy, drop { asset: type_name::TypeName, timestamp_ms: u64 }
     public struct Deposit has copy, drop { who: address, amount: u64, shares: u128, timestamp_ms: u64 }
     public struct Withdraw has copy, drop { who: address, amount: u64, shares: u128, timestamp_ms: u64 }
     public struct Borrow has copy, drop { who: address, amount: u64, new_principal: u128, timestamp_ms: u64 }
@@ -116,6 +117,7 @@ module unxversal::lending {
     ) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         assert!(liquidation_collateral_bps < collateral_factor_bps, E_NOT_ADMIN);
+        assert!(kink_util_bps > 0 && kink_util_bps < fees::bps_denom(), E_NOT_ADMIN);
         let irm = InterestRateModel { base_rate_bps, multiplier_bps, jump_multiplier_bps, kink_util_bps };
         let pool = LendingPool<T> {
             id: object::new(ctx),
@@ -135,12 +137,15 @@ module unxversal::lending {
             reserves: balance::zero<T>(),
         };
         transfer::share_object(pool);
-        event::emit(PoolInitialized { asset: b"T", timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(PoolInitialized { asset: type_name::get<T>(), timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
     }
 
     /// Admin: update general parameters
     public fun set_params<T>(reg_admin: &AdminRegistry, pool: &mut LendingPool<T>, reserve_factor_bps: u64, collateral_factor_bps: u64, liquidation_bonus_bps: u64, clock: &Clock, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(reserve_factor_bps <= fees::bps_denom(), E_NOT_ADMIN);
+        assert!(collateral_factor_bps > pool.liquidation_collateral_bps, E_HEALTH_VIOLATION);
+        assert!(collateral_factor_bps < fees::bps_denom(), E_HEALTH_VIOLATION);
         pool.reserve_factor_bps = reserve_factor_bps;
         pool.collateral_factor_bps = collateral_factor_bps;
         pool.liquidation_bonus_bps = liquidation_bonus_bps;
@@ -158,6 +163,7 @@ module unxversal::lending {
         ctx: &TxContext
     ) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(kink_util_bps > 0 && kink_util_bps < fees::bps_denom(), E_NOT_ADMIN);
         pool.irm = InterestRateModel { base_rate_bps, multiplier_bps, jump_multiplier_bps, kink_util_bps };
     }
 
@@ -189,21 +195,30 @@ module unxversal::lending {
     public fun withdraw<T>(pool: &mut LendingPool<T>, shares: u128, clock: &Clock, ctx: &mut TxContext): Coin<T> {
         accrue<T>(pool, clock);
         assert!(shares > 0, E_NO_SHARES);
+        let user = ctx.sender();
         // check user's shares
-        let user_shares = get_shares(&pool.supplier_shares, ctx.sender());
+        let user_shares = get_shares(&pool.supplier_shares, user);
         assert!(user_shares >= shares, E_INSUFFICIENT_SHARES);
         // compute amount = shares / total_shares * liquidity
         let liq = balance::value(&pool.liquidity);
         let amt: u64 = ((shares as u128) * (liq as u128) / (pool.total_supply_shares as u128)) as u64;
         assert!(amt > 0, E_ZERO_AMOUNT);
+        // Health check simulation after withdrawal
+        if (current_borrow_balance<T>(pool, user) > 0) {
+            let new_user_shares = user_shares - shares;
+            let new_total_shares = pool.total_supply_shares - shares;
+            let new_val: u64 = if (new_total_shares == 0) { 0 } else { (((balance::value(&pool.liquidity) as u128) * (new_user_shares as u128) / (new_total_shares as u128)) as u64) };
+            let maxb: u64 = (((new_val as u128) * (pool.collateral_factor_bps as u128) / (fees::bps_denom() as u128)) as u64);
+            assert!((current_borrow_balance<T>(pool, user) as u128) <= (maxb as u128), E_HEALTH_VIOLATION);
+        };
         // update shares and supply
-        set_shares(&mut pool.supplier_shares, ctx.sender(), user_shares - shares);
+        set_shares(&mut pool.supplier_shares, user, user_shares - shares);
         pool.total_supply_shares = pool.total_supply_shares - shares;
         // ensure liquidity availability (cannot withdraw reserves)
         assert!(balance::value(&pool.liquidity) >= amt, E_INSUFFICIENT_LIQUIDITY);
         let bal_part = balance::split(&mut pool.liquidity, amt);
         let c = coin::from_balance(bal_part, ctx);
-        event::emit(Withdraw { who: ctx.sender(), amount: amt, shares, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        event::emit(Withdraw { who: user, amount: amt, shares, timestamp_ms: sui::clock::timestamp_ms(clock) });
         c
     }
 
@@ -402,15 +417,23 @@ module unxversal::lending {
 
     /// View: compute borrow rate bps given utilization
     fun borrow_rate_bps(util_bps: u64, irm: &InterestRateModel): u64 {
-        if (util_bps <= irm.kink_util_bps) {
-            let inc: u64 = (((irm.multiplier_bps as u128) * (util_bps as u128)) / (irm.kink_util_bps as u128)) as u64;
+        let kink = if (irm.kink_util_bps == 0) { 1 } else { irm.kink_util_bps };
+        if (util_bps <= kink) {
+            let inc: u64 = (((irm.multiplier_bps as u128) * (util_bps as u128)) / (kink as u128)) as u64;
             irm.base_rate_bps + inc
         } else {
-            let over = util_bps - irm.kink_util_bps;
-            let denom: u64 = fees::bps_denom() - irm.kink_util_bps;
+            let over = util_bps - kink;
+            let denom: u64 = fees::bps_denom() - kink;
             let jump_inc: u64 = (((irm.jump_multiplier_bps as u128) * (over as u128)) / (denom as u128)) as u64;
             irm.base_rate_bps + irm.multiplier_bps + jump_inc
         }
+    }
+
+    /// View: exchange rate in WAD (1e18) of liquidity per share
+    public fun exchange_rate_wad<T>(pool: &LendingPool<T>): u128 {
+        let liq = balance::value(&pool.liquidity) as u128;
+        if (pool.total_supply_shares == 0 || liq == 0) return WAD;
+        (liq * WAD) / pool.total_supply_shares
     }
 
     /// View: compute user's maximum borrowable amount (in asset units) based on collateral factor and current shares

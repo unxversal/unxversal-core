@@ -15,6 +15,7 @@ module unxversal::dex {
         clock::Clock,
         event,
     };
+    use std::type_name;
     // default aliases for option and transfer are available
     use deepbook::{
         pool::{Self as db_pool, Pool},
@@ -22,6 +23,7 @@ module unxversal::dex {
         registry::{Registry as DBRegistry},
     };
     use deepbook::order_info::OrderInfo;
+    use deepbook::math;
     use token::deep::DEEP;
     use unxversal::unxv::UNXV;
     use unxversal::fees::{Self as fees, FeeConfig, FeeVault};
@@ -30,12 +32,15 @@ module unxversal::dex {
     /// Errors
     const E_ZERO_AMOUNT: u64 = 1;
     const E_POOL_FEE_NOT_PAID: u64 = 2;
+    const E_UNXV_REQUIRED: u64 = 3;
+    const E_INJECTION_FEE_NOT_PAID: u64 = 4;
 
     /// Events
     public struct ProtocolFeeTaken has copy, drop {
         payer: address,
         base_fee_asset_unxv: bool,
         amount: u64,
+        asset: type_name::TypeName,
         timestamp_ms: u64,
     }
 
@@ -67,10 +72,8 @@ module unxversal::dex {
         ctx: &mut TxContext,
     ): OrderInfo {
         assert!(quantity > 0, E_ZERO_AMOUNT);
-        // For protocol fee, here we only emit an event; for swap flows we enforce by coin handling.
-        let info = db_pool::place_limit_order(pool, balance_manager, trade_proof, client_order_id, order_type, self_matching_option, price, quantity, is_bid, pay_with_deep, expire_timestamp, clock, ctx);
-        event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: 0, timestamp_ms: sui::clock::timestamp_ms(clock) });
-        info
+        // Delegate to DeepBook; protocol fee for order placement is not charged.
+        db_pool::place_limit_order(pool, balance_manager, trade_proof, client_order_id, order_type, self_matching_option, price, quantity, is_bid, pay_with_deep, expire_timestamp, clock, ctx)
     }
 
     /// Place a market order with Unxversal fee handling.
@@ -89,9 +92,193 @@ module unxversal::dex {
         ctx: &mut TxContext,
     ): OrderInfo {
         assert!(quantity > 0, E_ZERO_AMOUNT);
-        let info = db_pool::place_market_order(pool, balance_manager, trade_proof, client_order_id, self_matching_option, quantity, is_bid, pay_with_deep, clock, ctx);
-        event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: 0, timestamp_ms: sui::clock::timestamp_ms(clock) });
-        info
+        db_pool::place_market_order(pool, balance_manager, trade_proof, client_order_id, self_matching_option, quantity, is_bid, pay_with_deep, clock, ctx)
+    }
+
+    // === Order placement with Unxversal injection fee (input token) ===
+    /// Limit BID: charge injection fee in Quote input token proportional to quantity * price.
+    /// Supports UNXV discount as a flag (UNXV refunded).
+    public fun place_limit_order_with_protocol_fee_bid<Base, Quote>(
+        pool: &mut Pool<Base, Quote>,
+        balance_manager: &mut BalanceManager,
+        trade_proof: &TradeProof,
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        staking_pool: &mut StakingPool,
+        mut fee_payment_quote: Coin<Quote>,
+        mut maybe_unxv: Option<Coin<UNXV>>,
+        client_order_id: u64,
+        order_type: u8,
+        self_matching_option: u8,
+        price: u64,
+        quantity: u64,
+        pay_with_deep: bool,
+        expire_timestamp: u64,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): OrderInfo {
+        assert!(quantity > 0, E_ZERO_AMOUNT);
+        // Notional in Quote units using DeepBook scaling
+        let notional_quote = math::mul(quantity, price);
+        let (_, maker_eff) = fees::apply_discounts(
+            fees::dex_taker_fee_bps(cfg),
+            fees::dex_maker_fee_bps(cfg),
+            option::is_some(&maybe_unxv),
+            staking_pool,
+            ctx.sender(),
+            cfg,
+        );
+        let fee_amt = (notional_quote as u128 * (maker_eff as u128) / (fees::bps_denom() as u128)) as u64;
+        let paid = coin::value(&fee_payment_quote);
+        assert!(paid >= fee_amt, E_INJECTION_FEE_NOT_PAID);
+        let fee_coin = coin::split(&mut fee_payment_quote, fee_amt, ctx);
+        fees::accrue_generic<Quote>(vault, fee_coin, clock, ctx);
+        if (option::is_some(&maybe_unxv)) {
+            let unxv = option::extract(&mut maybe_unxv);
+            transfer::public_transfer(unxv, ctx.sender());
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: true, amount: fee_amt, asset: type_name::get<Quote>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
+        } else {
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: fee_amt, asset: type_name::get<Quote>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
+        };
+        option::destroy_none(maybe_unxv);
+        // refund change
+        transfer::public_transfer(fee_payment_quote, ctx.sender());
+        db_pool::place_limit_order(pool, balance_manager, trade_proof, client_order_id, order_type, self_matching_option, price, quantity, true /* is_bid */, pay_with_deep, expire_timestamp, clock, ctx)
+    }
+
+    /// Limit ASK: charge injection fee in Base input token proportional to quantity.
+    /// Supports UNXV discount as a flag (UNXV refunded).
+    public fun place_limit_order_with_protocol_fee_ask<Base, Quote>(
+        pool: &mut Pool<Base, Quote>,
+        balance_manager: &mut BalanceManager,
+        trade_proof: &TradeProof,
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        staking_pool: &mut StakingPool,
+        mut fee_payment_base: Coin<Base>,
+        mut maybe_unxv: Option<Coin<UNXV>>,
+        client_order_id: u64,
+        order_type: u8,
+        self_matching_option: u8,
+        price: u64,
+        quantity: u64,
+        pay_with_deep: bool,
+        expire_timestamp: u64,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): OrderInfo {
+        assert!(quantity > 0, E_ZERO_AMOUNT);
+        let (_, maker_eff) = fees::apply_discounts(
+            fees::dex_taker_fee_bps(cfg),
+            fees::dex_maker_fee_bps(cfg),
+            option::is_some(&maybe_unxv),
+            staking_pool,
+            ctx.sender(),
+            cfg,
+        );
+        let fee_amt = ((quantity as u128) * (maker_eff as u128) / (fees::bps_denom() as u128)) as u64;
+        let paid = coin::value(&fee_payment_base);
+        assert!(paid >= fee_amt, E_INJECTION_FEE_NOT_PAID);
+        let fee_coin = coin::split(&mut fee_payment_base, fee_amt, ctx);
+        fees::accrue_generic<Base>(vault, fee_coin, clock, ctx);
+        if (option::is_some(&maybe_unxv)) {
+            let unxv = option::extract(&mut maybe_unxv);
+            transfer::public_transfer(unxv, ctx.sender());
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: true, amount: fee_amt, asset: type_name::get<Base>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
+        } else {
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: fee_amt, asset: type_name::get<Base>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
+        };
+        option::destroy_none(maybe_unxv);
+        transfer::public_transfer(fee_payment_base, ctx.sender());
+        db_pool::place_limit_order(pool, balance_manager, trade_proof, client_order_id, order_type, self_matching_option, price, quantity, false /* is_bid */, pay_with_deep, expire_timestamp, clock, ctx)
+    }
+
+    /// Market BID: charge injection fee in Quote input token using mid-price.
+    public fun place_market_order_with_protocol_fee_bid<Base, Quote>(
+        pool: &mut Pool<Base, Quote>,
+        balance_manager: &mut BalanceManager,
+        trade_proof: &TradeProof,
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        staking_pool: &mut StakingPool,
+        mut fee_payment_quote: Coin<Quote>,
+        mut maybe_unxv: Option<Coin<UNXV>>,
+        client_order_id: u64,
+        self_matching_option: u8,
+        quantity: u64,
+        pay_with_deep: bool,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): OrderInfo {
+        assert!(quantity > 0, E_ZERO_AMOUNT);
+        let mid = db_pool::mid_price<Base, Quote>(pool, clock);
+        let notional_quote = math::mul(quantity, mid);
+        let (_, maker_eff) = fees::apply_discounts(
+            fees::dex_taker_fee_bps(cfg),
+            fees::dex_maker_fee_bps(cfg),
+            option::is_some(&maybe_unxv),
+            staking_pool,
+            ctx.sender(),
+            cfg,
+        );
+        let fee_amt = (notional_quote as u128 * (maker_eff as u128) / (fees::bps_denom() as u128)) as u64;
+        let paid = coin::value(&fee_payment_quote);
+        assert!(paid >= fee_amt, E_INJECTION_FEE_NOT_PAID);
+        let fee_coin = coin::split(&mut fee_payment_quote, fee_amt, ctx);
+        fees::accrue_generic<Quote>(vault, fee_coin, clock, ctx);
+        if (option::is_some(&maybe_unxv)) {
+            let unxv = option::extract(&mut maybe_unxv);
+            transfer::public_transfer(unxv, ctx.sender());
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: true, amount: fee_amt, asset: type_name::get<Quote>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
+        } else {
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: fee_amt, asset: type_name::get<Quote>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
+        };
+        option::destroy_none(maybe_unxv);
+        transfer::public_transfer(fee_payment_quote, ctx.sender());
+        db_pool::place_market_order(pool, balance_manager, trade_proof, client_order_id, self_matching_option, quantity, true /* is_bid */, pay_with_deep, clock, ctx)
+    }
+
+    /// Market ASK: charge injection fee in Base input token.
+    public fun place_market_order_with_protocol_fee_ask<Base, Quote>(
+        pool: &mut Pool<Base, Quote>,
+        balance_manager: &mut BalanceManager,
+        trade_proof: &TradeProof,
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        staking_pool: &mut StakingPool,
+        mut fee_payment_base: Coin<Base>,
+        mut maybe_unxv: Option<Coin<UNXV>>,
+        client_order_id: u64,
+        self_matching_option: u8,
+        quantity: u64,
+        pay_with_deep: bool,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): OrderInfo {
+        assert!(quantity > 0, E_ZERO_AMOUNT);
+        let (_, maker_eff) = fees::apply_discounts(
+            fees::dex_taker_fee_bps(cfg),
+            fees::dex_maker_fee_bps(cfg),
+            option::is_some(&maybe_unxv),
+            staking_pool,
+            ctx.sender(),
+            cfg,
+        );
+        let fee_amt = ((quantity as u128) * (maker_eff as u128) / (fees::bps_denom() as u128)) as u64;
+        let paid = coin::value(&fee_payment_base);
+        assert!(paid >= fee_amt, E_INJECTION_FEE_NOT_PAID);
+        let fee_coin = coin::split(&mut fee_payment_base, fee_amt, ctx);
+        fees::accrue_generic<Base>(vault, fee_coin, clock, ctx);
+        if (option::is_some(&maybe_unxv)) {
+            let unxv = option::extract(&mut maybe_unxv);
+            transfer::public_transfer(unxv, ctx.sender());
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: true, amount: fee_amt, asset: type_name::get<Base>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
+        } else {
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: fee_amt, asset: type_name::get<Base>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
+        };
+        option::destroy_none(maybe_unxv);
+        transfer::public_transfer(fee_payment_base, ctx.sender());
+        db_pool::place_market_order(pool, balance_manager, trade_proof, client_order_id, self_matching_option, quantity, false /* is_bid */, pay_with_deep, clock, ctx)
     }
 
     // === Permissionless pool creation with Unxversal fee in UNXV ===
@@ -116,7 +303,7 @@ module unxversal::dex {
         let (stakers_coin, treasury_coin, _burn) = fees::accrue_unxv_and_split(cfg, vault, pay_exact, clock, ctx);
         staking::add_weekly_reward(staking_pool, stakers_coin, clock);
         transfer::public_transfer(treasury_coin, fees::treasury_address(cfg));
-        event::emit(PoolCreationFeePaid { payer: ctx.sender(), amount_unxv: required, timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(PoolCreationFeePaid { payer: ctx.sender(), amount_unxv: required, timestamp_ms: sui::clock::timestamp_ms(clock) });
         // refund remainder
         let change = fee_payment_unxv;
         transfer::public_transfer(change, ctx.sender());
@@ -141,20 +328,18 @@ module unxversal::dex {
         // Protocol taker fee from base_in with staking or UNXV discount (no volume tiers)
         let (taker_bps, _) = fees::apply_discounts(fees::dex_taker_fee_bps(cfg), fees::dex_maker_fee_bps(cfg), option::is_some(&fee_unxv_in), staking_pool, ctx.sender(), cfg);
         let fee_amt = (base_amt as u128 * (taker_bps as u128) / (fees::bps_denom() as u128)) as u64;
-        let _base_after = base_amt - fee_amt;
         let fee_coin = coin::split(&mut base_in, fee_amt, ctx);
         fees::accrue_generic<Base>(vault, fee_coin, clock, ctx);
         // Record spot volume (we proxy the USD 1e6 calc externally; here we just flag the path)
         // In production, pass oracle or pool mid-price to convert to USD 1e6 and call add_spot_volume_usd.
 
-        // If UNXV provided for discounted overlay fee (optional), split and record
+        // If UNXV provided, treat it purely as a discount flag and refund it
         if (option::is_some(&fee_unxv_in)) {
             let unxv = option::extract(&mut fee_unxv_in);
-            let discounted = fees::apply_unxv_discount(fee_amt, cfg);
-            distribute_unxv_fee(cfg, vault, staking_pool, unxv, clock, ctx);
-            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: true, amount: discounted, timestamp_ms: sui::clock::timestamp_ms(clock) });
+            transfer::public_transfer(unxv, ctx.sender());
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: true, amount: fee_amt, asset: type_name::get<Base>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
         } else {
-            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: fee_amt, timestamp_ms: sui::clock::timestamp_ms(clock) });
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: fee_amt, asset: type_name::get<Base>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
         };
         // fee_unxv_in is now guaranteed to be None; destroy container
         option::destroy_none(fee_unxv_in);
@@ -188,11 +373,10 @@ module unxversal::dex {
         fees::accrue_generic<Quote>(vault, fee_coin, clock, ctx);
         if (option::is_some(&fee_unxv_in)) {
             let unxv = option::extract(&mut fee_unxv_in);
-            let discounted = fees::apply_unxv_discount(fee_amt, cfg);
-            distribute_unxv_fee(cfg, vault, staking_pool, unxv, clock, ctx);
-            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: true, amount: discounted, timestamp_ms: sui::clock::timestamp_ms(clock) });
+            transfer::public_transfer(unxv, ctx.sender());
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: true, amount: fee_amt, asset: type_name::get<Quote>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
         } else {
-            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: fee_amt, timestamp_ms: sui::clock::timestamp_ms(clock) });
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: false, amount: fee_amt, asset: type_name::get<Quote>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
         };
         option::destroy_none(fee_unxv_in);
         let deep_zero = coin::zero<DEEP>(ctx);
@@ -634,7 +818,7 @@ module unxversal::dex {
         ctx: &mut TxContext,
     ): (Coin<Base>, Coin<Quote>) {
         if (fees::prefer_deep_backend(cfg)) {
-            assert!(option::is_some(&maybe_unxv), 1337);
+            assert!(option::is_some(&maybe_unxv), E_UNXV_REQUIRED);
             let unxv = option::extract(&mut maybe_unxv);
             let deep_in = unxv_to_deep_via_unxv_deep_pool(unxv_deep_pool, unxv, 0, clock, ctx);
             option::destroy_none(maybe_unxv);
@@ -661,7 +845,7 @@ module unxversal::dex {
         ctx: &mut TxContext,
     ): (Coin<Quote>, Coin<Base>) {
         if (fees::prefer_deep_backend(cfg)) {
-            assert!(option::is_some(&maybe_unxv), 1337);
+            assert!(option::is_some(&maybe_unxv), E_UNXV_REQUIRED);
             let unxv = option::extract(&mut maybe_unxv);
             let deep_in = unxv_to_deep_via_deep_unxv_pool(deep_unxv_pool, unxv, 0, clock, ctx);
             option::destroy_none(maybe_unxv);
