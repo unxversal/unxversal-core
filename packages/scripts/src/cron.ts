@@ -34,17 +34,27 @@ const client = new SuiClient({ url: getFullnodeUrl(NETWORK) });
 async function updateSwitchboardFeeds(): Promise<void> {
   if (!SWITCHBOARD_AGGREGATOR_IDS.length) return;
   const sb = new SwitchboardClient(client);
+  const tx = new Transaction();
+  const updated: string[] = [];
+
   for (const aggId of SWITCHBOARD_AGGREGATOR_IDS) {
     try {
       const aggregator = new Aggregator(sb, aggId);
-      const tx = new Transaction();
       await aggregator.fetchUpdateTx(tx);
-      const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
-      await client.waitForTransaction({ digest: res.digest });
-      logger.info(`Switchboard updated: ${aggId}`);
+      updated.push(aggId);
     } catch (e) {
-      logger.error(`Switchboard update failed for ${aggId}: ${(e as Error).message}`);
+      logger.error(`Switchboard update build failed for ${aggId}: ${(e as Error).message}`);
     }
+  }
+
+  if (!updated.length) return;
+
+  try {
+    const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
+    await client.waitForTransaction({ digest: res.digest });
+    logger.info(`Switchboard batch updated count=${updated.length}`);
+  } catch (e) {
+    logger.error(`Switchboard batch update failed: ${(e as Error).message}`);
   }
 }
 
@@ -114,7 +124,7 @@ async function oracleSetFeed(symbol: string, aggregatorId: string): Promise<void
   const tx = new Transaction();
   tx.moveCall({
     target: `${config.pkgId}::oracle::set_feed`,
-    arguments: [tx.object(ADMIN_REGISTRY_ID), tx.object(ORACLE_REGISTRY_ID), tx.pure.string(symbol), tx.object(aggregatorId)],
+    arguments: [tx.object(ADMIN_REGISTRY_ID), tx.object(ORACLE_REGISTRY_ID), tx.pure.string(symbol), tx.object(aggregatorId), tx.object('0x6')],
   });
   const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
   await client.waitForTransaction({ digest: res.digest });
@@ -125,7 +135,7 @@ async function oracleSetMaxAge(seconds: number): Promise<void> {
   const tx = new Transaction();
   tx.moveCall({
     target: `${config.pkgId}::oracle::set_max_age_registry`,
-    arguments: [tx.object(ADMIN_REGISTRY_ID), tx.object(ORACLE_REGISTRY_ID), tx.pure.u64(seconds)],
+    arguments: [tx.object(ADMIN_REGISTRY_ID), tx.object(ORACLE_REGISTRY_ID), tx.pure.u64(seconds), tx.object('0x6')],
   });
   const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
   await client.waitForTransaction({ digest: res.digest });
