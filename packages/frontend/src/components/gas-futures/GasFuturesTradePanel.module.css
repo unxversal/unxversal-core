@@ -24,8 +24,6 @@ select:focus {
 .longText { color: #10b981; }
 .shortText { color: #ef4444; }
 
-.positionSummary { margin-bottom: 8px; }
-.emptyPositions { color: #6b7280; font-size: 11px; text-align: center; padding: 8px; }
 
 .modeToggle { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px; align-items: center; }
 .modeToggle > button { background: transparent; border: none; color: #9ca3af; font-size: 11px; padding: 4px 6px; text-align: center; }

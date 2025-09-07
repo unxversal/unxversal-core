@@ -16,14 +16,16 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
   const [size, setSize] = useState<number>(0);
   const [leverage, setLeverage] = useState<number>(2);
   const [submitting, setSubmitting] = useState(false);
-  const [walletTab, setWalletTab] = useState<'assets' | 'positions'>('assets');
+  const [walletTab, setWalletTab] = useState<'assets' | 'staking'>('assets');
   const [usdcBal, setUsdcBal] = useState<number>(0);
   const [positions, setPositions] = useState<any[]>([]);
   const [marginRatio, setMarginRatio] = useState<number>(0);
   const [accountValue, setAccountValue] = useState<number>(0);
+  const [activeStakeUnxv, setActiveStakeUnxv] = useState<number>(0);
 
 
   const s = loadSettings();
+  const stakingPoolId = s.staking?.poolId ?? '';
   const disabled = !acct?.address || submitting;
 
   // Load balances and positions
@@ -55,6 +57,24 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
     const id = setInterval(load, 5000);
     return () => { mounted = false; clearInterval(id); };
   }, [acct?.address, client]);
+
+  // Load staking active stake (via dynamic field on staking pool)
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      if (!acct?.address || !stakingPoolId) return;
+      try {
+        const obj = await client.getDynamicFieldObject({ parentId: stakingPoolId, name: { type: 'address', value: acct.address } as any });
+        const fields = (obj as any)?.data?.content?.fields ?? {};
+        const active = Number(fields.active_stake ?? 0);
+        if (!mounted) return;
+        setActiveStakeUnxv(active / 1e9); // assume UNXV 9 decimals by convention; adjust if needed
+      } catch {
+        if (mounted) setActiveStakeUnxv(0);
+      }
+    };
+    void load();
+  }, [acct?.address, stakingPoolId, client]);
 
   async function submit(): Promise<void> {
     if (size <= 0) return;
@@ -101,7 +121,7 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
           <div className={styles.cardTitle}>Portfolio</div>
           <div className={styles.subTabs}>
             <button className={walletTab==='assets'?styles.active:''} onClick={()=>setWalletTab('assets')}>Assets</button>
-            <button className={walletTab==='positions'?styles.active:''} onClick={()=>setWalletTab('positions')}>Positions</button>
+            <button className={walletTab==='staking'?styles.active:''} onClick={()=>setWalletTab('staking')}>Staking</button>
           </div>
         </div>
         {walletTab==='assets' ? (
@@ -112,24 +132,7 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
           </div>
         ) : (
           <div className={styles.balances}>
-            {positions.length > 0 ? (
-              positions.map((pos, idx) => (
-                <div key={idx} className={styles.positionSummary}>
-                  <div className={styles.balanceRow}>
-                    <span className={pos.side === 'Long' ? styles.longText : styles.shortText}>{pos.side}</span>
-                    <span>{pos.size.toLocaleString()}</span>
-                  </div>
-                  <div className={styles.balanceRow}>
-                    <span>PnL:</span>
-                    <span className={pos.pnl >= 0 ? styles.positive : styles.negative}>
-                      ${pos.pnl >= 0 ? '+' : ''}{pos.pnl}
-                    </span>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className={styles.emptyPositions}>No open positions</div>
-            )}
+            <div className={styles.balanceRow}><span>Active UNXV:</span><span>{activeStakeUnxv.toLocaleString(undefined,{maximumFractionDigits:2})}</span></div>
           </div>
         )}
       </div>

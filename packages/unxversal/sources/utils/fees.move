@@ -28,7 +28,6 @@ module unxversal::fees {
 
     /// Basis points denominator
     const BPS_DENOM: u64 = 10_000;
-    const DAY_MS: u64 = 24 * 60 * 60 * 1000;
     const KIND_SPOT: u8 = 0;
     const KIND_PERPS: u8 = 1;
 
@@ -71,6 +70,7 @@ module unxversal::fees {
         /// Max collateral-factor bonus in bps for stakers
         lending_collateral_bonus_bps_max: u64,
         /// Staking tier thresholds and discounts (admin-set)
+        /// Tier 1 lowest, bps used for discount calculation for lending (max bonus off max stake), DEX fees, and gas-futures fees
         sd_t1_thr: u64, sd_t1_bps: u64,
         sd_t2_thr: u64, sd_t2_bps: u64,
         sd_t3_thr: u64, sd_t3_bps: u64,
@@ -132,19 +132,19 @@ module unxversal::fees {
     fun init(_w: FEES, ctx: &mut TxContext) {
         let cfg = FeeConfig {
             id: object::new(ctx),
-            dex_fee_bps: 100,                // 1 bps initial DEX protocol fee
-            dex_taker_fee_bps: 100,
-            dex_maker_fee_bps: 0,
-            futures_taker_fee_bps: 45,       // default taker fee for futures (0.45 bps)
-            futures_maker_fee_bps: 15,       // default maker fee for futures (0.15 bps)
-            gasfut_taker_fee_bps: 45,        // default equal to futures
-            gasfut_maker_fee_bps: 15,
+            dex_fee_bps: 7,                // 7 bps initial DEX protocol fee
+            dex_taker_fee_bps: 7,
+            dex_maker_fee_bps: 4,
+            futures_taker_fee_bps: 5,       // default taker fee for futures (0.45 bps)
+            futures_maker_fee_bps: 2,       // default maker fee for futures (0.15 bps)
+            gasfut_taker_fee_bps: 5,        // default equal to futures
+            gasfut_maker_fee_bps: 2,
             unxv_discount_bps: 3000,         // 30% discount
             treasury: ctx.sender(),
             prefer_deep_backend: true,
-            dist: FeeDistribution { stakers_share_bps: 4000, treasury_share_bps: 3000, burn_share_bps: 3000 },
-            pool_creation_fee_unxv: 0,
-            lending_borrow_fee_bps: 0,
+            dist: FeeDistribution { stakers_share_bps: 4000, treasury_share_bps: 4000, burn_share_bps: 2000 },
+            pool_creation_fee_unxv: 500,
+            lending_borrow_fee_bps: 5,
             lending_collateral_bonus_bps_max: 500, // +5% max bonus by default
             sd_t1_thr: 10, sd_t1_bps: 500,
             sd_t2_thr: 100, sd_t2_bps: 1000,
@@ -376,70 +376,6 @@ module unxversal::fees {
     // maker rebates removed
 
     /***********************
-     * Volume tracking (14d)
-     ***********************/
-    public struct VolumeEntry has copy, drop, store { spot_usd_1e6: u128, perps_usd_1e6: u128 }
-    public struct UserVolume has store { last_day: u64, by_day: Table<u64, VolumeEntry> }
-    public struct VolumeRegistry has key, store { id: UID, users: Table<address, UserVolume> }
-
-    fun day_index(clock: &sui::clock::Clock): u64 { sui::clock::timestamp_ms(clock) / DAY_MS }
-
-    public fun init_volume_registry(_w: VOLS, ctx: &mut TxContext) {
-        let reg = VolumeRegistry { id: object::new(ctx), users: table::new<address, UserVolume>(ctx) };
-        transfer::share_object(reg);
-    }
-
-    public fun add_spot_volume_usd(reg: &mut VolumeRegistry, user: address, usd_1e6: u128, clock: &sui::clock::Clock, ctx: &mut TxContext) { add_volume_internal(reg, user, usd_1e6, true, clock, ctx) }
-
-    public fun add_perps_volume_usd(reg: &mut VolumeRegistry, user: address, usd_1e6: u128, clock: &sui::clock::Clock, ctx: &mut TxContext) { add_volume_internal(reg, user, usd_1e6, false, clock, ctx) }
-
-    fun add_volume_internal(reg: &mut VolumeRegistry, user: address, usd_1e6: u128, is_spot: bool, clock: &sui::clock::Clock, ctx: &mut TxContext) {
-        let d = day_index(clock);
-        if (table::contains(&reg.users, user)) {
-            let uv: &mut UserVolume = table::borrow_mut(&mut reg.users, user);
-            prune_old(uv, d);
-            let ve = if (table::contains(&uv.by_day, d)) { *table::borrow(&uv.by_day, d) } else { VolumeEntry { spot_usd_1e6: 0, perps_usd_1e6: 0 } };
-            let mut ve2 = ve;
-            if (is_spot) { ve2.spot_usd_1e6 = ve.spot_usd_1e6 + usd_1e6; } else { ve2.perps_usd_1e6 = ve.perps_usd_1e6 + usd_1e6; };
-            if (table::contains(&uv.by_day, d)) { let _old = table::remove(&mut uv.by_day, d); };
-            table::add(&mut uv.by_day, d, ve2);
-            uv.last_day = d;
-        } else {
-            let mut uv_new = UserVolume { last_day: d, by_day: table::new<u64, VolumeEntry>(ctx) };
-            let ve2 = if (is_spot) { VolumeEntry { spot_usd_1e6: usd_1e6, perps_usd_1e6: 0 } } else { VolumeEntry { spot_usd_1e6: 0, perps_usd_1e6: usd_1e6 } };
-            table::add(&mut uv_new.by_day, d, ve2);
-            table::add(&mut reg.users, user, uv_new);
-        };
-    }
-
-    fun prune_old(uv: &mut UserVolume, current_day: u64) {
-        // remove entries older than 14 days
-        let mut day = if (uv.last_day + 1 < current_day) { current_day - 15 } else { uv.last_day };
-        while (day + 14 < current_day) {
-            if (table::contains(&uv.by_day, day)) { let _ = table::remove(&mut uv.by_day, day); };
-            day = day + 1;
-        };
-        uv.last_day = current_day;
-    }
-
-    public fun weighted_14d_volume_usd(reg: &VolumeRegistry, user: address, clock: &sui::clock::Clock): u128 {
-        if (!table::contains(&reg.users, user)) { return 0 };
-        let uv = table::borrow(&reg.users, user);
-        let today = day_index(clock);
-        let mut total: u128 = 0;
-        let mut i = 0u64;
-        while (i < 14) {
-            let d = today - i;
-            if (table::contains(&uv.by_day, d)) {
-                let e = table::borrow(&uv.by_day, d);
-                total = total + e.perps_usd_1e6 + (e.spot_usd_1e6 * 2);
-            };
-            i = i + 1;
-        };
-        total
-    }
-
-    /***********************
      * Fee schedule (HL-like)
      ***********************/
     public fun compute_tier_bps_spot(total_weighted_usd_1e6: u128): (u64, u64, u8) {
@@ -484,13 +420,7 @@ module unxversal::fees {
         (taker_eff, maker_eff)
     }
 
-    /// Convenience: compute taker bps for SPOT or PERPS given registry and staking pool
-    public fun compute_taker_bps_for_user(kind: u8, volreg: &VolumeRegistry, user: address, pool: &StakingPool, cfg: &FeeConfig, pay_with_unxv: bool, clock: &sui::clock::Clock): u64 {
-        let total = weighted_14d_volume_usd(volreg, user, clock);
-        let (tb, mb, _) = if (kind == KIND_SPOT) { compute_tier_bps_spot(total) } else if (kind == KIND_PERPS) { compute_tier_bps_perps(total) } else { compute_tier_bps_spot(total) };
-        let (teff, _) = apply_discounts(tb, mb, pay_with_unxv, pool, user, cfg);
-        teff
-    }
+    // compute_taker_bps_for_user removed along with volume tracking
 
     public fun kind_spot(): u8 { KIND_SPOT }
     public fun kind_perps(): u8 { KIND_PERPS }

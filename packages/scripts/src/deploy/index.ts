@@ -70,7 +70,7 @@ function extractCreatedId(res: any, typeContains: string): string | undefined {
 async function ensureOracleRegistry(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair): Promise<string> {
   if (cfg.oracleRegistryId) return cfg.oracleRegistryId;
   const tx = new Transaction();
-  tx.moveCall({ target: `${cfg.pkgId}::oracle::init_registry`, arguments: [tx.object(cfg.adminRegistryId)] });
+  tx.moveCall({ target: `${cfg.pkgId}::oracle::init_registry`, arguments: [tx.object(cfg.adminRegistryId), tx.object('0x6')] });
   const res = await execTx(client, tx, keypair, 'oracle.init_registry');
   const id = extractCreatedId(res, `${cfg.pkgId}::oracle::OracleRegistry`)
     || extractCreatedId(res, `${cfg.pkgId}::oracle::OracleRegistry`)
@@ -81,13 +81,13 @@ async function ensureOracleRegistry(client: SuiClient, cfg: DeployConfig, keypai
 async function setOracleParams(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
   if (cfg.oracleMaxAgeSec && cfg.oracleRegistryId) {
     const tx = new Transaction();
-    tx.moveCall({ target: `${cfg.pkgId}::oracle::set_max_age_registry`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.u64(cfg.oracleMaxAgeSec)] });
+    tx.moveCall({ target: `${cfg.pkgId}::oracle::set_max_age_registry`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.u64(cfg.oracleMaxAgeSec), tx.object('0x6')] });
     await execTx(client, tx, keypair, 'oracle.set_max_age');
   }
   if (cfg.oracleFeeds && cfg.oracleFeeds.length && cfg.oracleRegistryId) {
     for (const f of cfg.oracleFeeds) {
       const tx = new Transaction();
-      tx.moveCall({ target: `${cfg.pkgId}::oracle::set_feed`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.string(f.symbol), tx.object(f.aggregatorId)] });
+      tx.moveCall({ target: `${cfg.pkgId}::oracle::set_feed`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.string(f.symbol), tx.object(f.aggregatorId), tx.object('0x6')] });
       await execTx(client, tx, keypair, `oracle.set_feed ${f.symbol}`);
     }
   }

@@ -149,7 +149,7 @@ module unxversal::usdu {
             6,
             b"USDU",
             b"USD Unxversal",
-            b"",
+            b"Unxversal testnet USD stablecoin",
             option::none(),
             ctx
         );
