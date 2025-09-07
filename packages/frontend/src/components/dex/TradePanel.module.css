@@ -8,7 +8,16 @@ select:focus {
 }
 
 .walletCard { background: #0b0f16; border: none; border-radius: 8px; padding: 12px; display: grid; gap: 12px; }
-.orderCard { background: #0b0f16; border: none; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 12px; flex: 1; overflow-y: auto; max-height: calc(100vh - 200px); }
+.orderCard { 
+  background: #0b0f16; 
+  border: none; 
+  border-radius: 8px; 
+  display: flex; 
+  flex-direction: column; 
+  flex: 1; 
+  min-height: 0;
+  overflow: hidden;
+}
 .cardHeader { display: flex; justify-content: space-between; align-items: center; }
 .cardTitle { font-weight: 600; color: #e5e7eb; }
 .subTabs { display: grid; grid-auto-flow: column; gap: 6px; }
@@ -74,10 +83,13 @@ select:focus {
 }
 
 .field { 
-  display: grid; 
+  display: flex;
+  flex-direction: column;
   gap: 6px; 
   font-size: 12px; 
-  color: #9ca3af; 
+  color: #9ca3af;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 .field > label { 
@@ -89,6 +101,8 @@ select:focus {
   position: relative; 
   display: flex; 
   align-items: center;
+  min-width: 0;
+  width: 100%;
 }
 
 .inputGroup input { 
@@ -107,10 +121,12 @@ select:focus {
   border: none; 
   color: #e5e7eb; 
   border-radius: 6px; 
-  padding: 6px 50px 6px 12px; 
+  padding: 6px 70px 6px 12px; 
   width: 100%;
+  min-width: 0;
   font-size: 12px;
   min-height: 24px;
+  box-sizing: border-box;
 }
 
 .inputWithLabel::placeholder {
@@ -118,10 +134,30 @@ select:focus {
   font-size: 12px;
 }
 
-.contentArea {
-  display: grid;
+.orderHeader {
+  padding: 12px 12px 0 12px;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  align-content: start;
+  flex-shrink: 0;
+}
+
+.contentArea {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+}
+
+.orderFooter {
+  padding: 12px;
+  flex-shrink: 0;
+  background: #0b0f16;
 }
 
 .buttonArea {
@@ -168,6 +204,8 @@ select:focus {
   justify-content: space-between;
   align-items: center;
   padding: 8px 0;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 .availableLabel {
@@ -187,11 +225,15 @@ select:focus {
   align-items: center;
   gap: 12px;
   margin-top: 8px;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 .sliderWrapper {
   flex: 1;
+  min-width: 0;
   margin: 0 4px;
+  position: relative;
 }
 
 .percentageDisplay {
@@ -202,12 +244,20 @@ select:focus {
   font-size: 10px;
   font-weight: 500;
   min-width: 32px;
+  max-width: 60px;
   text-align: center;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 /* Override rc-slider styles to match app theme */
 .sliderWrapper :global(.rc-slider) {
   padding: 8px 0;
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .sliderWrapper :global(.rc-slider-rail) {
@@ -436,22 +486,43 @@ select:focus {
 }
 
 .submit { 
+  display: block;
   border: none; 
   border-radius: 6px; 
-  padding: 6px 12px; 
-  font-weight: 500; 
-  font-size: 12px;
-  min-height: 24px;
+  padding: 8px 16px; 
+  font-weight: 600; 
+  font-size: 14px;
+  min-height: 32px;
+  width: 100%;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+  line-height: 1;
+  position: relative;
+  z-index: 10;
+  box-sizing: border-box;
 }
 
 .buyButton { 
-  background: #065f46; 
-  color: #6ee7b7; 
+  background: #065f46 !important; 
+  color: #6ee7b7 !important;
+  border: 2px solid #00d4aa !important;
+}
+
+.buyButton:hover:not(:disabled) {
+  background: #047857 !important;
+  color: #86efac !important;
 }
 
 .sellButton { 
-  background: #991b1b; 
-  color: #fca5a5; 
+  background: #991b1b !important; 
+  color: #fca5a5 !important;
+  border: 2px solid #ef4444 !important;
+}
+
+.sellButton:hover:not(:disabled) {
+  background: #b91c1c !important;
+  color: #fecaca !important;
 }
 
 .submit:disabled { 

@@ -180,19 +180,21 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
 
       {/* Order Card */}
       <div className={styles.orderCard}>
-        <div className={styles.modeToggle}>
-          <button className={mode==='limit'?styles.active:''} onClick={()=>setMode('limit')}>Limit</button>
-          <button className={mode==='market'?styles.active:''} onClick={()=>setMode('market')}>Market</button>
-          <button className={mode==='margin'?styles.active:''} onClick={()=>setMode('margin')}>Margin</button>
-        </div>
-        
-        <div className={styles.tabs}>
-          <button className={side==='buy'?styles.active:''} onClick={()=>setSide('buy')}>
-            {mode === 'margin' ? 'Buy / Long' : 'Buy'}
-          </button>
-          <button className={side==='sell'?styles.active:''} onClick={()=>setSide('sell')}>
-            {mode === 'margin' ? 'Sell / Short' : 'Sell'}
-          </button>
+        <div className={styles.orderHeader}>
+          <div className={styles.modeToggle}>
+            <button className={mode==='limit'?styles.active:''} onClick={()=>setMode('limit')}>Limit</button>
+            <button className={mode==='market'?styles.active:''} onClick={()=>setMode('market')}>Market</button>
+            <button className={mode==='margin'?styles.active:''} onClick={()=>setMode('margin')}>Margin</button>
+          </div>
+          
+          <div className={styles.tabs}>
+            <button className={side==='buy'?styles.active:''} onClick={()=>setSide('buy')}>
+              {mode === 'margin' ? 'Buy / Long' : 'Buy'}
+            </button>
+            <button className={side==='sell'?styles.active:''} onClick={()=>setSide('sell')}>
+              {mode === 'margin' ? 'Sell / Short' : 'Sell'}
+            </button>
+          </div>
         </div>
 
         <div className={styles.contentArea}>
@@ -417,7 +419,12 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
                 <>
                   <div className={styles.feeRow}>
                     <span>Borrow Fee</span>
-                    <span>{borrowFee.toFixed(6)} {side === 'buy' ? baseSym : quoteSym}</span>
+                    <span>
+                      {feeType === 'unxv' 
+                        ? (borrowFee * (side === 'buy' ? (effPrice || 1) : 1)).toFixed(6) + ' UNXV'
+                        : borrowFee.toFixed(6) + ' ' + (side === 'buy' ? baseSym : quoteSym)
+                      }
+                    </span>
                   </div>
                   <div className={styles.feeRow}>
                     <span>Borrow APR</span>
@@ -438,14 +445,24 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
           </div>
         </div>
 
-        <div className={styles.buttonArea}>
+        <div className={styles.orderFooter}>
           {!acct?.address ? (
             <div className={styles.connectWallet}>
               <ConnectButton />
             </div>
           ) : (
-            <button disabled={disabled} className={`${styles.submit} ${side==='buy'?styles.buyButton:styles.sellButton}`} onClick={() => void submit()}>
-              {submitting ? 'Submitting...' : `${side==='buy'?'Buy':'Sell'}`}
+            <button 
+              disabled={disabled} 
+              className={`${styles.submit} ${side==='buy'?styles.buyButton:styles.sellButton}`} 
+              onClick={() => void submit()}
+              title={!qty || qty <= 0 ? 'Enter a quantity to continue' : ''}
+            >
+              {submitting 
+                ? 'Submitting...' 
+                : !qty || qty <= 0 
+                  ? `Enter ${mode === 'margin' ? 'Position' : 'Amount'} to ${side === 'buy' ? 'Buy' : 'Sell'}` 
+                  : `${side === 'buy' ? 'Buy' : 'Sell'} ${qty.toLocaleString()}`
+              }
             </button>
           )}
         </div>

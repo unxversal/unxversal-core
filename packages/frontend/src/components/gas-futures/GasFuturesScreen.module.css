@@ -101,7 +101,7 @@
   flex-direction: column; 
   gap: 2px; 
   background: rgba(10, 12, 18, 0.95);
-  padding: 8px 4px;
+  padding: 8px 2px;
   border-radius: 0 0 0 8px;
   border-right: 1px solid #1a1d29;
   backdrop-filter: blur(8px);
@@ -127,7 +127,7 @@
   background: transparent; 
   border: none; 
   color: #9ca3af; 
-  width: 40px; 
+  width: 36px; 
   height: 32px; 
   border-radius: 4px; 
   display: flex; 
@@ -139,16 +139,16 @@
   font-weight: 500;
   flex-shrink: 0;
   position: relative;
-  margin: 0 auto;
+  margin: 0;
 }
 .toolbox button:hover { background: #1a1d29; color: #e5e7eb; }
 .toolbox button.active { background: #3b82f6; color: #ffffff; }
 
 .toolboxDivider {
-  width: 100%;
+  width: calc(100% - 4px);
   height: 1px;
   background: #2a2d3a;
-  margin: 4px 0;
+  margin: 3px 2px;
   flex-shrink: 0;
 }
 

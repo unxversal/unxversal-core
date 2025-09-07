@@ -18,6 +18,7 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
   const [submitting, setSubmitting] = useState(false);
   const [walletTab, setWalletTab] = useState<'assets' | 'staking'>('assets');
   const [usdcBal, setUsdcBal] = useState<number>(0);
+  const [mistBal, setMistBal] = useState<number>(0);
   const [positions, setPositions] = useState<any[]>([]);
   const [marginRatio, setMarginRatio] = useState<number>(0);
   const [accountValue, setAccountValue] = useState<number>(0);
@@ -25,7 +26,6 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
   const [takerBps, setTakerBps] = useState<number>(70); // fallback 0.70 bps
   const [unxvDiscBps, setUnxvDiscBps] = useState<number>(3000); // fallback 30%
   const [feeType, setFeeType] = useState<'unxv' | 'input'>('unxv');
-
 
   const s = loadSettings();
   const stakingPoolId = s.staking?.poolId ?? '';
@@ -38,8 +38,9 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
     const load = async () => {
       if (!acct?.address) return;
       try {
-        // Mock USDC balance - in real implementation, load from chain
-        setUsdcBal(25000); // $25,000 USDC
+        // Mock balances - in real implementation, load from chain
+        setUsdcBal(25000); // $25,000 USDC for margin
+        setMistBal(1500000); // 1.5M MIST tokens
         setAccountValue(27500); // Total account value including unrealized PnL
         setMarginRatio(0.15); // 15% margin ratio
         
@@ -128,7 +129,6 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
   const requiredMargin = leverage > 0 ? notionalValue / leverage : notionalValue;
   const feeInput = notionalValue * (takerBps / 10000);
   const feeUnxvDisc = notionalValue * ((takerBps * (1 - unxvDiscBps / 10000)) / 10000);
-  const inputFeeSym = 'USDC';
 
   const applyPercent = (p: number) => {
     const maxSize = leverage > 0 
@@ -137,12 +137,18 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
     setSize(maxSize);
   };
 
+  // Max position size calculations
+  const maxPositionSize = leverage > 0 
+    ? Math.floor((usdcBal * leverage) / (price || mid || 0.023))
+    : Math.floor(usdcBal / (price || mid || 0.023));
+  const positionSizeRatio = maxPositionSize > 0 ? (size / maxPositionSize) : 0;
+
   return (
     <div className={styles.root}>
       {/* Wallet Card */}
       <div className={styles.walletCard}>
         <div className={styles.cardHeader}>
-          <div className={styles.cardTitle}>Portfolio</div>
+          <div className={styles.cardTitle}>Wallet</div>
           <div className={styles.subTabs}>
             <button className={walletTab==='assets'?styles.active:''} onClick={()=>setWalletTab('assets')}>Assets</button>
             <button className={walletTab==='staking'?styles.active:''} onClick={()=>setWalletTab('staking')}>Staking</button>
@@ -150,9 +156,8 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
         </div>
         {walletTab==='assets' ? (
           <div className={styles.balances}>
-            <div className={styles.balanceRow}><span>Available:</span><span>${usdcBal.toLocaleString()}</span></div>
-            <div className={styles.balanceRow}><span>Account Value:</span><span>${accountValue.toLocaleString()}</span></div>
-            <div className={styles.balanceRow}><span>Margin Ratio:</span><span className={marginRatio < 0.1 ? styles.warning : ''}>{(marginRatio * 100).toFixed(1)}%</span></div>
+            <div className={styles.balanceRow}><span>MIST:</span><span>{mistBal.toLocaleString()}</span></div>
+            <div className={styles.balanceRow}><span>USDC:</span><span>{usdcBal.toLocaleString()}</span></div>
           </div>
         ) : (
           <div className={styles.balances}>
@@ -163,50 +168,57 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
 
       {/* Order Card */}
       <div className={styles.orderCard}>
-        <div className={styles.modeToggle}>
-          <button className={mode==='limit'?styles.active:''} onClick={()=>setMode('limit')}>Limit</button>
-          <button className={mode==='market'?styles.active:''} onClick={()=>setMode('market')}>Market</button>
-        </div>
-        
-        <div className={styles.tabs}>
-          <button className={side==='long'?styles.active:''} onClick={()=>setSide('long')}>
-            Buy / Long
-          </button>
-          <button className={side==='short'?styles.active:''} onClick={()=>setSide('short')}>
-            Sell / Short
-          </button>
+        <div className={styles.orderHeader}>
+          <div className={styles.modeToggle}>
+            <button className={mode==='limit'?styles.active:''} onClick={()=>setMode('limit')}>Limit</button>
+            <button className={mode==='market'?styles.active:''} onClick={()=>setMode('market')}>Market</button>
+          </div>
+          
+          <div className={styles.tabs}>
+            <button className={side==='long'?styles.active:''} onClick={()=>setSide('long')}>
+              Buy / Long
+            </button>
+            <button className={side==='short'?styles.active:''} onClick={()=>setSide('short')}>
+              Sell / Short
+            </button>
+          </div>
         </div>
 
         <div className={styles.contentArea}>
           <div className={styles.availableToTrade}>
-            <div className={styles.availableLabel}>Available Balance</div>
+            <div className={styles.availableLabel}>Available to Trade</div>
             <div className={styles.availableAmount}>
-              ${usdcBal.toLocaleString()} USDC
+              {usdcBal.toLocaleString()} USDC
             </div>
           </div>
           
           {mode==='limit' && (
             <div className={styles.field}>
+              <div className={styles.fieldLabel}>Price</div>
               <div className={styles.inputGroup}>
                 <input 
                   type="number" 
                   value={price || ''} 
                   onChange={(e)=>setPrice(Number(e.target.value))} 
-                  placeholder={`Price (USDC)`}
+                  placeholder="0.023"
                   className={styles.inputWithLabel}
                 />
+                <div className={styles.tokenSelector}>
+                  <span>USDC</span>
+                </div>
                 <span className={styles.midIndicator}>Mid</span>
               </div>
             </div>
           )}
 
           <div className={styles.field}>
+            <div className={styles.fieldLabel}>Size</div>
             <div className={styles.inputGroup}>
               <input 
                 type="number" 
                 value={size || ''} 
                 onChange={(e)=>setSize(Number(e.target.value))} 
-placeholder={mode==='market' ? 'Amount (Input)' : mode==='margin' ? 'Position Size' : 'Size'} 
+                placeholder="0"
                 className={styles.inputWithLabel}
               />
               <div className={styles.tokenSelector}>
@@ -216,6 +228,9 @@ placeholder={mode==='market' ? 'Amount (Input)' : mode==='margin' ? 'Position Si
                 </svg>
               </div>
             </div>
+          </div>
+
+          <div className={styles.positionSizeSlider}>
             <div className={styles.sliderContainer}>
               <div className={styles.sliderWrapper}>
                 <Slider
@@ -240,23 +255,6 @@ placeholder={mode==='market' ? 'Amount (Input)' : mode==='margin' ? 'Position Si
                     75: '',
                     100: ''
                   }}
-                  handleStyle={{
-                    backgroundColor: '#00d4aa',
-                    borderColor: '#00d4aa',
-                    width: 16,
-                    height: 16,
-                    marginTop: -6,
-                    opacity: 1,
-                    boxShadow: 'none'
-                  }}
-                  trackStyle={{
-                    backgroundColor: '#00d4aa',
-                    height: 4
-                  }}
-                  railStyle={{
-                    backgroundColor: '#1e2230',
-                    height: 4
-                  }}
                 />
               </div>
               <div className={styles.percentageDisplay}>
@@ -270,28 +268,55 @@ placeholder={mode==='market' ? 'Amount (Input)' : mode==='margin' ? 'Position Si
             </div>
           </div>
 
-          <div className={styles.leverageControl}>
-            <div className={styles.leverageHeader}>
-              <span className={styles.leverageLabel}>Leverage</span>
-              <div className={styles.leverageDisplay}>
-                {leverage}×
+          <div className={styles.leverageField}>
+            <div className={styles.leverageControl}>
+              <div className={styles.leverageHeader}>
+                <span className={styles.leverageLabel}>Leverage</span>
+                <div className={styles.leverageDisplay}>
+                  {leverage}×
+                </div>
               </div>
-            </div>
-            <div className={styles.leverageButtons}>
-              {[0, 5, 10, 15, 20, 30, 40].map(lev => (
-                <button 
-                  key={lev}
-                  className={`${styles.leverageBtn} ${leverage === lev ? styles.activeLeverage : ''}`}
-                  onClick={() => setLeverage(lev)}
-                >
-                  {lev}×
-                </button>
-              ))}
+              <div className={styles.sliderContainer}>
+                <div className={styles.sliderWrapper}>
+                  <Slider
+                    min={0}
+                    max={6}
+                    step={1}
+                    value={(() => {
+                      const leverageValues = [0, 5, 10, 15, 20, 30, 40];
+                      return leverageValues.indexOf(leverage);
+                    })()}
+                    onChange={(value: number | number[]) => {
+                      const leverageValues = [0, 5, 10, 15, 20, 30, 40];
+                      const index = Array.isArray(value) ? value[0] : value;
+                      setLeverage(leverageValues[index]);
+                    }}
+                    dots
+                    marks={{
+                      0: '0×',
+                      1: '5×',
+                      2: '10×',
+                      3: '15×',
+                      4: '20×',
+                      5: '30×',
+                      6: '40×'
+                    }}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
-          <div className={styles.collateralInfo}>
-            <div className={styles.marginRow}>
+          <div className={styles.orderSummary}>
+            <div className={styles.summaryRow}>
+              <span>Order Value</span>
+              <span>{notionalValue.toFixed(2)} USDC</span>
+            </div>
+            <div className={styles.summaryRow}>
+              <span>Margin Required</span>
+              <span>{requiredMargin.toFixed(2)} USDC</span>
+            </div>
+            <div className={styles.summaryRow}>
               <span>Collateral (USDC)</span>
               <span>
                 {leverage > 0 
@@ -302,14 +327,7 @@ placeholder={mode==='market' ? 'Amount (Input)' : mode==='margin' ? 'Position Si
                 } USDC
               </span>
             </div>
-            <div className={styles.marginRow}>
-              <span>Position Size</span>
-              <span>{(size || 0).toFixed(0)} MIST</span>
-            </div>
-          </div>
-
-          <div className={styles.marginInfo}>
-            <div className={styles.marginRow}>
+            <div className={styles.summaryRow}>
               <span>Liquidation Price</span>
               <span>
                 {(() => {
@@ -331,32 +349,36 @@ placeholder={mode==='market' ? 'Amount (Input)' : mode==='margin' ? 'Position Si
                 className={`${styles.feeToggle} ${feeType === 'unxv' ? styles.active : ''}`}
                 onClick={() => setFeeType(feeType === 'unxv' ? 'input' : 'unxv')}
               >
-                {feeType === 'unxv' ? 'UNXV' : inputFeeSym}
+                {feeType === 'unxv' ? 'UNXV' : 'USDC'}
               </button>
             </div>
             
-            <div className={styles.feeDisplay}>
-              <div className={styles.feeRow}>
-                <span>Trading Fee</span>
-                <span>{feeType === 'unxv' ? (feeUnxvDisc ? feeUnxvDisc.toFixed(6) : '-') + ' UNXV' : (feeInput ? feeInput.toFixed(6) : '-') + ' ' + inputFeeSym}</span>
-              </div>
-              
+            <div className={styles.feeRow}>
+              <span>Trading Fee</span>
+              <span>
+                {feeType === 'unxv' 
+                  ? (feeUnxvDisc ? feeUnxvDisc.toFixed(6) : '-') + ' UNXV' 
+                  : (feeInput ? feeInput.toFixed(6) : '-') + ' USDC'
+                }
+              </span>
             </div>
           </div>
+
         </div>
 
-        <div className={styles.buttonArea}>
+        <div className={styles.orderFooter}>
           {!acct?.address ? (
             <div className={styles.connectWallet}>
               <ConnectButton />
             </div>
           ) : (
             <button 
-              disabled={disabled || size <= 0} 
+              disabled={submitting || size <= 0} 
               className={`${styles.submit} ${side==='long'?styles.longButton:styles.shortButton}`} 
               onClick={() => void submit()}
+              title={size <= 0 ? 'Enter a position size to continue' : ''}
             >
-{submitting ? 'Submitting...' : side==='long'?'Long':'Short'}
+              {submitting ? 'Submitting...' : size <= 0 ? `Enter Size to ${side === 'long' ? 'Long' : 'Short'}` : `${side === 'long' ? 'Long' : 'Short'} ${size.toLocaleString()} MIST`}
             </button>
           )}
         </div>
