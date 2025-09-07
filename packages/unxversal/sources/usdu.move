@@ -68,7 +68,7 @@ module unxversal::usdu {
             cap,
             max_supply: MAX_SUPPLY_UNITS,
             current: 0,
-            max_per_address: 0,
+            max_per_address: 100_000_000_000, //  initial default limit: 100k USDU
             claims: table::new<address, u64>(ctx),
             paused: false,
         };
