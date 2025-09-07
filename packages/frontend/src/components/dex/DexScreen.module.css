@@ -1,10 +1,11 @@
 .root { 
   height: 100%; 
   display: grid; 
+  box-sizing: border-box;
   grid-template-columns: 1fr minmax(260px, 280px) minmax(260px, 280px); 
-  grid-template-rows: 1fr 240px; 
-  gap: 8px; 
-  padding: 8px; 
+  grid-template-rows: minmax(0, 1fr) auto 36px; 
+  gap: 6px; 
+  padding: 6px; 
   overflow: hidden;
   background: #030507;
 }
@@ -13,24 +14,25 @@
   grid-column: 1 / 2; 
   grid-row: 1 / 2; 
   display: grid; 
-  grid-template-rows: 80px 1fr; 
+  grid-template-rows: 44px 1fr; 
   background: #0a0c12; 
   border-radius: 8px; 
   overflow: hidden;
+  min-height: 0; /* allow grid child to shrink */
 }
 
 .topbar { 
   display: grid; 
-  grid-template-rows: 40px 40px; 
-  border-bottom: 1px solid #1b1e27; 
+  grid-template-rows: 44px; 
 }
 
 .pairBar { 
   display: flex; 
   align-items: center; 
   justify-content: space-between; 
+  gap: 16px;
   padding: 0 12px; 
-  border-bottom: 1px solid #1b1e27; 
+  background: #0f131a;
 }
 
 .pair { font-weight: 600; }
@@ -40,7 +42,126 @@
   gap: 16px; 
   font-size: 12px; 
   color: #9ca3af; 
-  padding: 6px 12px; 
+}
+
+
+.chartContainer { 
+  position: relative; 
+  width: 100%; 
+  height: 100%; 
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  grid-template-rows: 1fr;
+  gap: 0;
+  align-items: stretch;
+  overflow: hidden; /* prevent children from overflowing */
+}
+
+.toolbox { 
+  grid-column: 1;
+  grid-row: 1;
+  display: flex; 
+  flex-direction: column; 
+  gap: 2px; 
+  background: rgba(10, 12, 18, 0.95);
+  padding: 8px 4px;
+  border-radius: 0 0 0 8px;
+  border-right: 1px solid #1a1d29;
+  backdrop-filter: blur(8px);
+  overflow-y: auto;
+  overflow-x: visible; /* allow tooltips to extend outside */
+  min-height: 0; /* crucial for grid child to shrink */
+  max-height: 100%; /* prevent overflow */
+}
+.toolbox::-webkit-scrollbar { 
+  width: 4px;
+}
+.toolbox::-webkit-scrollbar-track {
+  background: transparent;
+}
+.toolbox::-webkit-scrollbar-thumb {
+  background: #2a2d3a;
+  border-radius: 2px;
+}
+.toolbox::-webkit-scrollbar-thumb:hover {
+  background: #3b82f6;
+}
+.toolbox button { 
+  background: transparent; 
+  border: none; 
+  color: #9ca3af; 
+  width: 40px; 
+  height: 32px; 
+  border-radius: 4px; 
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+  cursor: pointer; 
+  transition: all 0.2s ease;
+  font-size: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+  position: relative;
+  margin: 0 auto;
+}
+.toolbox button:hover { background: #1a1d29; color: #e5e7eb; }
+.toolbox button.active { background: #3b82f6; color: #ffffff; }
+
+.toolboxDivider {
+  width: 100%;
+  height: 1px;
+  background: #2a2d3a;
+  margin: 4px 0;
+  flex-shrink: 0;
+}
+
+/* Tooltip styles for Floating UI */
+.tooltip {
+  background: #111827;
+  color: #ffffff;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  max-width: 200px;
+}
+
+.ohlcDisplay {
+  position: absolute;
+  left: 12px;
+  top: 8px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  font-size: 11px;
+  background: rgba(10, 12, 18, 0.9);
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #1a1d29;
+  z-index: 9;
+}
+
+.ohlcDisplay .pair {
+  color: #e5e7eb;
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.ohlcValue {
+  color: #9ca3af;
+  font-weight: 500;
+}
+
+.chartArea { 
+  grid-column: 2;
+  grid-row: 1;
+  position: relative; 
+  width: 100%; 
+  height: 100%; 
+  min-height: 0; /* crucial for grid child to shrink */
 }
 
 .chart { width: 100%; height: 100%; }
@@ -95,25 +216,215 @@
 .bottomSection { 
   grid-column: 1 / 4; 
   grid-row: 2 / 3; 
+  display: grid; 
+  grid-template-columns: 1fr minmax(260px, 280px); 
+  gap: 8px; 
+}
+
+.footer {
+  grid-column: 1 / 4;
+  grid-row: 3 / 4;
+  background: #030507;
+  color: #818cf8;
+  font-size: 12px;
+  display: flex; 
+  align-items: center; 
+  justify-content: space-between;
+  padding: 0 12px;
+  min-height: 36px;
+}
+
+.statusBadges {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.badge {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.connected {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.disconnected {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.active {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+}
+
+.inactive {
+  background: rgba(156, 163, 175, 0.15);
+  color: #9ca3af;
+}
+
+.networkBadge {
+  background: rgba(139, 92, 246, 0.15);
+  color: #8b5cf6;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.activityCard { 
   background: #0a0c12; 
   border-radius: 8px; 
   display: grid; 
-  grid-template-rows: 36px 1fr; 
+  grid-template-rows: 44px 1fr; 
   overflow: hidden;
 }
 
-.bottomTabs { 
+.activityTabs { 
   display: flex; 
-  gap: 8px; 
+  gap: 4px; 
   padding: 8px; 
-  border-bottom: 1px solid #1b1e27; 
+  background: #0a0c12;
 }
 
-.bottomTabs > button { background: #11141b; border: 1px solid #1e2230; padding: 6px 10px; border-radius: 6px; color: #cbd5e1; }
-.bottomTabs > button.active { border-color: #3b82f6; color: #fff; }
+.activityTabs > button { 
+  border: none; 
+  background: #0f131a; 
+  color: #cbd5e1; 
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
 
-.bottomBody { padding: 8px; overflow: auto; }
-.placeholder { border: 1px dashed #1f2432; border-radius: 8px; padding: 16px; color: #94a3b8; text-align: center; }
+.activityTabs > button.active { 
+  background: #ffffff; 
+  color: #000000; 
+}
+
+.activityTabs > button:hover:not(.active) {
+  background: #1a1d29;
+  color: #e5e7eb;
+}
+
+.activityContent { 
+  padding: 12px; 
+  overflow: auto; 
+}
+
+.pointsCard { 
+  background: #0a0c12; 
+  border-radius: 8px; 
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pointsHeader {
+  color: #e5e7eb;
+  font-size: 14px;
+  font-weight: 600;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  position: relative;
+}
+
+.pointsHeader::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: repeating-linear-gradient(
+    to right,
+    #374151 0px,
+    #374151 4px,
+    transparent 4px,
+    transparent 8px
+  );
+}
+
+.pointsStats {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.pointsStat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pointsStat span:first-child {
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.pointsStat span:last-child {
+  color: #e5e7eb;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pointsMessage {
+  color: #9ca3af;
+  font-size: 13px;
+  line-height: 1.4;
+  margin-top: auto;
+}
+
+.ordersTable {
+  width: 100%;
+  font-size: 11px;
+}
+
+.ordersTable th {
+  color: #9ca3af;
+  font-weight: 500;
+  text-align: left;
+  padding: 8px 4px;
+  background: #0f131a;
+}
+
+.ordersTable td {
+  color: #e5e7eb;
+  padding: 8px 4px;
+  background: #0a0c12;
+}
+
+.ordersTable tr:nth-child(even) td {
+  background: #0d1015;
+}
+
+.buyText { color: #10b981; }
+.sellText { color: #ef4444; }
+
+.emptyState {
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
+  padding: 40px 20px;
+}
 
 
 

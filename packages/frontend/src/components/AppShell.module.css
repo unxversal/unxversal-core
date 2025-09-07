@@ -6,6 +6,14 @@
   grid-template-rows: 56px 1fr 36px;
 }
 
+.appRootDex {
+  background: #06070b;
+  color: #e5e7eb;
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: 56px 1fr;
+}
+
 .header {
   display: flex;
   align-items: center;
@@ -35,6 +43,8 @@
 .netToggle > button.active { border-color: #10b981; color: #eafff5; }
 
 .main { height: calc(100vh - 56px - 36px); }
+
+.mainDex { height: calc(100vh - 56px); }
 
 .footer {
   background: #030507;

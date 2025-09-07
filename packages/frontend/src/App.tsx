@@ -146,7 +146,7 @@ function App() {
   }, [view]);
   
   return (
-    <div className={styles.appRoot}>
+    <div className={view === 'dex' ? styles.appRootDex : styles.appRoot}>
       <header className={styles.header}>
         <div className={styles.brand}>
         <img src="/whitetransparentunxvdolphin.png" alt="Unxversal" style={{ width: 24, height: 24 }} />
@@ -170,34 +170,36 @@ function App() {
           <ConnectButton />
         </div>
       </header>
-      <main className={styles.main}>
-        {view === 'dex' && <DexScreen />}
+      <main className={view === 'dex' ? styles.mainDex : styles.main}>
+        {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} />}
         {view === 'gas' && <GasFuturesScreen />}
         {view === 'lending' && <LendingScreen />}
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>
-      <footer className={styles.footer}>
-        <div className={styles.statusBadges}>
-          <div className={`${styles.badge} ${account?.address ? styles.connected : styles.disconnected}`}>
-            {account?.address ? <Wifi size={10} /> : <WifiOff size={10} />}
-            <span>{account?.address ? 'Online' : 'Offline'}</span>
+      {view !== 'dex' && (
+        <footer className={styles.footer}>
+          <div className={styles.statusBadges}>
+            <div className={`${styles.badge} ${account?.address ? styles.connected : styles.disconnected}`}>
+              {account?.address ? <Wifi size={10} /> : <WifiOff size={10} />}
+              <span>{account?.address ? 'Online' : 'Offline'}</span>
+            </div>
+            
+            <div className={`${styles.badge} ${started ? styles.active : styles.inactive}`}>
+              {started ? <Activity size={10} /> : <Pause size={10} />}
+              <span>IDX</span>
+            </div>
+            
+            <div className={`${styles.badge} ${surgeReady ? styles.active : styles.inactive}`}>
+              {surgeReady ? <Activity size={10} /> : <Pause size={10} />}
+              <span>PRC</span>
+            </div>
           </div>
           
-          <div className={`${styles.badge} ${started ? styles.active : styles.inactive}`}>
-            {started ? <Activity size={10} /> : <Pause size={10} />}
-            <span>IDX</span>
+          <div className={styles.networkBadge}>
+            <span>{network.toUpperCase()}</span>
           </div>
-          
-          <div className={`${styles.badge} ${surgeReady ? styles.active : styles.inactive}`}>
-            {surgeReady ? <Activity size={10} /> : <Pause size={10} />}
-            <span>PRC</span>
-          </div>
-        </div>
-        
-        <div className={styles.networkBadge}>
-          <span>{network.toUpperCase()}</span>
-        </div>
-      </footer>
+        </footer>
+      )}
     </div>
   )
 }
