@@ -129,7 +129,7 @@ export const deployConfig: DeployConfig = {
   poolCreationFeeUnxv: undefined,
   tradeFees: undefined,
   oracleFeeds: [],
-  oracleMaxAgeSec: 60,
+  oracleMaxAgeSec: 30,
   usdu: undefined,
   lending: [],
   options: [],

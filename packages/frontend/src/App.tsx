@@ -15,7 +15,7 @@ import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-ki
 import styles from './components/AppShell.module.css'
 import { BarChart3, Factory, Fuel, Gauge, Home, Landmark, Settings, Wifi, WifiOff, Activity, Pause } from 'lucide-react'
 import { DexScreen } from './components/dex/DexScreen'
-import { GasFuturesScreen } from './components/gas/GasFuturesScreen'
+import { GasFuturesScreen } from './components/gas-futures/GasFuturesScreen'
 import { LendingScreen } from './components/lending/LendingScreen'
 import { SettingsScreen } from './components/SettingsScreen'
 
@@ -105,9 +105,9 @@ function App() {
         // DEX screen handles its own title with price/pair info: PRICE | PAIR | Unxversal DEX
         break;
       case 'gas':
-        // TODO: Future implementation should show: PRICE | MARKET | Unxversal Gas Futures
+        // TODO: Future implementation should show: PRICE | MARKET | Unxversal MIST Futures
         // For now, show generic protocol name
-        document.title = 'Unxversal Gas Futures';
+        document.title = 'Unxversal MIST Futures';
         break;
       case 'lending':
         // TODO: Future implementation could show: SELECTED_POOL | STAKED_AMOUNT | Unxversal Lending
@@ -146,16 +146,16 @@ function App() {
   }, [view]);
   
   return (
-    <div className={view === 'dex' ? styles.appRootDex : styles.appRoot}>
+    <div className={view === 'dex' || view === 'gas' ? styles.appRootDex : styles.appRoot}>
       <header className={styles.header}>
         <div className={styles.brand}>
-        <img src="/whitetransparentunxvdolphin.png" alt="Unxversal" style={{ width: 24, height: 24 }} />
+        <img src="/whitetransparentunxvdolphin.png" alt="Unxversal" style={{ width: 32, height: 32 }} />
         {/* <img src="/unxvdolphintarget.png" alt="Unxversal" style={{ width: 24, height: 24 }} /> */}
         <span>Unxversal</span>
         </div>
         <nav className={styles.nav}>
           <button className={view==='dex'?styles.active:''} onClick={() => setView('dex')}><Home size={16}/> DEX</button>
-          <button className={view==='gas'?styles.active:''} onClick={() => setView('gas')}><Fuel size={16}/> Gas Futures</button>
+          <button className={view==='gas'?styles.active:''} onClick={() => setView('gas')}><Fuel size={16}/> MIST Futures</button>
           <button className={view==='lending'?styles.active:''} onClick={() => setView('lending')}><Landmark size={16}/> Lending</button>
           <button disabled title="Coming soon"><BarChart3 size={16}/> Options</button>
           <button disabled title="Coming soon"><Gauge size={16}/> Perps</button>
@@ -170,13 +170,13 @@ function App() {
           <ConnectButton />
         </div>
       </header>
-      <main className={view === 'dex' ? styles.mainDex : styles.main}>
+      <main className={view === 'dex' || view === 'gas' ? styles.mainDex : styles.main}>
         {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} />}
-        {view === 'gas' && <GasFuturesScreen />}
+        {view === 'gas' && <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} />}
         {view === 'lending' && <LendingScreen />}
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>
-      {view !== 'dex' && (
+      {view !== 'dex' && view !== 'gas' && (
         <footer className={styles.footer}>
           <div className={styles.statusBadges}>
             <div className={`${styles.badge} ${account?.address ? styles.connected : styles.disconnected}`}>

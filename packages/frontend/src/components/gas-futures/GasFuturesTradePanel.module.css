@@ -1,0 +1,467 @@
+.root { display: flex; flex-direction: column; gap: 8px; height: 100%; }
+
+/* Remove focus outline on all interactive elements */
+button:focus,
+input:focus,
+select:focus {
+  outline: none;
+}
+
+.walletCard { background: #0b0f16; border: none; border-radius: 8px; padding: 12px; display: grid; gap: 12px; }
+.orderCard { background: #0b0f16; border: none; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 12px; flex: 1; overflow-y: auto; max-height: calc(100vh - 200px); }
+.cardHeader { display: flex; justify-content: space-between; align-items: center; }
+.cardTitle { font-weight: 600; color: #e5e7eb; }
+.subTabs { display: grid; grid-auto-flow: column; gap: 6px; }
+.subTabs > button { background: transparent; border: none; color: #cbd5e1; padding: 6px 8px; border-radius: 6px; font-size: 11px; }
+.subTabs > button.active { background: #ffffff; color: #000000; }
+
+.balances { display: grid; gap: 6px; }
+.balanceRow { display: flex; justify-content: space-between; font-size: 12px; color: #cbd5e1; }
+
+.warning { color: #f59e0b !important; }
+.positive { color: #10b981 !important; }
+.negative { color: #ef4444 !important; }
+.longText { color: #10b981; }
+.shortText { color: #ef4444; }
+
+.positionSummary { margin-bottom: 8px; }
+.emptyPositions { color: #6b7280; font-size: 11px; text-align: center; padding: 8px; }
+
+.modeToggle { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px; align-items: center; }
+.modeToggle > button { background: transparent; border: none; color: #9ca3af; font-size: 11px; padding: 4px 6px; text-align: center; }
+.modeToggle > button.active { color: #ffffff; font-weight: 600; }
+
+.tabs { 
+  display: grid; 
+  grid-template-columns: 1fr 1fr; 
+  gap: 8px; 
+  border-radius: 8px; 
+  overflow: hidden;
+  border: none;
+}
+
+.tabs > button { 
+  background: #1a1d29; 
+  border: none; 
+  color: #9ca3af; 
+  padding: 6px 12px; 
+  font-weight: 500;
+  min-height: 24px;
+  font-size: 12px;
+}
+
+.tabs > button:nth-child(1).active { 
+  background: #065f46; 
+  color: #6ee7b7; 
+}
+
+.tabs > button:nth-child(2).active { 
+  background: #991b1b; 
+  color: #fca5a5; 
+}
+
+.field { 
+  display: grid; 
+  gap: 6px; 
+  font-size: 12px; 
+  color: #9ca3af; 
+}
+
+.field > label { 
+  font-size: 11px; 
+  color: #9ca3af; 
+}
+
+.inputGroup { 
+  position: relative; 
+  display: flex; 
+  align-items: center;
+}
+
+.inputGroup input { 
+  background: #1a1d29; 
+  border: none; 
+  color: #e5e7eb; 
+  border-radius: 6px; 
+  padding: 6px 50px 6px 12px; 
+  width: 100%;
+  font-size: 12px;
+  min-height: 24px;
+}
+
+.inputWithLabel {
+  background: #1a1d29; 
+  border: none; 
+  color: #e5e7eb; 
+  border-radius: 6px; 
+  padding: 6px 50px 6px 12px; 
+  width: 100%;
+  font-size: 12px;
+  min-height: 24px;
+}
+
+.inputWithLabel::placeholder {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.contentArea {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.buttonArea {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.currency { 
+  position: absolute; 
+  right: 12px; 
+  color: #9ca3af; 
+  font-size: 12px; 
+}
+
+.midIndicator {
+  position: absolute; 
+  right: 12px; 
+  color: #9ca3af; 
+  font-size: 10px; 
+  background: #0f1419;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.tokenSelector {
+  position: absolute; 
+  right: 12px; 
+  color: #e5e7eb; 
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.dropdownIcon {
+  color: #9ca3af;
+  transition: transform 0.2s;
+}
+
+.availableToTrade {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.availableLabel {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.availableAmount {
+  color: #e5e7eb;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.sliderContainer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.sliderWrapper {
+  flex: 1;
+  margin: 0 4px;
+}
+
+.percentageDisplay {
+  background: #1e2230;
+  color: #e5e7eb;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  min-width: 32px;
+  text-align: center;
+}
+
+/* Override rc-slider styles to match app theme */
+.sliderWrapper :global(.rc-slider) {
+  padding: 8px 0;
+}
+
+.sliderWrapper :global(.rc-slider-rail) {
+  background-color: #1e2230;
+  height: 4px;
+  border-radius: 2px;
+}
+
+.sliderWrapper :global(.rc-slider-track) {
+  background-color: #00d4aa;
+  height: 4px;
+  border-radius: 2px;
+}
+
+.sliderWrapper :global(.rc-slider-handle) {
+  background-color: #00d4aa;
+  border: 2px solid #00d4aa;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  opacity: 1;
+  box-shadow: none;
+}
+
+.sliderWrapper :global(.rc-slider-handle:hover),
+.sliderWrapper :global(.rc-slider-handle:active),
+.sliderWrapper :global(.rc-slider-handle:focus) {
+  background-color: #00d4aa;
+  border-color: #00d4aa;
+  box-shadow: 0 0 0 2px rgba(0, 212, 170, 0.3);
+}
+
+.sliderWrapper :global(.rc-slider-dot) {
+  background-color: #3a4553;
+  border-color: #1e2230;
+  width: 8px;
+  height: 8px;
+  margin-top: -2px;
+}
+
+.sliderWrapper :global(.rc-slider-dot-active) {
+  background-color: #00d4aa;
+  border-color: #00d4aa;
+}
+
+.leverageControl {
+  display: grid;
+  gap: 8px;
+}
+
+.leverageHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.leverageLabel {
+  color: #9ca3af;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.leverageInput {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 20px;
+}
+
+.customLeverageInput {
+  background: transparent;
+  border: none;
+  color: #e5e7eb;
+  font-size: 12px;
+  width: 35px;
+  text-align: right;
+  outline: none;
+  padding: 0;
+  -webkit-appearance: none;
+  -moz-appearance: textfield;
+  height: 20px;
+  line-height: 20px;
+}
+
+.customLeverageInput::-webkit-outer-spin-button,
+.customLeverageInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.leverageInput span {
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 500;
+  margin-left: 1px;
+  height: 20px;
+  line-height: 20px;
+  display: flex;
+  align-items: center;
+}
+
+.orderOptions {
+  display: grid;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.optionRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #9ca3af;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.checkbox {
+  width: 12px;
+  height: 12px;
+  accent-color: #3b82f6;
+}
+
+.optionLabel {
+  color: #9ca3af;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.select {
+  background: #1a1d29;
+  border: none;
+  color: #e5e7eb;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  outline: none;
+}
+
+.collateralInfo {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  background: #151821;
+  border-radius: 6px;
+}
+
+.marginInfo {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  background: #151821;
+  border-radius: 6px;
+}
+
+.marginRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #9ca3af;
+}
+
+.marginRow span:last-child {
+  color: #e5e7eb;
+  font-weight: 500;
+}
+
+.feeDisplay {
+  display: grid;
+  gap: 3px;
+}
+
+.feeRow { 
+  display: flex; 
+  justify-content: space-between; 
+  font-size: 10px;
+  color: #9ca3af;
+}
+
+.feeRow span:last-child {
+  color: #e5e7eb;
+  font-weight: 500;
+}
+
+.totalFeeLabel {
+  font-weight: 600 !important;
+  color: #e5e7eb !important;
+}
+
+.totalFeeAmount {
+  font-weight: 600 !important;
+  color: #00d4aa !important;
+}
+
+.orderSummary {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  background: #151821;
+  border-radius: 6px;
+  font-size: 10px;
+}
+
+.summaryRow {
+  display: flex;
+  justify-content: space-between;
+  color: #9ca3af;
+}
+
+.summaryRow span:last-child {
+  color: #e5e7eb;
+  font-weight: 500;
+}
+
+.connectWallet { 
+  display: flex;
+  width: 100%;
+}
+
+/* Override ConnectButton default styling to match our theme */
+.connectWallet :global(button) {
+  background: #3b82f6 !important; 
+  border: none !important; 
+  color: #ffffff !important; 
+  border-radius: 6px !important; 
+  padding: 6px 12px !important; 
+  font-weight: 500 !important; 
+  font-size: 12px !important;
+  min-height: 24px !important;
+  width: 100% !important;
+  font-family: inherit !important;
+  cursor: pointer !important;
+}
+
+.connectWallet :global(button:hover) {
+  background: #2563eb !important;
+}
+
+.connectWallet :global(button:active) {
+  background: #1d4ed8 !important;
+}
+
+.submit { 
+  border: none; 
+  border-radius: 6px; 
+  padding: 6px 12px; 
+  font-weight: 500; 
+  font-size: 12px;
+  min-height: 24px;
+}
+
+.longButton { 
+  background: #065f46; 
+  color: #6ee7b7; 
+}
+
+.shortButton { 
+  background: #991b1b; 
+  color: #fca5a5; 
+}
+
+.submit:disabled { 
+  opacity: 0.5; 
+  cursor: not-allowed; 
+}

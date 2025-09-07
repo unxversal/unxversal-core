@@ -72,7 +72,7 @@ async function ensureOracleRegistry(client: SuiClient, cfg: DeployConfig, keypai
   const tx = new Transaction();
   tx.moveCall({ target: `${cfg.pkgId}::oracle::init_registry`, arguments: [tx.object(cfg.adminRegistryId)] });
   const res = await execTx(client, tx, keypair, 'oracle.init_registry');
-  const id = extractCreatedId(res, `${cfg.pkgId}::utils::oracle::OracleRegistry`)
+  const id = extractCreatedId(res, `${cfg.pkgId}::oracle::OracleRegistry`)
     || extractCreatedId(res, `${cfg.pkgId}::oracle::OracleRegistry`)
     || '';
   return id;
