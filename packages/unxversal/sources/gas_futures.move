@@ -17,6 +17,7 @@ module unxversal::gas_futures {
     use unxversal::fees::{Self as fees, FeeConfig, FeeVault};
     use unxversal::staking::{Self as staking, StakingPool};
     use unxversal::unxv::UNXV;
+    use unxversal::book::{Self as ubk, Book};
 
     const E_NOT_ADMIN: u64 = 1;
     const E_ZERO: u64 = 2;
@@ -38,7 +39,7 @@ module unxversal::gas_futures {
         contract_size: u64,
     }
 
-    public struct Account<phantom Collat> has store { collat: Balance<Collat>, long_qty: u64, short_qty: u64, avg_long_1e6: u64, avg_short_1e6: u64, pending_credit: u64 }
+    public struct Account<phantom Collat> has store { collat: Balance<Collat>, long_qty: u64, short_qty: u64, avg_long_1e6: u64, avg_short_1e6: u64, pending_credit: u64, locked_im: u64 }
 
     public struct GasMarket<phantom Collat> has key, store {
         id: UID,
@@ -59,6 +60,8 @@ module unxversal::gas_futures {
         total_short_qty: u64,
         imbalance_surcharge_bps_max: u64,
         imbalance_threshold_bps: u64,
+        book: Book,
+        owners: Table<u128, address>,
     }
 
     public struct MarketInitialized has copy, drop { market_id: ID, expiry_ms: u64, contract_size: u64, initial_margin_bps: u64, maintenance_margin_bps: u64, liquidation_fee_bps: u64, keeper_incentive_bps: u64 }
@@ -71,9 +74,9 @@ module unxversal::gas_futures {
     public struct PnlCreditPaid<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, remaining_credit: u64, timestamp_ms: u64 }
 
     // === Init ===
-    public fun init_market<Collat>(reg_admin: &AdminRegistry, expiry_ms: u64, contract_size: u64, im_bps: u64, mm_bps: u64, liq_fee_bps: u64, keeper_bps: u64, ctx: &mut TxContext) {
+    public fun init_market<Collat>(reg_admin: &AdminRegistry, expiry_ms: u64, contract_size: u64, im_bps: u64, mm_bps: u64, liq_fee_bps: u64, keeper_bps: u64, tick_size: u64, lot_size: u64, min_size: u64, ctx: &mut TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        let m = GasMarket<Collat> { id: object::new(ctx), series: GasSeries { expiry_ms, contract_size }, accounts: table::new<address, Account<Collat>>(ctx), initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps, close_only: false, max_deviation_bps: 0, last_price_1e6: 0, pnl_fee_share_bps: 0, liq_target_buffer_bps: 0, account_max_gross_qty: 0, market_max_gross_qty: 0, total_long_qty: 0, total_short_qty: 0, imbalance_surcharge_bps_max: 0, imbalance_threshold_bps: 0 };
+        let m = GasMarket<Collat> { id: object::new(ctx), series: GasSeries { expiry_ms, contract_size }, accounts: table::new<address, Account<Collat>>(ctx), initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps, close_only: false, max_deviation_bps: 0, last_price_1e6: 0, pnl_fee_share_bps: 0, liq_target_buffer_bps: 0, account_max_gross_qty: 0, market_max_gross_qty: 0, total_long_qty: 0, total_short_qty: 0, imbalance_surcharge_bps_max: 0, imbalance_threshold_bps: 0, book: ubk::empty(tick_size, lot_size, min_size, ctx), owners: table::new<u128, address>(ctx) };
         event::emit(MarketInitialized { market_id: object::id(&m), expiry_ms, contract_size, initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps });
         transfer::share_object(m);
     }
@@ -141,8 +144,9 @@ module unxversal::gas_futures {
         let eq = equity(&acc, price_1e6, market.series.contract_size);
         assert!(eq >= amount, E_INSUFF);
         let eq_after = eq - amount;
+        let free_after = if (eq_after > acc.locked_im) { eq_after - acc.locked_im } else { 0 };
         let req_im = required_margin_effective<Collat>(market, &acc, price_1e6);
-        assert!(eq_after >= req_im, E_UNDER_IM);
+        assert!(free_after >= req_im, E_UNDER_IM);
         let part = balance::split(&mut acc.collat, amount);
         let out = coin::from_balance(part, ctx);
         store_account<Collat>(market, ctx.sender(), acc);
@@ -152,16 +156,16 @@ module unxversal::gas_futures {
 
     // === Trading (oracle price is reference gas price) ===
     public fun open_long<Collat>(market: &mut GasMarket<Collat>, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, mut maybe_unxv: Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext, qty: u64) {
-        trade_internal<Collat>(market, true, qty, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
+        taker_trade_internal<Collat>(market, true, qty, ((1u128 << 63) - 1) as u64, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
     public fun open_short<Collat>(market: &mut GasMarket<Collat>, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, mut maybe_unxv: Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext, qty: u64) {
-        trade_internal<Collat>(market, false, qty, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
+        taker_trade_internal<Collat>(market, false, qty, 1, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
-    fun trade_internal<Collat>(market: &mut GasMarket<Collat>, is_buy: bool, qty: u64, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, maybe_unxv: &mut Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext) {
+    fun taker_trade_internal<Collat>(market: &mut GasMarket<Collat>, is_buy: bool, qty: u64, limit_price_1e6: u64, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, maybe_unxv: &mut Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext) {
         assert!(qty > 0, E_ZERO);
         let now = clock.timestamp_ms();
         if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
@@ -403,8 +407,7 @@ module unxversal::gas_futures {
     }
 
     fun wavg(prev_px: u64, prev_qty: u64, new_px: u64, new_qty: u64): u64 { if (prev_qty == 0) { new_px } else { (((prev_px as u128) * (prev_qty as u128) + (new_px as u128) * (new_qty as u128)) / ((prev_qty + new_qty) as u128)) as u64 } }
-
-    fun take_or_new_account<Collat>(market: &mut GasMarket<Collat>, who: address): Account<Collat> { if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { Account { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0, pending_credit: 0 } } }
+    fun take_or_new_account<Collat>(market: &mut GasMarket<Collat>, who: address): Account<Collat> { if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { Account { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0, pending_credit: 0, locked_im: 0 } } }
     fun store_account<Collat>(market: &mut GasMarket<Collat>, who: address, acc: Account<Collat>) { table::add(&mut market.accounts, who, acc); }
 
     public fun claim_pnl_credit<Collat>(market: &mut GasMarket<Collat>, vault: &mut FeeVault, clock: &Clock, ctx: &mut TxContext, max_amount: u64) {

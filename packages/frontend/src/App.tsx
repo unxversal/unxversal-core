@@ -13,7 +13,7 @@ import { startPriceFeeds } from './lib/switchboard'
 import { startDefaultMarketWatcher } from './lib/marketWatcher'
 import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
 import styles from './components/AppShell.module.css'
-import { BarChart3, CandlestickChart, Factory, Fuel, Gauge, Home, Landmark, Settings, Wifi, WifiOff, Activity, Pause } from 'lucide-react'
+import { BarChart3, Factory, Fuel, Gauge, Home, Landmark, Settings, Wifi, WifiOff, Activity, Pause } from 'lucide-react'
 import { DexScreen } from './components/dex/DexScreen'
 import { GasFuturesScreen } from './components/gas/GasFuturesScreen'
 import { LendingScreen } from './components/lending/LendingScreen'
@@ -96,14 +96,62 @@ function App() {
     setStarted(false) // Reset started state to reinitialize trackers
     const s = loadSettings();
     saveSettings({ ...s, network: newNetwork })
-  }
+    }
 
+  // Update document title based on current view
+  useEffect(() => {
+    switch (view) {
+      case 'dex':
+        // DEX screen handles its own title with price/pair info: PRICE | PAIR | Unxversal DEX
+        break;
+      case 'gas':
+        // TODO: Future implementation should show: PRICE | MARKET | Unxversal Gas Futures
+        // For now, show generic protocol name
+        document.title = 'Unxversal Gas Futures';
+        break;
+      case 'lending':
+        // TODO: Future implementation could show: SELECTED_POOL | STAKED_AMOUNT | Unxversal Lending
+        // For now, show generic protocol name
+        document.title = 'Unxversal Lending';
+        break;
+      case 'staking':
+        // TODO: Future implementation could show: STAKED_AMOUNT | APY | Unxversal Staking
+        document.title = 'Unxversal Staking';
+        break;
+      case 'faucet':
+        document.title = 'Unxversal Faucet';
+        break;
+      case 'options':
+        // TODO: Future implementation should show: PRICE | MARKET | Unxversal Options
+        document.title = 'Unxversal Options';
+        break;
+      case 'futures':
+        // TODO: Future implementation should show: PRICE | MARKET | Unxversal Futures
+        document.title = 'Unxversal Futures';
+        break;
+      case 'perps':
+        // TODO: Future implementation should show: PRICE | MARKET | Unxversal Perps
+        document.title = 'Unxversal Perps';
+        break;
+      case 'builder':
+        document.title = 'Unxversal Builder';
+        break;
+      case 'settings':
+        document.title = 'Unxversal Settings';
+        break;
+      default:
+        document.title = 'Unxversal';
+        break;
+    }
+  }, [view]);
+  
   return (
     <div className={styles.appRoot}>
       <header className={styles.header}>
         <div className={styles.brand}>
-          <CandlestickChart size={18} />
-          <span>Unxversal</span>
+        <img src="/whitetransparentunxvdolphin.png" alt="Unxversal" style={{ width: 24, height: 24 }} />
+        {/* <img src="/unxvdolphintarget.png" alt="Unxversal" style={{ width: 24, height: 24 }} /> */}
+        <span>Unxversal</span>
         </div>
         <nav className={styles.nav}>
           <button className={view==='dex'?styles.active:''} onClick={() => setView('dex')}><Home size={16}/> DEX</button>

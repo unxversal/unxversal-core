@@ -43,6 +43,18 @@ export function DexScreen() {
     return () => { mounted = false; clearInterval(id); };
   }, [db]);
 
+  // Update document title with price and pair info
+  useEffect(() => {
+    const price = summary.last;
+    if (price) {
+      document.title = `${price.toFixed(4)} | ${displayPair} | Unxversal DEX`;
+    } else {
+      document.title = `${displayPair} | Unxversal DEX`;
+    }
+
+    // No cleanup needed - App.tsx will handle title management when switching views
+  }, [summary.last, displayPair]);
+
   useEffect(() => {
     let disposed = false;
     if (!chartRef.current) return;

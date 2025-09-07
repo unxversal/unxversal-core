@@ -1,7 +1,7 @@
 .root { 
   height: 100%; 
   display: grid; 
-  grid-template-columns: 2fr 1fr 1fr; 
+  grid-template-columns: 1fr minmax(260px, 280px) minmax(260px, 280px); 
   grid-template-rows: 1fr 240px; 
   gap: 8px; 
   padding: 8px; 

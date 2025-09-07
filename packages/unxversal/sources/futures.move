@@ -29,6 +29,7 @@ module unxversal::futures {
     use unxversal::staking::{Self as staking, StakingPool};
     use unxversal::unxv::UNXV;
     use unxversal::oracle::{Self as uoracle, OracleRegistry};
+    use unxversal::book::{Self as ubk, Book};
     use switchboard::aggregator::Aggregator;
 
     // Errors
@@ -60,6 +61,8 @@ module unxversal::futures {
         /// Realized gains that could not be paid immediately due to PnL vault shortfall
         /// These are denominated in Collat units and can be claimed later
         pending_credit: u64,
+        /// Margin locked for resting limit orders (not usable for IM/MM checks)
+        locked_im: u64,
     }
 
     /// Market shared object
@@ -91,6 +94,10 @@ module unxversal::futures {
         /// Imbalance surcharge parameters (bps). If abs(netOI)/OI > threshold, add up to max bps to IM
         imbalance_surcharge_bps_max: u64,
         imbalance_threshold_bps: u64,
+        /// On-chain orderbook used for matched execution
+        book: Book,
+        /// Mapping from resting order_id to maker address
+        owners: Table<u128, address>,
     }
 
     // Events
@@ -105,6 +112,10 @@ module unxversal::futures {
     public struct PnlCreditAccrued<phantom Collat> has copy, drop { market_id: ID, who: address, credited: u64, remaining_credit: u64, timestamp_ms: u64 }
     /// Emitted when realized gain is paid from the PnL vault to user collateral (either during trade/liq or via claim)
     public struct PnlCreditPaid<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, remaining_credit: u64, timestamp_ms: u64 }
+    /// Order lifecycle events for matched engine
+    public struct OrderPlaced has copy, drop { market_id: ID, order_id: u128, maker: address, is_bid: bool, price_1e6: u64, quantity: u64, expire_ts: u64 }
+    public struct OrderCanceled has copy, drop { market_id: ID, order_id: u128, maker: address, remaining_qty: u64, timestamp_ms: u64 }
+    public struct OrderFilled has copy, drop { market_id: ID, maker_order_id: u128, maker: address, taker: address, price_1e6: u64, base_qty: u64, timestamp_ms: u64 }
 
     // === Init ===
     public fun init_market<Collat>(
@@ -116,6 +127,9 @@ module unxversal::futures {
         maintenance_margin_bps: u64,
         liquidation_fee_bps: u64,
         keeper_incentive_bps: u64,
+        tick_size: u64,
+        lot_size: u64,
+        min_size: u64,
         ctx: &mut TxContext,
     ) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
@@ -138,6 +152,8 @@ module unxversal::futures {
             total_short_qty: 0,
             imbalance_surcharge_bps_max: 0,
             imbalance_threshold_bps: 0,
+            book: ubk::empty(tick_size, lot_size, min_size, ctx),
+            owners: table::new<u128, address>(ctx),
         };
         event::emit(MarketInitialized { market_id: object::id(&m), symbol: clone_string(&m.series.symbol), expiry_ms, contract_size, initial_margin_bps, maintenance_margin_bps, liquidation_fee_bps, keeper_incentive_bps });
         transfer::share_object(m);
@@ -222,8 +238,10 @@ module unxversal::futures {
         assert!(equity_before >= amount, E_INSUFFICIENT_BALANCE);
         // simulate withdrawal
         let eq_after = equity_before - amount;
+        // consider locked IM as unavailable
+        let free_after = if (eq_after > acc.locked_im) { eq_after - acc.locked_im } else { 0 };
         let req_im = required_initial_margin_bps(&acc, price_1e6, market.series.contract_size, market.initial_margin_bps);
-        assert!(eq_after >= req_im, E_UNDER_INITIAL_MARGIN);
+        assert!(free_after >= req_im, E_UNDER_INITIAL_MARGIN);
         let part = balance::split(&mut acc.collat, amount);
         let coin_out = coin::from_balance(part, ctx);
         store_account<Collat>(market, ctx.sender(), acc);
@@ -232,7 +250,7 @@ module unxversal::futures {
     }
 
     // === Trading ===
-    /// Open or increase a long position by `qty` contracts at oracle price; closes shorts first.
+    /// Open or increase a long position by `qty` contracts via matched orders; closes shorts first.
     public fun open_long<Collat>(
         market: &mut FuturesMarket<Collat>,
         reg: &OracleRegistry,
@@ -245,11 +263,11 @@ module unxversal::futures {
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        trade_internal<Collat>(market, /*is_buy=*/true, qty, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv_fee, clock, ctx);
+        taker_limit_trade<Collat>(market, /*is_buy=*/true, /*limit_price=*/max_order_price(), qty, /*expire_ts=*/clock.timestamp_ms() + 60_000, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv_fee, clock, ctx);
         option::destroy_none(maybe_unxv_fee);
     }
 
-    /// Open or increase a short position by `qty` contracts at oracle price; closes longs first.
+    /// Open or increase a short position by `qty` contracts via matched orders; closes longs first.
     public fun open_short<Collat>(
         market: &mut FuturesMarket<Collat>,
         reg: &OracleRegistry,
@@ -262,11 +280,11 @@ module unxversal::futures {
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        trade_internal<Collat>(market, /*is_buy=*/false, qty, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv_fee, clock, ctx);
+        taker_limit_trade<Collat>(market, /*is_buy=*/false, /*limit_price=*/min_order_price(), qty, /*expire_ts=*/clock.timestamp_ms() + 60_000, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv_fee, clock, ctx);
         option::destroy_none(maybe_unxv_fee);
     }
 
-    /// Close part of an existing long position (sell) at oracle price.
+    /// Close part of an existing long position (sell) via matched orders.
     public fun close_long<Collat>(
         market: &mut FuturesMarket<Collat>,
         reg: &OracleRegistry,
@@ -279,12 +297,12 @@ module unxversal::futures {
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        // closing long is equivalent to opening short for qty
-        trade_internal<Collat>(market, /*is_buy=*/false, qty, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv_fee, clock, ctx);
+        // closing long is equivalent to placing a sell
+        taker_limit_trade<Collat>(market, /*is_buy=*/false, /*limit_price=*/min_order_price(), qty, /*expire_ts=*/clock.timestamp_ms() + 60_000, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv_fee, clock, ctx);
         option::destroy_none(maybe_unxv_fee);
     }
 
-    /// Close part of an existing short position (buy) at oracle price.
+    /// Close part of an existing short position (buy) via matched orders.
     public fun close_short<Collat>(
         market: &mut FuturesMarket<Collat>,
         reg: &OracleRegistry,
@@ -297,16 +315,18 @@ module unxversal::futures {
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        // closing short is equivalent to opening long for qty
-        trade_internal<Collat>(market, /*is_buy=*/true, qty, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv_fee, clock, ctx);
+        // closing short is equivalent to placing a buy
+        taker_limit_trade<Collat>(market, /*is_buy=*/true, /*limit_price=*/max_order_price(), qty, /*expire_ts=*/clock.timestamp_ms() + 60_000, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv_fee, clock, ctx);
         option::destroy_none(maybe_unxv_fee);
     }
 
-    // Unified trade entry
-    fun trade_internal<Collat>(
+    // Matched taker limit trade using on-chain orderbook
+    fun taker_limit_trade<Collat>(
         market: &mut FuturesMarket<Collat>,
         is_buy: bool,
+        limit_price_1e6: u64,
         qty: u64,
+        expire_ts: u64,
         reg: &OracleRegistry,
         agg: &Aggregator,
         cfg: &FeeConfig,
@@ -319,67 +339,77 @@ module unxversal::futures {
         assert!(qty > 0, E_ZERO);
         let now = clock.timestamp_ms();
         if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
-        let px_1e6 = gated_price_and_update<Collat>(market, reg, agg, clock);
-        // Overflow-safe notional: ((px * cs)/1e6) * qty * 1e6
-        let per_unit_1e6: u128 = ((px_1e6 as u128) * (market.series.contract_size as u128)) / 1_000_000u128;
-        let notional_1e6 = (qty as u128) * per_unit_1e6 * 1_000_000u128;
-        // compute fee in Collat terms
+        // Price gating for index/mark only
+        let _ = gated_price_and_update<Collat>(market, reg, agg, clock);
+        // Plan fills against resting side and apply them incrementally
+        let plan = ubk::compute_fill_plan(&market.book, is_buy, limit_price_1e6, qty, /*client_order_id*/0, expire_ts, now);
+        // Taker account
+        let mut acc = take_or_new_account<Collat>(market, ctx.sender());
+        let index_px = current_price_1e6(&market.series, reg, agg, clock);
+        let mut total_notional_1e6: u128 = 0u128;
+        let fills_len = ubk::fillplan_num_fills(&plan);
+        let mut i: u64 = 0;
+        while (i < fills_len) {
+            let f = ubk::fillplan_get_fill(&plan, i);
+            let maker_id = ubk::fill_maker_id(&f);
+            let px = ubk::fill_price(&f);
+            let req_qty = ubk::fill_base_qty(&f);
+            // Compute available maker remaining before committing
+            let (filled0, qty0) = ubk::order_progress(&market.book, maker_id);
+            let maker_rem_before = if (qty0 > filled0) { qty0 - filled0 } else { 0 };
+            let fqty = if (req_qty <= maker_rem_before) { req_qty } else { maker_rem_before };
+            if (fqty == 0) { i = i + 1; continue };
+            // Commit this single maker fill
+            ubk::commit_maker_fill(&mut market.book, maker_id, is_buy, limit_price_1e6, fqty, now);
+            let maker_addr = *table::borrow(&market.owners, maker_id);
+            let mut maker_acc = take_or_new_account<Collat>(market, maker_addr);
+            if (is_buy) {
+                // Taker: reduce short then add long
+                let r = if (acc.short_qty > 0) { if (fqty <= acc.short_qty) { fqty } else { acc.short_qty } } else { 0 };
+                if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px, r, market.series.contract_size); apply_realized_to_account<Collat>(market, &mut acc, g, l, vault, clock, ctx); acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r; };
+                let a = if (fqty > r) { fqty - r } else { 0 };
+                if (a > 0) { acc.avg_long_1e6 = weighted_avg_price(acc.avg_long_1e6, acc.long_qty, px, a); acc.long_qty = acc.long_qty + a; market.total_long_qty = market.total_long_qty + a; };
+                // Maker: reduce long then add short
+                let r_m = if (maker_acc.long_qty > 0) { if (fqty <= maker_acc.long_qty) { fqty } else { maker_acc.long_qty } } else { 0 };
+                if (r_m > 0) { let (g_m,l_m) = realize_long_ul(maker_acc.avg_long_1e6, px, r_m, market.series.contract_size); apply_realized_to_account<Collat>(market, &mut maker_acc, g_m, l_m, vault, clock, ctx); maker_acc.long_qty = maker_acc.long_qty - r_m; if (maker_acc.long_qty == 0) { maker_acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r_m; };
+                let a_m = if (fqty > r_m) { fqty - r_m } else { 0 };
+                if (a_m > 0) { maker_acc.avg_short_1e6 = weighted_avg_price(maker_acc.avg_short_1e6, maker_acc.short_qty, px, a_m); maker_acc.short_qty = maker_acc.short_qty + a_m; market.total_short_qty = market.total_short_qty + a_m; unlock_locked_im_for_fill<Collat>(market, &mut maker_acc, index_px, a_m); };
+            } else {
+                // Taker sell: reduce long then add short
+                let r2 = if (acc.long_qty > 0) { if (fqty <= acc.long_qty) { fqty } else { acc.long_qty } } else { 0 };
+                if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px, r2, market.series.contract_size); apply_realized_to_account<Collat>(market, &mut acc, g2, l2, vault, clock, ctx); acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r2; };
+                let a2 = if (fqty > r2) { fqty - r2 } else { 0 };
+                if (a2 > 0) { acc.avg_short_1e6 = weighted_avg_price(acc.avg_short_1e6, acc.short_qty, px, a2); acc.short_qty = acc.short_qty + a2; market.total_short_qty = market.total_short_qty + a2; };
+                // Maker: reduce short then add long
+                let r_m2 = if (maker_acc.short_qty > 0) { if (fqty <= maker_acc.short_qty) { fqty } else { maker_acc.short_qty } } else { 0 };
+                if (r_m2 > 0) { let (g_m2,l_m2) = realize_short_ul(maker_acc.avg_short_1e6, px, r_m2, market.series.contract_size); apply_realized_to_account<Collat>(market, &mut maker_acc, g_m2, l_m2, vault, clock, ctx); maker_acc.short_qty = maker_acc.short_qty - r_m2; if (maker_acc.short_qty == 0) { maker_acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r_m2; };
+                let a_m2 = if (fqty > r_m2) { fqty - r_m2 } else { 0 };
+                if (a_m2 > 0) { maker_acc.avg_long_1e6 = weighted_avg_price(maker_acc.avg_long_1e6, maker_acc.long_qty, px, a_m2); maker_acc.long_qty = maker_acc.long_qty + a_m2; market.total_long_qty = market.total_long_qty + a_m2; unlock_locked_im_for_fill<Collat>(market, &mut maker_acc, index_px, a_m2); };
+            };
+            // Update notional
+            let per_unit_1e6: u128 = ((px as u128) * (market.series.contract_size as u128)) / 1_000_000u128;
+            total_notional_1e6 = total_notional_1e6 + (fqty as u128) * per_unit_1e6 * 1_000_000u128;
+            // Persist maker
+            store_account<Collat>(market, maker_addr, maker_acc);
+            // If maker order fully filled, remove owner mapping
+            if (!ubk::has_order(&market.book, maker_id)) { let _ = table::remove(&mut market.owners, maker_id); };
+            // Emit per-fill event
+            event::emit(OrderFilled { market_id: object::id(market), maker_order_id: maker_id, maker: maker_addr, taker: ctx.sender(), price_1e6: px, base_qty: fqty, timestamp_ms: now });
+            i = i + 1;
+        };
+
+        // Protocol taker fee
         let taker_bps = fees::futures_taker_fee_bps(cfg);
         let pay_with_unxv = option::is_some(maybe_unxv_fee);
         let (t_eff, _) = fees::apply_discounts(taker_bps, 0, pay_with_unxv, staking_pool, ctx.sender(), cfg);
-        let fee_amt = ((notional_1e6 * (t_eff as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64; // convert from 1e6 to whole units
-
-        let mut acc = take_or_new_account<Collat>(market, ctx.sender());
-        // Close-only mode enforcement: only allow reducing opposing side without adding new exposure
-        if (market.close_only) {
-            if (is_buy) { assert!(qty <= acc.short_qty, E_CLOSE_ONLY); } else { assert!(qty <= acc.long_qty, E_CLOSE_ONLY); };
-        };
-
-        // Realize PnL if crossing sides
-        let mut realized_gain: u64 = 0;
-        let mut realized_loss: u64 = 0;
-        let mut reduced_long: u64 = 0; let mut reduced_short: u64 = 0; let mut add_long: u64 = 0; let mut add_short: u64 = 0;
-        if (is_buy) {
-            let r = if (acc.short_qty > 0) { if (qty <= acc.short_qty) { qty } else { acc.short_qty } } else { 0 };
-            if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px_1e6, r, market.series.contract_size); realized_gain = realized_gain + g; realized_loss = realized_loss + l; acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; reduced_short = r; };
-            let a = if (qty > r) { qty - r } else { 0 };
-            if (a > 0) { acc.avg_long_1e6 = weighted_avg_price(acc.avg_long_1e6, acc.long_qty, px_1e6, a); acc.long_qty = acc.long_qty + a; add_long = a; };
-        } else {
-            let r2 = if (acc.long_qty > 0) { if (qty <= acc.long_qty) { qty } else { acc.long_qty } } else { 0 };
-            if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px_1e6, r2, market.series.contract_size); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; reduced_long = r2; };
-            let a2 = if (qty > r2) { qty - r2 } else { 0 };
-            if (a2 > 0) { acc.avg_short_1e6 = weighted_avg_price(acc.avg_short_1e6, acc.short_qty, px_1e6, a2); acc.short_qty = acc.short_qty + a2; add_short = a2; };
-        };
-
-        // Enforce exposure caps before finalizing adds
-        if (add_long > 0 || add_short > 0) {
-            let gross_acc = acc.long_qty + acc.short_qty;
-            if (market.account_max_gross_qty > 0) { assert!(gross_acc <= market.account_max_gross_qty, E_EXPOSURE_CAP); };
-            let gross_market_before = market.total_long_qty + market.total_short_qty;
-            let gross_market_after = gross_market_before - reduced_long - reduced_short + add_long + add_short;
-            if (market.market_max_gross_qty > 0) { assert!(gross_market_after <= market.market_max_gross_qty, E_EXPOSURE_CAP); };
-        };
-
-        // Update market OI totals (reductions first, then adds)
-        if (reduced_long > 0) { market.total_long_qty = market.total_long_qty - reduced_long; };
-        if (reduced_short > 0) { market.total_short_qty = market.total_short_qty - reduced_short; };
-        if (add_long > 0) { market.total_long_qty = market.total_long_qty + add_long; };
-        if (add_short > 0) { market.total_short_qty = market.total_short_qty + add_short; };
-
-        // Apply realized PnL to account (deposit losses to PnL vault; pay gains up to vault availability; credit remainder)
-        apply_realized_to_account<Collat>(market, &mut acc, realized_gain, realized_loss, vault, clock, ctx);
-
-        // Charge protocol fee either in UNXV or Collat
+        let fee_amt: u64 = ((total_notional_1e6 * (t_eff as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64;
         if (pay_with_unxv) {
             let u = option::extract(maybe_unxv_fee);
-            // Replace fee_amt with UNXV-specific discounted payment amount already captured via t_eff; here we just split UNXV in full amount provided.
-            // Caller supplies sufficient UNXV to cover; split exact fee_amt-equivalent UNXV outside scope is non-trivial without price; we accept full provided and split into shares.
             let (stakers_coin, treasury_coin, _burn_amt) = fees::accrue_unxv_and_split(cfg, vault, u, clock, ctx);
             staking::add_weekly_reward(staking_pool, stakers_coin, clock);
             transfer::public_transfer(treasury_coin, fees::treasury_address(cfg));
-            event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_units: (notional_1e6 / 1_000_000u128) as u64, fee_paid: 0, paid_in_unxv: true, timestamp_ms: clock.timestamp_ms() });
+            event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_units: (total_notional_1e6 / 1_000_000u128) as u64, fee_paid: 0, paid_in_unxv: true, timestamp_ms: clock.timestamp_ms() });
         } else {
-            // Deduct from collateral balance
             assert!(balance::value(&acc.collat) >= fee_amt, E_INSUFFICIENT_BALANCE);
             let part = balance::split(&mut acc.collat, fee_amt);
             let mut c = coin::from_balance(part, ctx);
@@ -398,15 +428,15 @@ module unxversal::futures {
             } else {
                 fees::accrue_generic<Collat>(vault, c, clock, ctx);
             };
-            event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_units: (notional_1e6 / 1_000_000u128) as u64, fee_paid: fee_amt, paid_in_unxv: false, timestamp_ms: clock.timestamp_ms() });
+            event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_units: (total_notional_1e6 / 1_000_000u128) as u64, fee_paid: fee_amt, paid_in_unxv: false, timestamp_ms: clock.timestamp_ms() });
         };
 
-        // Margin check post-trade
-        let eq = equity_collat(&acc, px_1e6, market.series.contract_size);
-        let req_im = required_initial_margin_effective<Collat>(market, &acc, px_1e6);
-        assert!(eq >= req_im, E_UNDER_INITIAL_MARGIN);
+        // Margin check post-trade (use index)
+        let eq = equity_collat(&acc, index_px, market.series.contract_size);
+        let req = required_initial_margin_effective<Collat>(market, &acc, index_px);
+        let free = if (eq > acc.locked_im) { eq - acc.locked_im } else { 0 };
+        assert!(free >= req, E_UNDER_INITIAL_MARGIN);
 
-        event::emit(PositionChanged { market_id: object::id(market), who: ctx.sender(), is_long: is_buy, qty_delta: qty, exec_price_1e6: px_1e6, realized_gain: realized_gain, realized_loss: realized_loss, new_long: acc.long_qty, new_short: acc.short_qty, timestamp_ms: clock.timestamp_ms() });
         store_account<Collat>(market, ctx.sender(), acc);
     }
 
@@ -626,6 +656,9 @@ module unxversal::futures {
         (num / den) as u64
     }
 
+    fun max_order_price(): u64 { ((1u128 << 63) - 1) as u64 }
+    fun min_order_price(): u64 { 1 }
+
     fun apply_realized_to_account<Collat>(market: &FuturesMarket<Collat>, acc: &mut Account<Collat>, gain: u64, loss: u64, vault: &mut FeeVault, clock: &Clock, ctx: &mut TxContext) {
         if (loss > 0) {
             let have = balance::value(&acc.collat);
@@ -655,7 +688,7 @@ module unxversal::futures {
     }
 
     fun take_or_new_account<Collat>(market: &mut FuturesMarket<Collat>, who: address): Account<Collat> {
-        if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { Account { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0, pending_credit: 0 } }
+        if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { Account { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0, pending_credit: 0, locked_im: 0 } }
     }
 
     fun store_account<Collat>(market: &mut FuturesMarket<Collat>, who: address, acc: Account<Collat>) {
@@ -702,6 +735,73 @@ module unxversal::futures {
         };
         market.last_price_1e6 = cur;
         cur
+    }
+
+    // ===== Maker order APIs =====
+    public fun place_limit_bid<Collat>(market: &mut FuturesMarket<Collat>, price_1e6: u64, qty: u64, expire_ts: u64, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, ctx: &mut TxContext) {
+        assert!(qty > 0, E_ZERO);
+        let now = clock.timestamp_ms();
+        assert!(expire_ts > now, E_EXPIRED);
+        let mut acc = take_or_new_account<Collat>(market, ctx.sender());
+        let idx = current_price_1e6(&market.series, reg, agg, clock);
+        let need = im_for_qty(&market.series, qty, idx, market.initial_margin_bps);
+        let eq = equity_collat(&acc, idx, market.series.contract_size);
+        let free = if (eq > acc.locked_im) { eq - acc.locked_im } else { 0 };
+        assert!(free >= need, E_UNDER_INITIAL_MARGIN);
+        acc.locked_im = acc.locked_im + need;
+        store_account<Collat>(market, ctx.sender(), acc);
+        let mut order = ubk::new_order(true, price_1e6, 0, qty, expire_ts);
+        ubk::create_order(&mut market.book, &mut order, now);
+        let oid = ubk::order_id_of(&order);
+        table::add(&mut market.owners, oid, ctx.sender());
+        event::emit(OrderPlaced { market_id: object::id(market), order_id: oid, maker: ctx.sender(), is_bid: true, price_1e6, quantity: qty, expire_ts });
+    }
+
+    public fun place_limit_ask<Collat>(market: &mut FuturesMarket<Collat>, price_1e6: u64, qty: u64, expire_ts: u64, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, ctx: &mut TxContext) {
+        assert!(qty > 0, E_ZERO);
+        let now = clock.timestamp_ms();
+        assert!(expire_ts > now, E_EXPIRED);
+        let mut acc = take_or_new_account<Collat>(market, ctx.sender());
+        let idx = current_price_1e6(&market.series, reg, agg, clock);
+        let need = im_for_qty(&market.series, qty, idx, market.initial_margin_bps);
+        let eq = equity_collat(&acc, idx, market.series.contract_size);
+        let free = if (eq > acc.locked_im) { eq - acc.locked_im } else { 0 };
+        assert!(free >= need, E_UNDER_INITIAL_MARGIN);
+        acc.locked_im = acc.locked_im + need;
+        store_account<Collat>(market, ctx.sender(), acc);
+        let mut order = ubk::new_order(false, price_1e6, 0, qty, expire_ts);
+        ubk::create_order(&mut market.book, &mut order, now);
+        let oid = ubk::order_id_of(&order);
+        table::add(&mut market.owners, oid, ctx.sender());
+        event::emit(OrderPlaced { market_id: object::id(market), order_id: oid, maker: ctx.sender(), is_bid: false, price_1e6, quantity: qty, expire_ts });
+    }
+
+    public fun cancel_order<Collat>(market: &mut FuturesMarket<Collat>, order_id: u128, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, ctx: &mut TxContext) {
+        assert!(table::contains(&market.owners, order_id), E_NO_ACCOUNT);
+        let owner = *table::borrow(&market.owners, order_id);
+        assert!(owner == ctx.sender(), E_NOT_ADMIN);
+        let (filled, qty) = ubk::order_progress(&market.book, order_id);
+        let remaining = if (qty > filled) { qty - filled } else { 0 };
+        let idx = current_price_1e6(&market.series, reg, agg, clock);
+        let unlock = im_for_qty(&market.series, remaining, idx, market.initial_margin_bps);
+        let mut acc = take_or_new_account<Collat>(market, ctx.sender());
+        if (acc.locked_im >= unlock) { acc.locked_im = acc.locked_im - unlock; } else { acc.locked_im = 0; };
+        let _ord = ubk::cancel_order(&mut market.book, order_id);
+        table::remove(&mut market.owners, order_id);
+        store_account<Collat>(market, ctx.sender(), acc);
+        event::emit(OrderCanceled { market_id: object::id(market), order_id, maker: owner, remaining_qty: remaining, timestamp_ms: clock.timestamp_ms() });
+    }
+
+    fun im_for_qty(series: &FuturesSeries, qty: u64, price_1e6: u64, im_bps: u64): u64 {
+        let gross_1e6: u128 = (qty as u128) * (price_1e6 as u128) * (series.contract_size as u128);
+        let im_1e6: u128 = (gross_1e6 * (im_bps as u128)) / (fees::bps_denom() as u128);
+        (im_1e6 / 1_000_000u128) as u64
+    }
+
+    fun unlock_locked_im_for_fill<Collat>(market: &FuturesMarket<Collat>, acc: &mut Account<Collat>, price_1e6: u64, added_qty: u64) {
+        if (added_qty == 0) return;
+        let im = im_for_qty(&market.series, added_qty, price_1e6, market.initial_margin_bps);
+        if (acc.locked_im >= im) { acc.locked_im = acc.locked_im - im; } else { acc.locked_im = 0; };
     }
 
     fun clone_string(s: &String): String {
