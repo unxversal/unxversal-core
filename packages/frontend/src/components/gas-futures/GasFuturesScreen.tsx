@@ -300,47 +300,49 @@ export function GasFuturesScreen({ started, surgeReady, network }: { started?: b
 
   return (
     <div className={styles.root}>
-      <div className={styles.chartCard}>
-        <div className={styles.topbar}>
-          <div className={styles.pairBar}>
-            <div className={styles.pair}>MIST Futures</div>
-            <div className={styles.metrics}>
-              <div className={styles.metricItem}>
-                <div className={styles.metricValue}>{summary.last?.toFixed(4) ?? '-'}</div>
-                <div className={styles.metricLabel}>Price</div>
+      {/* Price Header Card */}
+      <div className={styles.priceCard}>
+        <div className={styles.pairBar}>
+          <div className={styles.pair}>MIST Futures</div>
+          <div className={styles.metrics}>
+            <div className={styles.metricItem}>
+              <div className={styles.metricValue}>{summary.last?.toFixed(4) ?? '-'}</div>
+              <div className={styles.metricLabel}>Price</div>
+            </div>
+            <div className={styles.metricItem}>
+              <div className={`${styles.metricValue} ${summary.change24h && summary.change24h >= 0 ? styles.positive : styles.negative}`}>
+                {summary.change24h?.toFixed(2) ?? '-'}%
               </div>
-              <div className={styles.metricItem}>
-                <div className={`${styles.metricValue} ${summary.change24h && summary.change24h >= 0 ? styles.positive : styles.negative}`}>
-                  {summary.change24h?.toFixed(2) ?? '-'}%
-                </div>
-                <div className={styles.metricLabel}>Change</div>
+              <div className={styles.metricLabel}>Change</div>
+            </div>
+            <div className={styles.metricItem}>
+              <div className={styles.metricValue}>{summary.vol24h?.toLocaleString() ?? '-'}</div>
+              <div className={styles.metricLabel}>24h Vol</div>
+            </div>
+            <div className={styles.metricItem}>
+              <div className={styles.metricValue}>{summary.openInterest?.toLocaleString() ?? '-'}</div>
+              <div className={styles.metricLabel}>OI</div>
+            </div>
+            <div className={styles.metricItem}>
+              <div className={styles.metricValue}>
+                {summary.fundingRate ? (summary.fundingRate * 100).toFixed(4) + '%' : '-'}
               </div>
-              <div className={styles.metricItem}>
-                <div className={styles.metricValue}>{summary.vol24h?.toLocaleString() ?? '-'}</div>
-                <div className={styles.metricLabel}>24h Vol</div>
+              <div className={styles.metricLabel}>Funding</div>
+            </div>
+            <div className={`${styles.metricItem} ${styles.fundingItem}`}>
+              <div className={styles.metricValue}>
+                <Clock size={10} />
+                {summary.nextFunding ? formatCountdown(summary.nextFunding) : '--:--:--'}
               </div>
-              <div className={styles.metricItem}>
-                <div className={styles.metricValue}>{summary.openInterest?.toLocaleString() ?? '-'}</div>
-                <div className={styles.metricLabel}>OI</div>
-              </div>
-              <div className={styles.metricItem}>
-                <div className={styles.metricValue}>
-                  {summary.fundingRate ? (summary.fundingRate * 100).toFixed(4) + '%' : '-'}
-                </div>
-                <div className={styles.metricLabel}>Funding</div>
-              </div>
-              <div className={`${styles.metricItem} ${styles.fundingItem}`}>
-                <div className={styles.metricValue}>
-                  <Clock size={10} />
-                  {summary.nextFunding ? formatCountdown(summary.nextFunding) : '--:--:--'}
-                </div>
-                <div className={styles.metricLabel}>Countdown</div>
-              </div>
+              <div className={styles.metricLabel}>Countdown</div>
             </div>
           </div>
         </div>
-        <div className={styles.chartContainer}>
-          <div className={styles.toolbox}>
+      </div>
+
+      {/* Toolbox Card */}
+      <div className={styles.toolboxCard}>
+        <div className={styles.toolbox}>
             {/* Timeframes */}
             {(['1m','5m','15m','1h','1d','7d'] as const).map(t => (
               <Tooltip key={t} content={`${t} Timeframe`}>
@@ -463,8 +465,12 @@ export function GasFuturesScreen({ started, surgeReady, network }: { started?: b
                 <Eye size={16} />
               </button>
             </Tooltip>
-          </div>
-          
+        </div>
+      </div>
+
+      {/* Chart Card */}
+      <div className={styles.chartCard}>
+        <div className={styles.chartContainer}>
           <div className={styles.chartArea}>
             {ohlc && (
               <div className={styles.ohlcDisplay}>

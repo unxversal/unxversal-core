@@ -300,38 +300,40 @@ export function DexScreen({ started, surgeReady, network }: { started?: boolean;
 
   return (
     <div className={styles.root}>
-      <div className={styles.chartCard}>
-        <div className={styles.topbar}>
-          <div className={styles.pairBar}>
-            <div className={styles.pair}>DEX / {displayPair}</div>
-            <div className={styles.metrics}>
-              <div className={styles.metricItem}>
-                <div className={styles.metricValue}>{summary.last ?? '-'}</div>
-                <div className={styles.metricLabel}>Price</div>
+      {/* Price Header Card */}
+      <div className={styles.priceCard}>
+        <div className={styles.pairBar}>
+          <div className={styles.pair}>DEX / {displayPair}</div>
+          <div className={styles.metrics}>
+            <div className={styles.metricItem}>
+              <div className={styles.metricValue}>{summary.last ?? '-'}</div>
+              <div className={styles.metricLabel}>Price</div>
+            </div>
+            <div className={styles.metricItem}>
+              <div className={`${styles.metricValue} ${summary.change24h && summary.change24h >= 0 ? styles.positive : styles.negative}`}>
+                {summary.change24h?.toFixed?.(2) ?? '-'}%
               </div>
-              <div className={styles.metricItem}>
-                <div className={`${styles.metricValue} ${summary.change24h && summary.change24h >= 0 ? styles.positive : styles.negative}`}>
-                  {summary.change24h?.toFixed?.(2) ?? '-'}%
-                </div>
-                <div className={styles.metricLabel}>Change</div>
-              </div>
-              <div className={styles.metricItem}>
-                <div className={styles.metricValue}>{summary.high24h ?? '-'}</div>
-                <div className={styles.metricLabel}>24h High</div>
-              </div>
-              <div className={styles.metricItem}>
-                <div className={styles.metricValue}>{summary.low24h ?? '-'}</div>
-                <div className={styles.metricLabel}>24h Low</div>
-              </div>
-              <div className={styles.metricItem}>
-                <div className={styles.metricValue}>{summary.vol24h ?? '-'}</div>
-                <div className={styles.metricLabel}>24h Vol</div>
-              </div>
+              <div className={styles.metricLabel}>Change</div>
+            </div>
+            <div className={styles.metricItem}>
+              <div className={styles.metricValue}>{summary.high24h ?? '-'}</div>
+              <div className={styles.metricLabel}>24h High</div>
+            </div>
+            <div className={styles.metricItem}>
+              <div className={styles.metricValue}>{summary.low24h ?? '-'}</div>
+              <div className={styles.metricLabel}>24h Low</div>
+            </div>
+            <div className={styles.metricItem}>
+              <div className={styles.metricValue}>{summary.vol24h ?? '-'}</div>
+              <div className={styles.metricLabel}>24h Vol</div>
             </div>
           </div>
         </div>
-        <div className={styles.chartContainer}>
-          <div className={styles.toolbox}>
+      </div>
+
+      {/* Toolbox Card */}
+      <div className={styles.toolboxCard}>
+        <div className={styles.toolbox}>
             {/* Timeframes */}
             {(['1m','5m','15m','1h','1d','7d'] as const).map(t => (
               <Tooltip key={t} content={`${t} Timeframe`}>
@@ -462,8 +464,12 @@ export function DexScreen({ started, surgeReady, network }: { started?: boolean;
                 <Eye size={16} />
               </button>
             </Tooltip>
-          </div>
-          
+        </div>
+      </div>
+
+      {/* Chart Card */}
+      <div className={styles.chartCard}>
+        <div className={styles.chartContainer}>
           <div className={styles.chartArea}>
             {ohlc && (
               <div className={styles.ohlcDisplay}>

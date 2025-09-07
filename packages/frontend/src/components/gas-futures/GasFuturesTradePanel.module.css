@@ -13,7 +13,7 @@ select:focus {
 }
 
 .walletCard { 
-  background: #0b0f16; 
+  background: #0a0c12; 
   border: none; 
   border-radius: 8px; 
   padding: 12px; 
@@ -22,7 +22,7 @@ select:focus {
 }
 
 .orderCard { 
-  background: #0b0f16; 
+  background: #0a0c12; 
   border: none; 
   border-radius: 8px; 
   display: flex; 

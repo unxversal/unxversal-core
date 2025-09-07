@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import './App.css'
-import { ConnectButton, useSuiClientContext } from '@mysten/dapp-kit'
+import { ConnectButton } from '@mysten/dapp-kit'
 import { createSuiClient, defaultRpc } from './lib/network'
 import { startTrackers } from './lib/indexer'
-import { loadSettings, saveSettings } from './lib/settings.config'
+import { loadSettings } from './lib/settings.config'
 import { allProtocolTrackers } from './protocols'
 import { KeeperManager } from './strategies/keeperManager.ts'
 import { buildKeeperFromStrategy } from './strategies/factory.ts'
@@ -13,7 +13,7 @@ import { startPriceFeeds } from './lib/switchboard'
 import { startDefaultMarketWatcher } from './lib/marketWatcher'
 import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
 import styles from './components/AppShell.module.css'
-import { BarChart3, Factory, Fuel, Gauge, Home, Landmark, Settings, Wifi, WifiOff, Activity, Pause } from 'lucide-react'
+import { Wifi, WifiOff, Activity, Pause } from 'lucide-react'
 import { DexScreen } from './components/dex/DexScreen'
 import { GasFuturesScreen } from './components/gas-futures/GasFuturesScreen'
 import { LendingScreen } from './components/lending/LendingScreen'
@@ -22,13 +22,12 @@ import { SettingsScreen } from './components/SettingsScreen'
 type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'builder' | 'settings'
 
 function App() {
-  const [network, setNetwork] = useState<'testnet' | 'mainnet'>(loadSettings().network)
+  const [network] = useState<'testnet' | 'mainnet'>(loadSettings().network)
   const [started, setStarted] = useState(false)
   const [surgeReady, setSurgeReady] = useState(false)
   const [view, setView] = useState<View>('dex')
   const account = useCurrentAccount()
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction()
-  const { selectNetwork } = useSuiClientContext()
 
   useEffect(() => {
     if (started) return
@@ -90,14 +89,6 @@ function App() {
     return () => { watcher?.stop() }
   }, [account?.address])
 
-  const handleNetworkChange = (newNetwork: 'testnet' | 'mainnet') => {
-    setNetwork(newNetwork)
-    selectNetwork(newNetwork)
-    setStarted(false) // Reset started state to reinitialize trackers
-    const s = loadSettings();
-    saveSettings({ ...s, network: newNetwork })
-    }
-
   // Update document title based on current view
   useEffect(() => {
     switch (view) {
@@ -149,24 +140,19 @@ function App() {
     <div className={view === 'dex' || view === 'gas' ? styles.appRootDex : styles.appRoot}>
       <header className={styles.header}>
         <div className={styles.brand}>
-        <img src="/whitetransparentunxvdolphin.png" alt="Unxversal" style={{ width: 32, height: 32 }} />
-        {/* <img src="/unxvdolphintarget.png" alt="Unxversal" style={{ width: 24, height: 24 }} /> */}
-        <span>Unxversal</span>
+          <img src="/whitetransparentunxvdolphin.png" alt="Unxversal" style={{ width: 32, height: 32 }} />
+          <span>Unxversal</span>
         </div>
         <nav className={styles.nav}>
-          <button className={view==='dex'?styles.active:''} onClick={() => setView('dex')}><Home size={16}/> DEX</button>
-          <button className={view==='gas'?styles.active:''} onClick={() => setView('gas')}><Fuel size={16}/> MIST Futures</button>
-          <button className={view==='lending'?styles.active:''} onClick={() => setView('lending')}><Landmark size={16}/> Lending</button>
-          <button disabled title="Coming soon"><BarChart3 size={16}/> Options</button>
-          <button disabled title="Coming soon"><Gauge size={16}/> Perps</button>
-          <button disabled title="Coming soon"><Factory size={16}/> Builder</button>
-          <button className={view==='settings'?styles.active:''} onClick={() => setView('settings')}><Settings size={16}/> Settings</button>
+          <span className={view==='dex'?styles.active:''} onClick={() => setView('dex')}>DEX</span>
+          <span className={view==='gas'?styles.active:''} onClick={() => setView('gas')}>MIST Futures</span>
+          <span className={view==='lending'?styles.active:''} onClick={() => setView('lending')}>Lending</span>
+          <span className={styles.disabled}>Options</span>
+          <span className={styles.disabled}>Perps</span>
+          <span className={styles.disabled}>Builder</span>
+          <span className={view==='settings'?styles.active:''} onClick={() => setView('settings')}>Settings</span>
         </nav>
         <div className={styles.tools}>
-          <div className={styles.netToggle}>
-            <button className={network==='testnet'?styles.active:''} onClick={() => handleNetworkChange('testnet')}>Testnet</button>
-            <button className={network==='mainnet'?styles.active:''} onClick={() => handleNetworkChange('mainnet')}>Mainnet</button>
-          </div>
           <ConnectButton />
         </div>
       </header>

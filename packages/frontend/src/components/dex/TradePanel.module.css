@@ -7,9 +7,9 @@ select:focus {
   outline: none;
 }
 
-.walletCard { background: #0b0f16; border: none; border-radius: 8px; padding: 12px; display: grid; gap: 12px; }
+.walletCard { background: #0a0c12; border: none; border-radius: 8px; padding: 12px; display: grid; gap: 12px; }
 .orderCard { 
-  background: #0b0f16; 
+  background: #0a0c12; 
   border: none; 
   border-radius: 8px; 
   display: flex; 
@@ -157,7 +157,7 @@ select:focus {
 .orderFooter {
   padding: 12px;
   flex-shrink: 0;
-  background: #0b0f16;
+  background: #0a0c12;
 }
 
 .buttonArea {
