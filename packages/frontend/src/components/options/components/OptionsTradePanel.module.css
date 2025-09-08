@@ -1,0 +1,394 @@
+/* Options Trade Panel - consistent with other trading UIs */
+
+.root { 
+  display: flex; 
+  flex-direction: column; 
+  gap: 8px; 
+  height: 100%; 
+}
+
+/* Order Card */
+.orderCard { 
+  background: #0a0c12; 
+  border: none; 
+  border-radius: 8px; 
+  display: flex; 
+  flex-direction: column; 
+  flex: 1; 
+  min-height: 0;
+  overflow: hidden;
+}
+
+.orderHeader { 
+  padding: 12px 12px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  background: #0a0c12;
+  border-bottom: 1px solid #1b1e27;
+  flex-shrink: 0;
+}
+
+.title {
+  font-weight: 600;
+  color: #e5e7eb;
+  font-size: 14px;
+  flex: 1;
+}
+
+.backButton {
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  margin-right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.backButton:hover {
+  background: #1a1d29;
+  color: #e5e7eb;
+}
+
+.closeButton {
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.closeButton:hover {
+  background: #1a1d29;
+  color: #e5e7eb;
+}
+
+/* Content */
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Mode Toggle */
+.modeToggle { 
+  display: grid; 
+  grid-template-columns: 1fr 1fr; 
+  gap: 4px; 
+  align-items: center; 
+}
+
+.modeToggle > button { 
+  background: transparent; 
+  border: none; 
+  color: #9ca3af; 
+  font-size: 11px; 
+  padding: 4px 6px; 
+  text-align: center; 
+}
+
+.modeToggle > button.active { 
+  color: #ffffff; 
+  font-weight: 600; 
+}
+
+/* Tabs */
+.tabs { 
+  display: grid; 
+  grid-template-columns: 1fr 1fr; 
+  gap: 8px; 
+  border-radius: 8px; 
+  overflow: hidden;
+  border: none;
+}
+
+.tabs > button { 
+  background: #1a1d29; 
+  border: none; 
+  color: #9ca3af; 
+  padding: 6px 12px; 
+  font-weight: 500;
+  min-height: 24px;
+  font-size: 12px;
+}
+
+.tabs > button:nth-child(1).active { 
+  background: #065f46; 
+  color: #6ee7b7; 
+}
+
+.tabs > button:nth-child(2).active { 
+  background: #991b1b; 
+  color: #fca5a5; 
+}
+
+/* Option Type Segmented Control */
+.optionTypeSegmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: none;
+  margin-bottom: 12px;
+}
+
+.optionTypeSegmented button {
+  background: rgba(16, 185, 129, 0.2);
+  border: none;
+  color: #10b981;
+  padding: 8px 12px;
+  font-weight: 500;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.optionTypeSegmented button.active {
+  background: #10b981;
+  color: #000000;
+}
+
+.optionTypeSegmented button:hover:not(.active) {
+  background: rgba(16, 185, 129, 0.3);
+}
+
+/* Form Fields */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  color: #9ca3af;
+  font-weight: 500;
+}
+
+.input {
+  background: #1a1d29;
+  border: none;
+  color: #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.input:focus {
+  background: #2a2d3a;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.input::placeholder {
+  color: #9ca3af;
+}
+
+.select {
+  background: #1a1d29;
+  border: none;
+  color: #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.select:focus {
+  background: #2a2d3a;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+/* Order Summary */
+.orderSummary {
+  background: #151821;
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.summaryRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.summaryRow span:first-child {
+  color: #9ca3af;
+}
+
+.summaryRow span:last-child {
+  color: #e5e7eb;
+  font-weight: 500;
+}
+
+/* Submit Button */
+.submitButton {
+  background: #10b981;
+  border: none;
+  color: #ffffff;
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-top: auto;
+}
+
+.submitButton:hover:not(:disabled) {
+  background: #0f9973;
+}
+
+.submitButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.submitButton.sell {
+  background: #ef4444;
+}
+
+.submitButton.sell:hover:not(:disabled) {
+  background: #dc2626;
+}
+
+/* Content Area */
+.contentArea {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+}
+
+/* Fee Section */
+.feeSection { 
+  display: flex;
+  flex-direction: column;
+  gap: 8px; 
+  font-size: 11px; 
+  color: #9ca3af;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.feeSelector {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.feeLabel {
+  color: #9ca3af;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.feeToggle {
+  background: #1a1d29;
+  border: none;
+  color: #9ca3af;
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.feeToggle.active {
+  background: #00d4aa;
+  color: #ffffff;
+}
+
+.feeToggle:hover:not(.active) {
+  background: #2a2d3a;
+  color: #e5e7eb;
+}
+
+.feeRow { 
+  display: flex; 
+  justify-content: space-between; 
+  font-size: 10px;
+  color: #9ca3af;
+  min-width: 0;
+  gap: 8px;
+}
+
+.feeRow span:first-child {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feeRow span:last-child {
+  color: #e5e7eb;
+  font-weight: 500;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Footer */
+.orderFooter {
+  padding: 12px;
+  flex-shrink: 0;
+  background: #0b0f16;
+}
+
+.footerRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.footerRow:last-child {
+  margin-bottom: 0;
+}
+
+.footerRow span:first-child {
+  color: #9ca3af;
+}
+
+.footerRow span:last-child {
+  color: #e5e7eb;
+  font-weight: 500;
+}

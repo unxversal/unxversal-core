@@ -177,7 +177,7 @@
   grid-row: 3 / 4; 
   display: grid; 
   grid-template-columns: 1fr minmax(260px, 280px); 
-  gap: 6px; 
+  gap: 6px;
   min-height: 0;
 }
 
@@ -186,7 +186,7 @@
 .activityTabs > button { border: none; background: #0f131a; color: #cbd5e1; padding: 8px 12px; border-radius: 6px; font-size: 11px; font-weight: 500; transition: all 0.2s ease; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 .activityTabs > button.active { background: #ffffff; color: #000000; }
 .activityTabs > button:hover:not(.active) { background: #1a1d29; color: #e5e7eb; }
-.activityContent { padding: 12px 8px 12px 12px; overflow: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: #2a2d3a transparent; }
+.activityContent { padding: 12px 8px 8px 12px; overflow: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: #2a2d3a transparent; }
 .activityContent::-webkit-scrollbar { width: 6px; }
 .activityContent::-webkit-scrollbar-track { background: transparent; margin: 4px 0; }
 .activityContent::-webkit-scrollbar-thumb { background: #2a2d3a; border-radius: 3px; }
@@ -209,7 +209,7 @@
 /* Chain specific */
 .chainToolbar { 
   display: flex; 
-  gap: 8px; 
+  justify-content: space-between;
   align-items: center; 
   padding: 12px; 
   background: #0a0c12; 
@@ -249,7 +249,7 @@
   transition: all 0.2s ease;
 }
 .toggle:hover:not(.active) { background: #1a1d29; color: #e5e7eb; }
-.toggle.active { background: #10b981; color: #ffffff; }
+.toggle.active { background: #10b981; color: #000000; }
 
 .optionRow {
   cursor: pointer;
@@ -356,6 +356,116 @@
   pointer-events: auto;
 }
 
+/* Activity Table Styles */
+.activityTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.activityTable th {
+  text-align: left;
+  padding: 8px 12px;
+  color: #9ca3af;
+  font-weight: 500;
+  border-bottom: 1px solid #1b1e27;
+  background: #0f131a;
+}
+
+.activityTable td {
+  padding: 8px 12px;
+  color: #e5e7eb;
+  border-bottom: 1px solid #1b1e27;
+}
+
+.activityTable tbody tr:hover {
+  background: #0f131a;
+}
+
+/* Option Type Badges */
+.callBadge {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.putBadge {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* Status Badges */
+.pendingBadge {
+  background: rgba(251, 191, 36, 0.2);
+  color: #fbbf24;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.filledBadge {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.cancelledBadge {
+  background: rgba(156, 163, 175, 0.2);
+  color: #9ca3af;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* Side Text Colors */
+.buyText {
+  color: #10b981;
+  font-weight: 500;
+}
+
+.sellText {
+  color: #ef4444;
+  font-weight: 500;
+}
+
+/* Action Buttons */
+.closeButton, .cancelButton {
+  background: transparent;
+  border: 1px solid #ef4444;
+  color: #ef4444;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.closeButton:hover, .cancelButton:hover {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+/* P&L Colors */
+.positive {
+  color: #10b981 !important;
+}
+
+.negative {
+  color: #ef4444 !important;
+}
+
 /* Modal styles */
 .modalOverlay {
   position: fixed;
@@ -380,6 +490,73 @@
   width: 90vw;
   max-height: 80vh;
   overflow: hidden;
+}
+
+.footer {
+  grid-column: 1 / -1;
+  grid-row: 4 / 5;
+  background: #030507;
+  color: #818cf8;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  min-height: 36px;
+}
+
+.statusBadges {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+
+.badge.connected {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.badge.disconnected {
+  background: rgba(156, 163, 175, 0.2);
+  color: #9ca3af;
+  border-color: rgba(156, 163, 175, 0.3);
+}
+
+.badge.active {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.badge.inactive {
+  background: rgba(156, 163, 175, 0.2);
+  color: #9ca3af;
+  border-color: rgba(156, 163, 175, 0.3);
+}
+
+.networkBadge {
+  background: rgba(99, 102, 241, 0.2);
+  color: #818cf8;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid rgba(99, 102, 241, 0.3);
 }
 
 

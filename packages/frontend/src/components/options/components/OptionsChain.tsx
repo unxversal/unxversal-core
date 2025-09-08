@@ -135,12 +135,12 @@ export function OptionsChain({
             <button className={`${styles.toggle} ${callPut==='call'?styles.active:''}`} onClick={()=>setCallPut('call')}>Call</button>
             <button className={`${styles.toggle} ${callPut==='put'?styles.active:''}`} onClick={()=>setCallPut('put')}>Put</button>
           </div>
-          <select className={styles.select} value={expiry} onChange={(e)=>setExpiry(e.target.value)}>
-            <option value="next">Expiring September 12 (5d)</option>
-            <option value="2w">2 Weeks</option>
-            <option value="1m">1 Month</option>
-          </select>
         </div>
+        <select className={styles.select} value={expiry} onChange={(e)=>setExpiry(e.target.value)}>
+          <option value="next">Expiring September 12 (5d)</option>
+          <option value="2w">2 Weeks</option>
+          <option value="1m">1 Month</option>
+        </select>
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', position: 'relative' }} ref={tableContainerRef}>

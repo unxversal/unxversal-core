@@ -3,7 +3,7 @@ import styles from './OptionsScreen.module.css';
 import { createChart, type IChartApi, type CandlestickData, type UTCTimestamp, CandlestickSeries, LineSeries, BarSeries } from 'lightweight-charts';
 import { Tooltip } from '../dex/Tooltip';
 import { useCurrentAccount } from '@mysten/dapp-kit';
-import { BarChart3, CandlestickChart, Clock, Eye, LineChart, Minus, Square, TrendingUp, Waves, Crosshair } from 'lucide-react';
+import { BarChart3, CandlestickChart, Clock, Eye, LineChart, Minus, Square, TrendingUp, Waves, Crosshair, Wifi, WifiOff, Activity, Pause } from 'lucide-react';
 import { OptionsChain } from './components/OptionsChain';
 import { OptionsTradePanel } from './components/OptionsTradePanel';
 import type { OptionsDataProvider } from './types';
@@ -33,6 +33,7 @@ export function OptionsScreen({ started, surgeReady, network, marketLabel, symbo
   const [mid, setMid] = useState<number>(0);
   const [showTradePanel, setShowTradePanel] = useState<boolean>(false);
   const [selectedOption, setSelectedOption] = useState<{strike: number, isCall: boolean, price: number} | null>(null);
+  const [activityTab, setActivityTab] = useState<'positions' | 'open-orders' | 'trade-history' | 'order-history'>('positions');
   const chartRef = useRef<HTMLDivElement | null>(null);
   const chartApi = useRef<IChartApi | null>(null);
   const [tf, setTf] = useState<'1m' | '5m' | '15m' | '1h' | '1d' | '7d'>('1m');
@@ -399,13 +400,217 @@ export function OptionsScreen({ started, surgeReady, network, marketLabel, symbo
       <div className={styles.bottomSection}>
         <div className={styles.activityCard}>
           <div className={styles.activityTabs}>
-            <button className={styles.active}>Positions</button>
-            <button>Open Orders</button>
-            <button>Trade History</button>
-            <button>Order History</button>
+            <button 
+              className={activityTab === 'positions' ? styles.active : ''} 
+              onClick={() => setActivityTab('positions')}
+            >
+              Positions
+            </button>
+            <button 
+              className={activityTab === 'open-orders' ? styles.active : ''} 
+              onClick={() => setActivityTab('open-orders')}
+            >
+              Open Orders
+            </button>
+            <button 
+              className={activityTab === 'trade-history' ? styles.active : ''} 
+              onClick={() => setActivityTab('trade-history')}
+            >
+              Trade History
+            </button>
+            <button 
+              className={activityTab === 'order-history' ? styles.active : ''} 
+              onClick={() => setActivityTab('order-history')}
+            >
+              Order History
+            </button>
           </div>
           <div className={styles.activityContent}>
-            <div className={styles.emptyState}>Connect your wallet to view your options activity.</div>
+            {activityTab === 'positions' && (
+              <table className={styles.activityTable}>
+                <thead>
+                  <tr>
+                    <th>Option</th>
+                    <th>Strike</th>
+                    <th>Expiry</th>
+                    <th>Size</th>
+                    <th>Entry Price</th>
+                    <th>Mark Price</th>
+                    <th>P&L</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><span className={styles.callBadge}>SUI Call</span></td>
+                    <td>$1.65</td>
+                    <td>Sep 12</td>
+                    <td>+5</td>
+                    <td>$0.12</td>
+                    <td>$0.18</td>
+                    <td className={styles.positive}>+$0.30 (+25%)</td>
+                    <td><button className={styles.closeButton}>Close</button></td>
+                  </tr>
+                  <tr>
+                    <td><span className={styles.putBadge}>SUI Put</span></td>
+                    <td>$1.55</td>
+                    <td>Sep 19</td>
+                    <td>+2</td>
+                    <td>$0.08</td>
+                    <td>$0.05</td>
+                    <td className={styles.negative}>-$0.06 (-37.5%)</td>
+                    <td><button className={styles.closeButton}>Close</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
+            
+            {activityTab === 'open-orders' && (
+              <table className={styles.activityTable}>
+                <thead>
+                  <tr>
+                    <th>Option</th>
+                    <th>Strike</th>
+                    <th>Expiry</th>
+                    <th>Side</th>
+                    <th>Size</th>
+                    <th>Price</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><span className={styles.callBadge}>SUI Call</span></td>
+                    <td>$1.70</td>
+                    <td>Sep 12</td>
+                    <td className={styles.buyText}>Buy</td>
+                    <td>3</td>
+                    <td>$0.15</td>
+                    <td><span className={styles.pendingBadge}>Pending</span></td>
+                    <td><button className={styles.cancelButton}>Cancel</button></td>
+                  </tr>
+                  <tr>
+                    <td><span className={styles.putBadge}>SUI Put</span></td>
+                    <td>$1.50</td>
+                    <td>Sep 19</td>
+                    <td className={styles.sellText}>Sell</td>
+                    <td>1</td>
+                    <td>$0.06</td>
+                    <td><span className={styles.pendingBadge}>Pending</span></td>
+                    <td><button className={styles.cancelButton}>Cancel</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
+            
+            {activityTab === 'trade-history' && (
+              <table className={styles.activityTable}>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Option</th>
+                    <th>Strike</th>
+                    <th>Side</th>
+                    <th>Size</th>
+                    <th>Price</th>
+                    <th>Fee</th>
+                    <th>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>14:32:15</td>
+                    <td><span className={styles.callBadge}>SUI Call</span></td>
+                    <td>$1.65</td>
+                    <td className={styles.buyText}>Buy</td>
+                    <td>5</td>
+                    <td>$0.12</td>
+                    <td>$0.003</td>
+                    <td>$0.603</td>
+                  </tr>
+                  <tr>
+                    <td>13:45:22</td>
+                    <td><span className={styles.putBadge}>SUI Put</span></td>
+                    <td>$1.55</td>
+                    <td className={styles.buyText}>Buy</td>
+                    <td>2</td>
+                    <td>$0.08</td>
+                    <td>$0.001</td>
+                    <td>$0.161</td>
+                  </tr>
+                  <tr>
+                    <td>12:18:45</td>
+                    <td><span className={styles.callBadge}>SUI Call</span></td>
+                    <td>$1.60</td>
+                    <td className={styles.sellText}>Sell</td>
+                    <td>3</td>
+                    <td>$0.22</td>
+                    <td>$0.004</td>
+                    <td>$0.656</td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
+            
+            {activityTab === 'order-history' && (
+              <table className={styles.activityTable}>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Option</th>
+                    <th>Strike</th>
+                    <th>Side</th>
+                    <th>Size</th>
+                    <th>Price</th>
+                    <th>Status</th>
+                    <th>Filled</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>14:32:15</td>
+                    <td><span className={styles.callBadge}>SUI Call</span></td>
+                    <td>$1.65</td>
+                    <td className={styles.buyText}>Buy</td>
+                    <td>5</td>
+                    <td>$0.12</td>
+                    <td><span className={styles.filledBadge}>Filled</span></td>
+                    <td>5/5</td>
+                  </tr>
+                  <tr>
+                    <td>13:45:22</td>
+                    <td><span className={styles.putBadge}>SUI Put</span></td>
+                    <td>$1.55</td>
+                    <td className={styles.buyText}>Buy</td>
+                    <td>2</td>
+                    <td>$0.08</td>
+                    <td><span className={styles.filledBadge}>Filled</span></td>
+                    <td>2/2</td>
+                  </tr>
+                  <tr>
+                    <td>12:18:45</td>
+                    <td><span className={styles.callBadge}>SUI Call</span></td>
+                    <td>$1.60</td>
+                    <td className={styles.sellText}>Sell</td>
+                    <td>3</td>
+                    <td>$0.22</td>
+                    <td><span className={styles.filledBadge}>Filled</span></td>
+                    <td>3/3</td>
+                  </tr>
+                  <tr>
+                    <td>11:55:12</td>
+                    <td><span className={styles.putBadge}>SUI Put</span></td>
+                    <td>$1.45</td>
+                    <td className={styles.buyText}>Buy</td>
+                    <td>4</td>
+                    <td>$0.05</td>
+                    <td><span className={styles.cancelledBadge}>Cancelled</span></td>
+                    <td>0/4</td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
         <div className={styles.pointsCard}>
@@ -417,6 +622,24 @@ export function OptionsScreen({ started, surgeReady, network, marketLabel, symbo
           <div className={styles.pointsMessage}>Trade options to earn points.</div>
         </div>
       </div>
+
+      <footer className={styles.footer}>
+        <div className={styles.statusBadges}>
+          <div className={`${styles.badge} ${account?.address ? styles.connected : styles.disconnected}`}>
+            {account?.address ? <Wifi size={10} /> : <WifiOff size={10} />}
+            <span>{account?.address ? 'Online' : 'Offline'}</span>
+          </div>
+          <div className={`${styles.badge} ${started ? styles.active : styles.inactive}`}>
+            {started ? <Activity size={10} /> : <Pause size={10} />}
+            <span>IDX</span>
+          </div>
+          <div className={`${styles.badge} ${surgeReady ? styles.active : styles.inactive}`}>
+            {surgeReady ? <Activity size={10} /> : <Pause size={10} />}
+            <span>PRC</span>
+          </div>
+        </div>
+        <div className={styles.networkBadge}><span>{(network || 'testnet').toUpperCase()}</span></div>
+      </footer>
 
     </div>
   );

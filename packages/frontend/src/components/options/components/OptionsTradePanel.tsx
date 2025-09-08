@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import panelStyles from '../../gas-futures/GasFuturesTradePanel.module.css';
-import { X, ArrowLeft } from 'lucide-react';
+import styles from './OptionsTradePanel.module.css';
+import { X, ChevronLeft } from 'lucide-react';
 
 export function OptionsTradePanel({ 
   baseSymbol, 
@@ -30,6 +30,7 @@ export function OptionsTradePanel({
   const [price, setPrice] = useState<number>(Number(mid?.toFixed(3) || '1'));
   const [strike, setStrike] = useState<number>(Number(mid?.toFixed(2) || '1'));
   const [expiry, setExpiry] = useState<string>('next');
+  const [feeType, setFeeType] = useState<'input' | 'unxv'>('input');
 
   useEffect(() => {
     if (selectedStrike) setStrike(selectedStrike);
@@ -43,125 +44,162 @@ export function OptionsTradePanel({
     if (!selectedStrike) setStrike(Number(mid.toFixed(2)));
   }, [mid, selectedPrice, selectedStrike]);
 
+  // Fee calculations
+  const notionalValue = size * price;
+  const tradingFee = notionalValue * 0.001; // 0.1% fee
+  const feeUnxvDisc = tradingFee * 0.7; // 30% discount with UNXV
+
   return (
-    <div className={panelStyles.root}>
-      <div className={panelStyles.header}>
+    <div className={styles.root}>
+      <div className={styles.header}>
         {showBackButton && onClose && (
-          <button 
-            onClick={onClose}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#9ca3af',
-              cursor: 'pointer',
-              padding: '4px',
-              borderRadius: '4px',
-              transition: 'all 0.2s ease',
-              marginRight: '8px'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = '#1a1d29';
-              e.currentTarget.style.color = '#e5e7eb';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
-              e.currentTarget.style.color = '#9ca3af';
-            }}
-          >
-            <ArrowLeft size={16} />
+          <button className={styles.backButton} onClick={onClose}>
+            <ChevronLeft size={16} />
           </button>
         )}
-        <div className={panelStyles.title}>Trade Options</div>
+        <div className={styles.title}>Trade Options</div>
         {!showBackButton && onClose && (
-          <button 
-            onClick={onClose}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#9ca3af',
-              cursor: 'pointer',
-              padding: '4px',
-              borderRadius: '4px',
-              transition: 'all 0.2s ease'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = '#1a1d29';
-              e.currentTarget.style.color = '#e5e7eb';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
-              e.currentTarget.style.color = '#9ca3af';
-            }}
-          >
+          <button className={styles.closeButton} onClick={onClose}>
             <X size={16} />
           </button>
         )}
       </div>
-      <div className={panelStyles.controls}>
-        <div className={panelStyles.row}>
-          <div className={panelStyles.segmented}>
-            <button className={side==='call'?panelStyles.active:''} onClick={()=>setSide('call')}>Call</button>
-            <button className={side==='put'?panelStyles.active:''} onClick={()=>setSide('put')}>Put</button>
-          </div>
-          <div className={panelStyles.segmented}>
-            <button className={action==='buy'?panelStyles.active:''} onClick={()=>setAction('buy')}>Buy</button>
-            <button className={action==='sell'?panelStyles.active:''} onClick={()=>setAction('sell')}>Sell</button>
-          </div>
-        </div>
 
-        <div className={panelStyles.row}>
-          <label>Mode</label>
-          <div className={panelStyles.segmented}>
-            <button className={mode==='market'?panelStyles.active:''} onClick={()=>setMode('market')}>Market</button>
-            <button className={mode==='limit'?panelStyles.active:''} onClick={()=>setMode('limit')}>Limit</button>
+      {/* Order Card */}
+      <div className={styles.orderCard}>
+        <div className={styles.orderHeader}>
+          <div className={styles.modeToggle}>
+            <button className={mode==='market'?styles.active:''} onClick={()=>setMode('market')}>Market</button>
+            <button className={mode==='limit'?styles.active:''} onClick={()=>setMode('limit')}>Limit</button>
+          </div>
+          
+          <div className={styles.tabs}>
+            <button className={action==='buy'?styles.active:''} onClick={()=>setAction('buy')}>Buy</button>
+            <button className={action==='sell'?styles.active:''} onClick={()=>setAction('sell')}>Sell</button>
           </div>
         </div>
 
-        <div className={panelStyles.row}>
-          <label>Expiry</label>
-          <select value={expiry} onChange={(e)=>setExpiry(e.target.value)}>
-            <option value="next">Next Expiry</option>
-            <option value="2w">2 Weeks</option>
-            <option value="1m">1 Month</option>
-          </select>
-        </div>
-
-        <div className={panelStyles.row}>
-          <label>Strike</label>
-          <input type="number" value={strike} onChange={(e)=>setStrike(Number(e.target.value))} />
-        </div>
-
-        <div className={panelStyles.row}>
-          <label>Size (contracts)</label>
-          <input type="number" value={size} onChange={(e)=>setSize(Number(e.target.value))} />
-        </div>
-
-        {mode==='limit' && (
-          <div className={panelStyles.row}>
-            <label>Limit Price ({quoteSymbol})</label>
-            <input type="number" value={price} onChange={(e)=>setPrice(Number(e.target.value))} />
+        <div className={styles.contentArea}>
+          <div className={styles.optionTypeSegmented}>
+            <button className={side==='call'?styles.active:''} onClick={()=>setSide('call')}>Call</button>
+            <button className={side==='put'?styles.active:''} onClick={()=>setSide('put')}>Put</button>
           </div>
-        )}
 
-        <div className={panelStyles.actions}>
-          <button className={action==='buy'?panelStyles.buy:panelStyles.sell} onClick={async ()=>{
-            try {
-              if (!provider?.submitOrder) return;
-              await provider.submitOrder({ side, action, mode, size, price, strike, expiry });
-              onClose?.();
-            } catch (error) {
-              console.error('Failed to submit order:', error);
-            }
-          }}>{action==='buy'?'Place Buy':'Place Sell'}</button>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Strike Price ({quoteSymbol})</label>
+            <input 
+              className={styles.input}
+              type="number" 
+              value={strike} 
+              onChange={(e)=>setStrike(Number(e.target.value))} 
+              placeholder="0.00"
+            />
+          </div>
+
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Expiry</label>
+            <select className={styles.select} value={expiry} onChange={(e)=>setExpiry(e.target.value)}>
+              <option value="next">Next Expiry</option>
+              <option value="2w">2 Weeks</option>
+              <option value="1m">1 Month</option>
+            </select>
+          </div>
+
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Size (Contracts)</label>
+            <input 
+              className={styles.input}
+              type="number" 
+              value={size} 
+              onChange={(e)=>setSize(Number(e.target.value))} 
+              placeholder="1"
+            />
+          </div>
+
+          {mode === 'limit' && (
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Limit Price ({quoteSymbol})</label>
+              <input 
+                className={styles.input}
+                type="number" 
+                value={price} 
+                onChange={(e)=>setPrice(Number(e.target.value))} 
+                placeholder="0.00"
+              />
+            </div>
+          )}
+
+          <div className={styles.orderSummary}>
+            <div className={styles.summaryRow}>
+              <span>Premium</span>
+              <span>${(size * price).toFixed(2)}</span>
+            </div>
+            <div className={styles.summaryRow}>
+              <span>Max Profit</span>
+              <span>{side === 'call' ? 'Unlimited' : `$${(strike * size - size * price).toFixed(2)}`}</span>
+            </div>
+            <div className={styles.summaryRow}>
+              <span>Max Loss</span>
+              <span>${(size * price).toFixed(2)}</span>
+            </div>
+          </div>
+
+          <div className={styles.feeSection}>
+            <div className={styles.feeSelector}>
+              <span className={styles.feeLabel}>Fee Payment</span>
+              <button 
+                className={`${styles.feeToggle} ${feeType === 'unxv' ? styles.active : ''}`}
+                onClick={() => setFeeType(feeType === 'unxv' ? 'input' : 'unxv')}
+              >
+                {feeType === 'unxv' ? 'UNXV' : quoteSymbol}
+              </button>
+            </div>
+            
+            <div className={styles.feeRow}>
+              <span>Trading Fee</span>
+              <span>
+                {feeType === 'unxv' 
+                  ? `${feeUnxvDisc.toFixed(6)} UNXV` 
+                  : `${tradingFee.toFixed(6)} ${quoteSymbol}`
+                }
+              </span>
+            </div>
+          </div>
         </div>
-      </div>
-      <div className={panelStyles.footer}>
-        <div><span>Base</span><span>{baseSymbol}</span></div>
-        <div><span>Quote</span><span>{quoteSymbol}</span></div>
-        <div><span>Mid</span><span>{mid ? mid.toFixed(4) : '-'}</span></div>
+
+        <div className={styles.orderFooter}>
+          <button 
+            className={`${styles.submitButton} ${action === 'sell' ? styles.sell : ''}`}
+            onClick={async ()=>{
+              try {
+                if (!provider?.submitOrder) return;
+                await provider.submitOrder({ side, action, mode, size, price, strike, expiry });
+                onClose?.();
+              } catch (error) {
+                console.error('Failed to submit order:', error);
+              }
+            }}
+          >
+            {action === 'buy' ? 'Buy' : 'Sell'} {side === 'call' ? 'Call' : 'Put'}
+          </button>
+
+          <div className={styles.footerRow}>
+            <span>Base</span>
+            <span>{baseSymbol}</span>
+          </div>
+          <div className={styles.footerRow}>
+            <span>Quote</span>
+            <span>{quoteSymbol}</span>
+          </div>
+          <div className={styles.footerRow}>
+            <span>Mid</span>
+            <span>{mid ? mid.toFixed(4) : '-'}</span>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
+
 
 

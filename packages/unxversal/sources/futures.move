@@ -156,18 +156,18 @@ module unxversal::futures {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         // Defaults: tiered IM thresholds (notional in 1e6 units) and IM bps
         let mut tier_thresholds: vector<u64> = vector::empty<u64>();
+        vector::push_back(&mut tier_thresholds, 1_000_000_000_000);      // $1M
         vector::push_back(&mut tier_thresholds, 5_000_000_000_000);      // $5M
         vector::push_back(&mut tier_thresholds, 25_000_000_000_000);     // $25M
         vector::push_back(&mut tier_thresholds, 100_000_000_000_000);    // $100M
         vector::push_back(&mut tier_thresholds, 250_000_000_000_000);    // $250M
-        vector::push_back(&mut tier_thresholds, 1_000_000_000_000_000);  // $1B
 
         let mut tier_bps: vector<u64> = vector::empty<u64>();
+        vector::push_back(&mut tier_bps, 250);    // 2.5%
+        vector::push_back(&mut tier_bps, 300);    // 3%
+        vector::push_back(&mut tier_bps, 500);    // 5%
         vector::push_back(&mut tier_bps, 800);    // 8%
-        vector::push_back(&mut tier_bps, 1000);   // 10%
-        vector::push_back(&mut tier_bps, 1500);   // 15%
-        vector::push_back(&mut tier_bps, 2000);   // 20%
-        vector::push_back(&mut tier_bps, 3000);   // 30%
+        vector::push_back(&mut tier_bps, 1200);   // 12%
 
         let m = FuturesMarket<Collat> {
             id: object::new(ctx),
@@ -242,12 +242,7 @@ module unxversal::futures {
         market.liq_target_buffer_bps = buffer_bps;
     }
 
-    /// Admin: set exposure caps
-    public fun set_exposure_caps<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, account_max_gross_qty: u64, market_max_gross_qty: u64, ctx: &TxContext) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        market.account_max_gross_qty = account_max_gross_qty;
-        market.market_max_gross_qty = market_max_gross_qty;
-    }
+    // Removed: set_exposure_caps (contract caps deprecated)
 
     /// Admin: set notional caps (1e6 units). 0 disables a cap.
     public fun set_notional_caps<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, account_max_notional_1e6: u128, market_max_notional_1e6: u128, ctx: &TxContext) {

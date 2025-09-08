@@ -111,18 +111,18 @@ module unxversal::perpetuals {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         // Defaults: tiered IM thresholds and bps
         let mut tier_thresholds: vector<u64> = vector::empty<u64>();
+        vector::push_back(&mut tier_thresholds, 1_000_000_000_000);
         vector::push_back(&mut tier_thresholds, 5_000_000_000_000);
         vector::push_back(&mut tier_thresholds, 25_000_000_000_000);
         vector::push_back(&mut tier_thresholds, 100_000_000_000_000);
         vector::push_back(&mut tier_thresholds, 250_000_000_000_000);
-        vector::push_back(&mut tier_thresholds, 1_000_000_000_000_000);
 
         let mut tier_bps: vector<u64> = vector::empty<u64>();
+        vector::push_back(&mut tier_bps, 250);
+        vector::push_back(&mut tier_bps, 300);
+        vector::push_back(&mut tier_bps, 500);
         vector::push_back(&mut tier_bps, 800);
-        vector::push_back(&mut tier_bps, 1000);
-        vector::push_back(&mut tier_bps, 1500);
-        vector::push_back(&mut tier_bps, 2000);
-        vector::push_back(&mut tier_bps, 3000);
+        vector::push_back(&mut tier_bps, 1200);
 
         let m = PerpMarket<Collat> {
             id: object::new(ctx),

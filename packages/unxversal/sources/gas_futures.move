@@ -102,18 +102,18 @@ module unxversal::gas_futures {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         // Defaults: tiered IM for gas futures
         let mut tier_thresholds: vector<u64> = vector::empty<u64>();
+        vector::push_back(&mut tier_thresholds, 1_000_000_000_000);
         vector::push_back(&mut tier_thresholds, 5_000_000_000_000);
         vector::push_back(&mut tier_thresholds, 25_000_000_000_000);
         vector::push_back(&mut tier_thresholds, 100_000_000_000_000);
         vector::push_back(&mut tier_thresholds, 250_000_000_000_000);
-        vector::push_back(&mut tier_thresholds, 1_000_000_000_000_000);
 
         let mut tier_bps: vector<u64> = vector::empty<u64>();
+        vector::push_back(&mut tier_bps, 250);
+        vector::push_back(&mut tier_bps, 300);
+        vector::push_back(&mut tier_bps, 500);
         vector::push_back(&mut tier_bps, 800);
-        vector::push_back(&mut tier_bps, 1000);
-        vector::push_back(&mut tier_bps, 1500);
-        vector::push_back(&mut tier_bps, 2000);
-        vector::push_back(&mut tier_bps, 3000);
+        vector::push_back(&mut tier_bps, 1200);
 
         let m = GasMarket<Collat> { id: object::new(ctx), series: GasSeries { expiry_ms, contract_size }, accounts: table::new<address, Account<Collat>>(ctx), initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps, close_only: false, max_deviation_bps: 0, last_price_1e6: 0, pnl_fee_share_bps: 0, liq_target_buffer_bps: 0, account_max_notional_1e6: 0, market_max_notional_1e6: 0, account_share_of_oi_bps: 300, tier_thresholds_notional_1e6: tier_thresholds, tier_im_bps: tier_bps, total_long_qty: 0, total_short_qty: 0, imbalance_surcharge_bps_max: 0, imbalance_threshold_bps: 0, book: ubk::empty(tick_size, lot_size, min_size, ctx), owners: table::new<u128, address>(ctx), settlement_price_1e6: 0, is_settled: false, lvp_price_1e6: 0, lvp_ts_ms: 0, twap_ts_ms: vector::empty<u64>(), twap_px_1e6: vector::empty<u64>() };
         event::emit(MarketInitialized { market_id: object::id(&m), expiry_ms, contract_size, initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps });
