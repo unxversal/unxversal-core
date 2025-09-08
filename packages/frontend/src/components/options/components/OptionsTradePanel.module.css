@@ -3,15 +3,16 @@
 .root { 
   display: flex; 
   flex-direction: column; 
-  gap: 8px; 
+  gap: 0; 
   height: 100%; 
+  background: #0a0c12;
 }
 
 /* Order Card */
 .orderCard { 
-  background: #0a0c12; 
+  background: transparent; 
   border: none; 
-  border-radius: 8px; 
+  border-radius: 0; 
   display: flex; 
   flex-direction: column; 
   flex: 1; 
@@ -226,7 +227,7 @@
 
 /* Order Summary */
 .orderSummary {
-  background: #151821;
+  background: #0a0c12;
   border-radius: 6px;
   padding: 12px;
   display: flex;
@@ -256,12 +257,15 @@
   border: none;
   color: #ffffff;
   border-radius: 6px;
-  padding: 12px 16px;
-  font-weight: 600;
-  font-size: 14px;
+  padding: 6px 12px;
+  font-weight: 500;
+  font-size: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
-  margin-top: auto;
+  width: 50%;
+  max-width: 160px;
+  min-width: 100px;
+  min-height: 24px;
 }
 
 .submitButton:hover:not(:disabled) {
@@ -365,11 +369,43 @@
   white-space: nowrap;
 }
 
+/* Market Info Section */
+.marketInfo {
+  background: #0a0c12;
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.infoRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.infoRow span:first-child {
+  color: #9ca3af;
+}
+
+.infoRow span:last-child {
+  color: #e5e7eb;
+  font-weight: 500;
+}
+
 /* Footer */
 .orderFooter {
   padding: 12px;
   flex-shrink: 0;
-  background: #0b0f16;
+  background: #0a0c12;
+}
+
+.buttonContainer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .footerRow {

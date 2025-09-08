@@ -3,7 +3,7 @@
   display: grid; 
   box-sizing: border-box;
   grid-template-columns: 40px 1fr minmax(400px, 500px); 
-  grid-template-rows: 44px minmax(0, 1fr) 200px 36px; 
+  grid-template-rows: 44px minmax(0, 1fr) 200px; 
   gap: 6px; 
   padding: 6px; 
   overflow: hidden;
@@ -153,6 +153,23 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+}
+
+/* Trade Panel Modal */
+.tradePanelModal {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 50%;
+  max-width: 400px;
+  min-width: 300px;
+  background: #0a0c12;
+  border-left: 1px solid #1b1e27;
+  z-index: 50;
+  overflow: hidden;
+  border-radius: 0 8px 8px 0;
 }
 
 .centerTabs { 
@@ -490,73 +507,6 @@
   width: 90vw;
   max-height: 80vh;
   overflow: hidden;
-}
-
-.footer {
-  grid-column: 1 / -1;
-  grid-row: 4 / 5;
-  background: #030507;
-  color: #818cf8;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px;
-  min-height: 36px;
-}
-
-.statusBadges {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  flex-wrap: wrap;
-  flex: 1;
-  min-width: 0;
-}
-
-.badge {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 500;
-  border: 1px solid transparent;
-}
-
-.badge.connected {
-  background: rgba(16, 185, 129, 0.2);
-  color: #10b981;
-  border-color: rgba(16, 185, 129, 0.3);
-}
-
-.badge.disconnected {
-  background: rgba(156, 163, 175, 0.2);
-  color: #9ca3af;
-  border-color: rgba(156, 163, 175, 0.3);
-}
-
-.badge.active {
-  background: rgba(16, 185, 129, 0.2);
-  color: #10b981;
-  border-color: rgba(16, 185, 129, 0.3);
-}
-
-.badge.inactive {
-  background: rgba(156, 163, 175, 0.2);
-  color: #9ca3af;
-  border-color: rgba(156, 163, 175, 0.3);
-}
-
-.networkBadge {
-  background: rgba(99, 102, 241, 0.2);
-  color: #818cf8;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  border: 1px solid rgba(99, 102, 241, 0.3);
 }
 
 

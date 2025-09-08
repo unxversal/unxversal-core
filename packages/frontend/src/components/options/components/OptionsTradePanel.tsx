@@ -144,6 +144,21 @@ export function OptionsTradePanel({
             </div>
           </div>
 
+          <div className={styles.marketInfo}>
+            <div className={styles.infoRow}>
+              <span>Base</span>
+              <span>{baseSymbol}</span>
+            </div>
+            <div className={styles.infoRow}>
+              <span>Quote</span>
+              <span>{quoteSymbol}</span>
+            </div>
+            <div className={styles.infoRow}>
+              <span>Mid</span>
+              <span>{mid ? mid.toFixed(4) : '-'}</span>
+            </div>
+          </div>
+
           <div className={styles.feeSection}>
             <div className={styles.feeSelector}>
               <span className={styles.feeLabel}>Fee Payment</span>
@@ -168,32 +183,21 @@ export function OptionsTradePanel({
         </div>
 
         <div className={styles.orderFooter}>
-          <button 
-            className={`${styles.submitButton} ${action === 'sell' ? styles.sell : ''}`}
-            onClick={async ()=>{
-              try {
-                if (!provider?.submitOrder) return;
-                await provider.submitOrder({ side, action, mode, size, price, strike, expiry });
-                onClose?.();
-              } catch (error) {
-                console.error('Failed to submit order:', error);
-              }
-            }}
-          >
-            {action === 'buy' ? 'Buy' : 'Sell'} {side === 'call' ? 'Call' : 'Put'}
-          </button>
-
-          <div className={styles.footerRow}>
-            <span>Base</span>
-            <span>{baseSymbol}</span>
-          </div>
-          <div className={styles.footerRow}>
-            <span>Quote</span>
-            <span>{quoteSymbol}</span>
-          </div>
-          <div className={styles.footerRow}>
-            <span>Mid</span>
-            <span>{mid ? mid.toFixed(4) : '-'}</span>
+          <div className={styles.buttonContainer}>
+            <button 
+              className={`${styles.submitButton} ${action === 'sell' ? styles.sell : ''}`}
+              onClick={async ()=>{
+                try {
+                  if (!provider?.submitOrder) return;
+                  await provider.submitOrder({ side, action, mode, size, price, strike, expiry });
+                  onClose?.();
+                } catch (error) {
+                  console.error('Failed to submit order:', error);
+                }
+              }}
+            >
+              {action === 'buy' ? 'Buy' : 'Sell'} {side === 'call' ? 'Call' : 'Put'}
+            </button>
           </div>
         </div>
       </div>

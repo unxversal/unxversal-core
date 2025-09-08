@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import styles from './OptionsScreen.module.css';
 import { createChart, type IChartApi, type CandlestickData, type UTCTimestamp, CandlestickSeries, LineSeries, BarSeries } from 'lightweight-charts';
 import { Tooltip } from '../dex/Tooltip';
 import { useCurrentAccount } from '@mysten/dapp-kit';
-import { BarChart3, CandlestickChart, Clock, Eye, LineChart, Minus, Square, TrendingUp, Waves, Crosshair, Wifi, WifiOff, Activity, Pause } from 'lucide-react';
+import { BarChart3, CandlestickChart, Clock, Eye, LineChart, Minus, Square, TrendingUp, Waves, Crosshair } from 'lucide-react';
 import { OptionsChain } from './components/OptionsChain';
 import { OptionsTradePanel } from './components/OptionsTradePanel';
 import type { OptionsDataProvider } from './types';
@@ -372,29 +373,44 @@ export function OptionsScreen({ started, surgeReady, network, marketLabel, symbo
       </div>
 
       <div className={styles.center}>
-        {!showTradePanel ? (
-          <OptionsChain 
-            provider={dataProvider} 
-            spotPrice={mid}
-            baseSymbol={symbol}
-            onOptionSelect={(strike, isCall, price) => {
-              setSelectedOption({strike, isCall, price});
-              setShowTradePanel(true);
-            }}
-          />
-        ) : (
-          <OptionsTradePanel 
-            baseSymbol={symbol} 
-            quoteSymbol={quoteSymbol} 
-            mid={mid} 
-            provider={panelProvider}
-            selectedStrike={selectedOption?.strike}
-            selectedIsCall={selectedOption?.isCall}
-            selectedPrice={selectedOption?.price}
-            onClose={() => setShowTradePanel(false)}
-            showBackButton={true}
-          />
-        )}
+        <OptionsChain 
+          provider={dataProvider} 
+          spotPrice={mid}
+          baseSymbol={symbol}
+          onOptionSelect={(strike, isCall, price) => {
+            setSelectedOption({strike, isCall, price});
+            setShowTradePanel(true);
+          }}
+        />
+        
+        <AnimatePresence>
+          {showTradePanel && (
+            <motion.div 
+              className={styles.tradePanelModal}
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ 
+                type: 'spring',
+                stiffness: 300,
+                damping: 30,
+                mass: 0.8
+              }}
+            >
+              <OptionsTradePanel 
+                baseSymbol={symbol} 
+                quoteSymbol={quoteSymbol} 
+                mid={mid} 
+                provider={panelProvider}
+                selectedStrike={selectedOption?.strike}
+                selectedIsCall={selectedOption?.isCall}
+                selectedPrice={selectedOption?.price}
+                onClose={() => setShowTradePanel(false)}
+                showBackButton={true}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       <div className={styles.bottomSection}>
@@ -622,24 +638,6 @@ export function OptionsScreen({ started, surgeReady, network, marketLabel, symbo
           <div className={styles.pointsMessage}>Trade options to earn points.</div>
         </div>
       </div>
-
-      <footer className={styles.footer}>
-        <div className={styles.statusBadges}>
-          <div className={`${styles.badge} ${account?.address ? styles.connected : styles.disconnected}`}>
-            {account?.address ? <Wifi size={10} /> : <WifiOff size={10} />}
-            <span>{account?.address ? 'Online' : 'Offline'}</span>
-          </div>
-          <div className={`${styles.badge} ${started ? styles.active : styles.inactive}`}>
-            {started ? <Activity size={10} /> : <Pause size={10} />}
-            <span>IDX</span>
-          </div>
-          <div className={`${styles.badge} ${surgeReady ? styles.active : styles.inactive}`}>
-            {surgeReady ? <Activity size={10} /> : <Pause size={10} />}
-            <span>PRC</span>
-          </div>
-        </div>
-        <div className={styles.networkBadge}><span>{(network || 'testnet').toUpperCase()}</span></div>
-      </footer>
 
     </div>
   );

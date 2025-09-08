@@ -25,7 +25,7 @@ function App() {
   const [network] = useState<'testnet' | 'mainnet'>(loadSettings().network)
   const [started, setStarted] = useState(false)
   const [surgeReady, setSurgeReady] = useState(false)
-  const [view, setView] = useState<View>('dex')
+  const [view, setView] = useState<View>('options')
   const account = useCurrentAccount()
 
   useEffect(() => {
@@ -117,12 +117,12 @@ function App() {
           <span>Unxversal</span>
         </div>
         <nav className={styles.nav}>
-          <span className={view==='dex'?styles.active:''} onClick={() => setView('dex')}>DEX</span>
-          <span className={view==='gas'?styles.active:''} onClick={() => setView('gas')}>MIST Futures</span>
-          <span className={view==='lending'?styles.active:''} onClick={() => setView('lending')}>Lending</span>
           <span className={view==='options'?styles.active:''} onClick={() => setView('options')}>Options</span>
+          <span className={view==='gas'?styles.active:''} onClick={() => setView('gas')}>MIST Futures</span>
           <span className={view==='futures'?styles.active:''} onClick={() => setView('futures')}>Futures</span>
           <span className={view==='perps'?styles.active:''} onClick={() => setView('perps')}>Perps</span>
+          <span className={view==='lending'?styles.active:''} onClick={() => setView('lending')}>Lending</span>
+          <span className={view==='dex'?styles.active:''} onClick={() => setView('dex')}>DEX</span>
           <span className={view==='settings'?styles.active:''} onClick={() => setView('settings')}>Settings</span>
         </nav>
         <div className={styles.tools}>
