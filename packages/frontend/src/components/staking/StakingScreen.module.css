@@ -156,12 +156,12 @@
   background: #3b82f6;
 }
 
-/* Portfolio summary cards */
-.portfolioSummary {
+/* Overview cards */
+.overviewCards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 4px;
-  margin-bottom: 4px;
+  margin-bottom: 16px;
   flex-shrink: 0;
 }
 
@@ -203,23 +203,38 @@
   margin-top: 2px;
 }
 
-/* Staking pools section */
-.stakingPools {
-  display: flex;
-  flex-direction: column;
+/* Actions grid */
+.actionsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 16px;
   flex: 1;
-  overflow: hidden;
+  overflow-y: auto;
+  padding: 4px;
 }
 
-.poolsHeader {
+.actionCard {
+  background: #0a0c12;
+  border-radius: 12px;
+  padding: 20px;
+  transition: all 0.2s ease;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.actionCard:hover {
+  background: #0d1015;
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.actionHeader {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
+  margin-bottom: 16px;
 }
 
-.poolsHeader h3 {
+.actionHeader h3 {
   color: #e5e7eb;
   font-size: 18px;
   font-weight: 600;
@@ -239,118 +254,15 @@
   font-weight: 600;
 }
 
-.poolsGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px;
-}
-
-.poolCard {
-  background: #0a0c12;
-  border-radius: 12px;
-  padding: 16px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  border: 2px solid transparent;
-}
-
-.poolCard:hover {
-  background: #0d1015;
-  transform: translateY(-2px);
-}
-
-.poolCard.selected {
-  border-color: #3b82f6;
-  background: rgba(59, 130, 246, 0.08);
-}
-
-.poolHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.poolTitle {
-  font-size: 16px;
-  font-weight: 600;
-  color: #e5e7eb;
-}
-
-.poolApy {
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.poolStats {
+/* Reward details section */
+.rewardDetails {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 12px;
-}
-
-.poolStat {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.statLabel {
-  font-size: 12px;
-  color: #9ca3af;
-}
-
-.statValue {
-  font-size: 12px;
-  font-weight: 500;
-  color: #e5e7eb;
-}
-
-.poolActions {
-  display: flex;
-  gap: 8px;
-}
-
-.poolActions button {
-  flex: 1;
-  border: none;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-/* Stake form */
-.stakeForm {
-  background: #0a0c12;
-  border-radius: 12px;
-  padding: 20px;
-  margin-top: 16px;
-  border: 2px solid #3b82f6;
-}
-
-.formHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
   margin-bottom: 16px;
-}
-
-.formHeader h4 {
-  color: #e5e7eb;
-  font-size: 16px;
-  font-weight: 600;
-  margin: 0;
-}
-
-.selectedPool {
-  font-size: 12px;
-  color: #9ca3af;
+  padding: 12px;
+  background: #151821;
+  border-radius: 6px;
 }
 
 .inputSection {
@@ -501,116 +413,6 @@
   cursor: not-allowed;
 }
 
-/* Rewards view */
-.rewardsView {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  flex: 1;
-  overflow: hidden;
-}
-
-.rewardsHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.rewardsHeader h3 {
-  color: #e5e7eb;
-  font-size: 18px;
-  font-weight: 600;
-  margin: 0;
-}
-
-.claimAllBtn {
-  border: none;
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  padding: 8px 16px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.claimAllBtn:hover:not(:disabled) {
-  background: rgba(16, 185, 129, 0.25);
-}
-
-.claimAllBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.rewardsGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px;
-}
-
-.rewardCard {
-  background: #0a0c12;
-  border-radius: 12px;
-  padding: 16px;
-  transition: all 0.2s ease;
-}
-
-.rewardCard:hover {
-  background: #0d1015;
-  transform: translateY(-2px);
-}
-
-.rewardHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.rewardPoolName {
-  font-size: 16px;
-  font-weight: 600;
-  color: #e5e7eb;
-}
-
-.rewardApy {
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.rewardStats {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.rewardStat {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-/* History view */
-.historyView {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  flex: 1;
-}
-
-.historyView h3 {
-  color: #e5e7eb;
-  font-size: 18px;
-  font-weight: 600;
-  margin: 0;
-}
 
 /* Footer */
 .footer {
@@ -749,16 +551,12 @@
     padding: 4px;
   }
   
-  .portfolioSummary {
+  .overviewCards {
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   }
   
-  .poolsGrid {
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  }
-  
-  .rewardsGrid {
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  .actionsGrid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   }
 }
 
@@ -776,38 +574,17 @@
     justify-content: center;
   }
   
-  .viewToggle {
-    margin-left: 0;
-    margin-top: 4px;
-  }
-  
-  .portfolioSummary {
+  .overviewCards {
     grid-template-columns: repeat(2, 1fr);
   }
   
-  .poolsGrid {
-    grid-template-columns: 1fr;
-  }
-  
-  .rewardsGrid {
+  .actionsGrid {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 768px) {
-  .poolsHeader {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-  }
-  
-  .rewardsHeader {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-  }
-  
-  .portfolioSummary {
+  .overviewCards {
     grid-template-columns: 1fr;
     gap: 8px;
   }
@@ -820,17 +597,14 @@
     font-size: 16px;
   }
   
-  .poolCard {
-    padding: 12px;
-  }
-  
-  .poolActions {
-    flex-direction: column;
-    gap: 6px;
-  }
-  
-  .stakeForm {
+  .actionCard {
     padding: 16px;
+  }
+  
+  .actionHeader {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
   }
   
   .percentButtons {

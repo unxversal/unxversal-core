@@ -1,21 +1,20 @@
 import { useState, useMemo } from 'react';
 import styles from './StakingScreen.module.css';
 import { defaultSettings, getTokenBySymbol } from '../../lib/settings.config';
-import { TrendingUp, Clock, Award, Percent } from 'lucide-react';
+import { TrendingUp, Clock, Award, Calendar } from 'lucide-react';
 import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
 
-type StakingPool = {
-  id: string;
-  apy: number;
-  totalStaked: number;
-  userStaked: number;
-  userRewards: number;
-  lockPeriod: number; // in days
-  minStakeAmount: number;
-  poolStatus: 'active' | 'paused' | 'ended';
+type StakingData = {
+  currentWeek: number;
+  totalActiveStake: number;
+  weeklyRewards: number;
+  currentAPY: number;
+  userActiveStake: number;
+  userPendingStake: number;
+  activateWeek: number;
+  claimableRewards: number;
+  lastClaimedWeek: number;
 };
-
-type ViewMode = 'stake' | 'rewards' | 'history';
 
 export function StakingScreen({ started: _started, network, protocolStatus }: { 
   started?: boolean;
@@ -31,9 +30,8 @@ export function StakingScreen({ started: _started, network, protocolStatus }: {
 }) {
   // Suppress unused parameter warning
   _started;
-  const [viewMode, setViewMode] = useState<ViewMode>('stake');
-  const [selectedPool, setSelectedPool] = useState<StakingPool | null>(null);
-  const [inputAmount, setInputAmount] = useState<number>(0);
+  const [stakeAmount, setStakeAmount] = useState<number>(0);
+  const [unstakeAmount, setUnstakeAmount] = useState<number>(0);
   const [userBalance] = useState<number>(50000); // Mock UNXV balance
   const [submitting, setSubmitting] = useState(false);
   const account = useCurrentAccount();
@@ -43,68 +41,20 @@ export function StakingScreen({ started: _started, network, protocolStatus }: {
     return getTokenBySymbol('UNXV', defaultSettings);
   }, []);
 
-  // Generate staking pools with realistic mock data
-  const stakingPools: StakingPool[] = useMemo(() => {
-    return [
-      {
-        id: 'unxv-flexible',
-        apy: 12.4,
-        totalStaked: 125000000,
-        userStaked: 15000,
-        userRewards: 247.85,
-        lockPeriod: 0,
-        minStakeAmount: 100,
-        poolStatus: 'active'
-      },
-      {
-        id: 'unxv-30day',
-        apy: 18.7,
-        totalStaked: 89000000,
-        userStaked: 25000,
-        userRewards: 1456.23,
-        lockPeriod: 30,
-        minStakeAmount: 500,
-        poolStatus: 'active'
-      },
-      {
-        id: 'unxv-90day',
-        apy: 24.2,
-        totalStaked: 67000000,
-        userStaked: 50000,
-        userRewards: 3789.12,
-        lockPeriod: 90,
-        minStakeAmount: 1000,
-        poolStatus: 'active'
-      },
-      {
-        id: 'unxv-180day',
-        apy: 31.5,
-        totalStaked: 45000000,
-        userStaked: 0,
-        userRewards: 0,
-        lockPeriod: 180,
-        minStakeAmount: 2500,
-        poolStatus: 'active'
-      }
-    ];
-  }, []);
-
-  // Calculate portfolio totals
-  const portfolioStats = useMemo(() => {
-    const totalStaked = stakingPools.reduce((sum, pool) => sum + pool.userStaked, 0);
-    const totalRewards = stakingPools.reduce((sum, pool) => sum + pool.userRewards, 0);
-    const weightedApy = stakingPools.reduce((sum, pool) => {
-      if (pool.userStaked === 0) return sum;
-      return sum + (pool.userStaked * pool.apy);
-    }, 0) / Math.max(totalStaked, 1);
-    
+  // Mock staking data - in real implementation, this would come from the contract
+  const stakingData: StakingData = useMemo(() => {
     return {
-      totalStaked,
-      totalRewards,
-      averageApy: weightedApy,
-      portfolioValue: totalStaked + totalRewards
+      currentWeek: 156, // Current epoch week
+      totalActiveStake: 325000000, // Total UNXV staked across all users
+      weeklyRewards: 45000, // UNXV rewards for current week
+      currentAPY: 18.2, // Calculated APY based on recent weeks
+      userActiveStake: 25000, // User's active stake (earning rewards)
+      userPendingStake: 5000, // User's pending stake (activates next week)
+      activateWeek: 157, // Week when pending stake activates
+      claimableRewards: 347.85, // Rewards user can claim from completed weeks
+      lastClaimedWeek: 154 // Last week user claimed rewards
     };
-  }, [stakingPools]);
+  }, []);
 
   const formatNumber = (num: number, decimals: number = 2) => {
     if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
@@ -112,22 +62,27 @@ export function StakingScreen({ started: _started, network, protocolStatus }: {
     return num.toFixed(decimals);
   };
 
-  const applyPercent = (percent: number) => {
+  const applyStakePercent = (percent: number) => {
     const amount = userBalance * percent;
-    setInputAmount(amount);
+    setStakeAmount(amount);
+  };
+
+  const applyUnstakePercent = (percent: number) => {
+    const amount = stakingData.userActiveStake * percent;
+    setUnstakeAmount(amount);
   };
 
   const handleStake = async () => {
-    if (!selectedPool || inputAmount <= 0 || !account?.address) return;
+    if (stakeAmount <= 0 || !account?.address) return;
     
     setSubmitting(true);
     try {
-      // TODO: Implement actual staking transaction logic
+      // TODO: Call stake_unx() function from contract
       await new Promise(resolve => setTimeout(resolve, 2000)); // Mock delay
-      console.log(`Staking ${inputAmount} UNXV in pool ${selectedPool.id}`);
+      console.log(`Staking ${stakeAmount} UNXV (activates week ${stakingData.currentWeek + 1})`);
       
       // Reset form after successful submission
-      setInputAmount(0);
+      setStakeAmount(0);
     } catch (error) {
       console.error('Staking transaction failed:', error);
     } finally {
@@ -135,12 +90,17 @@ export function StakingScreen({ started: _started, network, protocolStatus }: {
     }
   };
 
-  const handleUnstake = async (poolId: string) => {
+  const handleUnstake = async () => {
+    if (unstakeAmount <= 0 || !account?.address) return;
+    
     setSubmitting(true);
     try {
-      // TODO: Implement actual unstaking transaction logic
+      // TODO: Call unstake_unx() function from contract
       await new Promise(resolve => setTimeout(resolve, 2000)); // Mock delay
-      console.log(`Unstaking from pool ${poolId}`);
+      console.log(`Unstaking ${unstakeAmount} UNXV (effective week ${stakingData.currentWeek + 1})`);
+      
+      // Reset form after successful submission
+      setUnstakeAmount(0);
     } catch (error) {
       console.error('Unstaking transaction failed:', error);
     } finally {
@@ -148,12 +108,14 @@ export function StakingScreen({ started: _started, network, protocolStatus }: {
     }
   };
 
-  const handleClaimRewards = async (poolId: string) => {
+  const handleClaimRewards = async () => {
+    if (stakingData.claimableRewards <= 0 || !account?.address) return;
+    
     setSubmitting(true);
     try {
-      // TODO: Implement actual rewards claiming transaction logic
+      // TODO: Call claim_rewards() function from contract
       await new Promise(resolve => setTimeout(resolve, 2000)); // Mock delay
-      console.log(`Claiming rewards from pool ${poolId}`);
+      console.log(`Claiming ${stakingData.claimableRewards} UNXV rewards`);
     } catch (error) {
       console.error('Claim rewards transaction failed:', error);
     } finally {
@@ -173,42 +135,22 @@ export function StakingScreen({ started: _started, network, protocolStatus }: {
               )}
               <div>
                 <div className={styles.tokenSymbol}>UNXV Staking</div>
-                <div className={styles.tokenName}>Unxversal Protocol Token</div>
+                <div className={styles.tokenName}>Weekly Epochs • Pro-rata Rewards</div>
               </div>
             </div>
           </div>
           <div className={styles.metrics}>
             <div className={styles.metricItem}>
-              <div className={styles.metricValue}>${formatNumber(326000000)}</div>
-              <div className={styles.metricLabel}>Total Value Locked</div>
+              <div className={styles.metricValue}>{formatNumber(stakingData.totalActiveStake)} UNXV</div>
+              <div className={styles.metricLabel}>Total Staked</div>
             </div>
             <div className={styles.metricItem}>
-              <div className={styles.metricValue}>8.9K</div>
-              <div className={styles.metricLabel}>Active Stakers</div>
+              <div className={styles.metricValue}>{stakingData.currentAPY}%</div>
+              <div className={styles.metricLabel}>Current APY</div>
             </div>
             <div className={styles.metricItem}>
-              <div className={styles.metricValue}>24.5%</div>
-              <div className={styles.metricLabel}>Max APY</div>
-            </div>
-            <div className={styles.viewToggle}>
-              <button 
-                className={viewMode === 'stake' ? styles.active : ''} 
-                onClick={() => setViewMode('stake')}
-              >
-                Stake
-              </button>
-              <button 
-                className={viewMode === 'rewards' ? styles.active : ''} 
-                onClick={() => setViewMode('rewards')}
-              >
-                Rewards
-              </button>
-              <button 
-                className={viewMode === 'history' ? styles.active : ''} 
-                onClick={() => setViewMode('history')}
-              >
-                History
-              </button>
+              <div className={styles.metricValue}>Week {stakingData.currentWeek}</div>
+              <div className={styles.metricLabel}>Current Epoch</div>
             </div>
           </div>
         </div>
@@ -216,265 +158,219 @@ export function StakingScreen({ started: _started, network, protocolStatus }: {
 
       {/* Content */}
       <div className={styles.content}>
-        {/* Portfolio Summary */}
-        <div className={styles.portfolioSummary}>
+        {/* Overview Cards */}
+        <div className={styles.overviewCards}>
           <div className={styles.summaryCard}>
             <div className={styles.cardHeader}>
               <TrendingUp size={20} />
-              <span>Total Staked</span>
+              <span>Your Active Stake</span>
             </div>
-            <div className={styles.cardValue}>{formatNumber(portfolioStats.totalStaked)} UNXV</div>
-            <div className={styles.cardSubvalue}>${formatNumber(portfolioStats.totalStaked * 0.85)}</div>
+            <div className={styles.cardValue}>{formatNumber(stakingData.userActiveStake)} UNXV</div>
+            <div className={styles.cardSubvalue}>Earning rewards</div>
           </div>
+
+          {stakingData.userPendingStake > 0 && (
+            <div className={styles.summaryCard}>
+              <div className={styles.cardHeader}>
+                <Clock size={20} />
+                <span>Pending Stake</span>
+              </div>
+              <div className={styles.cardValue}>{formatNumber(stakingData.userPendingStake)} UNXV</div>
+              <div className={styles.cardSubvalue}>Activates week {stakingData.activateWeek}</div>
+            </div>
+          )}
+
           <div className={styles.summaryCard}>
             <div className={styles.cardHeader}>
               <Award size={20} />
-              <span>Pending Rewards</span>
-            </div>
-            <div className={styles.cardValue}>{formatNumber(portfolioStats.totalRewards)} UNXV</div>
-            <div className={styles.cardSubvalue}>${formatNumber(portfolioStats.totalRewards * 0.85)}</div>
-          </div>
-          <div className={styles.summaryCard}>
-            <div className={styles.cardHeader}>
-              <Percent size={20} />
-              <span>Average APY</span>
+              <span>Claimable Rewards</span>
             </div>
             <div className={`${styles.cardValue} ${styles.positive}`}>
-              {portfolioStats.averageApy.toFixed(2)}%
+              {formatNumber(stakingData.claimableRewards)} UNXV
             </div>
-            <div className={styles.cardSubvalue}>Weighted by stake</div>
+            <div className={styles.cardSubvalue}>
+              From weeks {stakingData.lastClaimedWeek + 1}-{stakingData.currentWeek - 1}
+            </div>
           </div>
+
           <div className={styles.summaryCard}>
             <div className={styles.cardHeader}>
-              <Clock size={20} />
-              <span>Portfolio Value</span>
+              <Calendar size={20} />
+              <span>This Week's Rewards</span>
             </div>
-            <div className={styles.cardValue}>{formatNumber(portfolioStats.portfolioValue)} UNXV</div>
-            <div className={styles.cardSubvalue}>${formatNumber(portfolioStats.portfolioValue * 0.85)}</div>
+            <div className={styles.cardValue}>{formatNumber(stakingData.weeklyRewards)} UNXV</div>
+            <div className={styles.cardSubvalue}>Pool rewards for week {stakingData.currentWeek}</div>
           </div>
         </div>
 
-        {viewMode === 'stake' && (
-          <div className={styles.stakingPools}>
-            <div className={styles.poolsHeader}>
-              <h3>Available Staking Pools</h3>
+        {/* Actions */}
+        <div className={styles.actionsGrid}>
+          {/* Stake Section */}
+          <div className={styles.actionCard}>
+            <div className={styles.actionHeader}>
+              <h3>Stake UNXV</h3>
               <div className={styles.balanceInfo}>
-                <span>Available Balance: </span>
-                <span className={styles.balanceAmount}>{formatNumber(userBalance)} UNXV</span>
+                Balance: <span className={styles.balanceAmount}>{formatNumber(userBalance)} UNXV</span>
               </div>
             </div>
             
-            <div className={styles.poolsGrid}>
-              {stakingPools.map((pool) => (
-                <div 
-                  key={pool.id} 
-                  className={`${styles.poolCard} ${selectedPool?.id === pool.id ? styles.selected : ''}`}
-                  onClick={() => setSelectedPool(pool)}
-                >
-                  <div className={styles.poolHeader}>
-                    <div className={styles.poolTitle}>
-                      {pool.lockPeriod === 0 ? 'Flexible' : `${pool.lockPeriod} Day Lock`}
-                    </div>
-                    <div className={`${styles.poolApy} ${styles.positive}`}>
-                      {pool.apy}% APY
-                    </div>
-                  </div>
-                  
-                  <div className={styles.poolStats}>
-                    <div className={styles.poolStat}>
-                      <span className={styles.statLabel}>Total Staked</span>
-                      <span className={styles.statValue}>{formatNumber(pool.totalStaked)} UNXV</span>
-                    </div>
-                    <div className={styles.poolStat}>
-                      <span className={styles.statLabel}>Min Stake</span>
-                      <span className={styles.statValue}>{formatNumber(pool.minStakeAmount)} UNXV</span>
-                    </div>
-                    {pool.userStaked > 0 && (
-                      <div className={styles.poolStat}>
-                        <span className={styles.statLabel}>Your Stake</span>
-                        <span className={`${styles.statValue} ${styles.positive}`}>{formatNumber(pool.userStaked)} UNXV</span>
-                      </div>
-                    )}
-                    {pool.userRewards > 0 && (
-                      <div className={styles.poolStat}>
-                        <span className={styles.statLabel}>Rewards</span>
-                        <span className={`${styles.statValue} ${styles.positive}`}>{formatNumber(pool.userRewards)} UNXV</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {pool.userStaked > 0 && (
-                    <div className={styles.poolActions}>
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleClaimRewards(pool.id);
-                        }}
-                        disabled={submitting || pool.userRewards === 0}
-                        className={styles.claimBtn}
-                      >
-                        Claim Rewards
-                      </button>
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleUnstake(pool.id);
-                        }}
-                        disabled={submitting || pool.lockPeriod > 0}
-                        className={styles.unstakeBtn}
-                      >
-                        {pool.lockPeriod > 0 ? 'Locked' : 'Unstake'}
-                      </button>
-                    </div>
-                  )}
+            <div className={styles.inputSection}>
+              <div className={styles.inputGroup}>
+                <input
+                  type="number"
+                  value={stakeAmount || ''}
+                  onChange={(e) => setStakeAmount(Number(e.target.value))}
+                  placeholder="Enter amount to stake"
+                  className={styles.amountInput}
+                  max={userBalance}
+                  min={0}
+                />
+                <div className={styles.tokenSelector}>
+                  <span>UNXV</span>
                 </div>
-              ))}
+              </div>
+              
+              <div className={styles.percentButtons}>
+                <button onClick={() => applyStakePercent(0.25)} className={styles.percentBtn}>25%</button>
+                <button onClick={() => applyStakePercent(0.5)} className={styles.percentBtn}>50%</button>
+                <button onClick={() => applyStakePercent(0.75)} className={styles.percentBtn}>75%</button>
+                <button onClick={() => applyStakePercent(1)} className={styles.percentBtn}>MAX</button>
+              </div>
+              
+              <div className={styles.stakeInfo}>
+                <div className={styles.infoRow}>
+                  <span>Activation:</span>
+                  <span>Week {stakingData.currentWeek + 1}</span>
+                </div>
+                <div className={styles.infoRow}>
+                  <span>Estimated Weekly Reward:</span>
+                  <span className={styles.positive}>
+                    {stakeAmount > 0 
+                      ? ((stakeAmount / (stakingData.totalActiveStake + stakeAmount)) * stakingData.weeklyRewards).toFixed(2)
+                      : '0.00'
+                    } UNXV
+                  </span>
+                </div>
+              </div>
+              
+              {!account?.address ? (
+                <div className={styles.connectWallet}>
+                  <ConnectButton />
+                </div>
+              ) : (
+                <button
+                  onClick={handleStake}
+                  disabled={submitting || stakeAmount <= 0 || stakeAmount > userBalance}
+                  className={styles.stakeBtn}
+                >
+                  {submitting 
+                    ? 'Staking...'
+                    : stakeAmount <= 0
+                      ? 'Enter amount to stake'
+                      : stakeAmount > userBalance
+                        ? 'Insufficient Balance'
+                        : `Stake ${stakeAmount.toLocaleString()} UNXV`
+                  }
+                </button>
+              )}
             </div>
+          </div>
 
-            {selectedPool && (
-              <div className={styles.stakeForm}>
-                <div className={styles.formHeader}>
-                  <h4>Stake UNXV</h4>
-                  <div className={styles.selectedPool}>
-                    {selectedPool.lockPeriod === 0 ? 'Flexible' : `${selectedPool.lockPeriod} Day Lock`} 
-                    - <span className={styles.positive}>{selectedPool.apy}% APY</span>
+          {/* Unstake Section */}
+          {stakingData.userActiveStake > 0 && (
+            <div className={styles.actionCard}>
+              <div className={styles.actionHeader}>
+                <h3>Unstake UNXV</h3>
+                <div className={styles.balanceInfo}>
+                  Active Stake: <span className={styles.balanceAmount}>{formatNumber(stakingData.userActiveStake)} UNXV</span>
+                </div>
+              </div>
+              
+              <div className={styles.inputSection}>
+                <div className={styles.inputGroup}>
+                  <input
+                    type="number"
+                    value={unstakeAmount || ''}
+                    onChange={(e) => setUnstakeAmount(Number(e.target.value))}
+                    placeholder="Enter amount to unstake"
+                    className={styles.amountInput}
+                    max={stakingData.userActiveStake}
+                    min={0}
+                  />
+                  <div className={styles.tokenSelector}>
+                    <span>UNXV</span>
                   </div>
                 </div>
                 
-                <div className={styles.inputSection}>
-                  <div className={styles.inputGroup}>
-                    <input
-                      type="number"
-                      value={inputAmount || ''}
-                      onChange={(e) => setInputAmount(Number(e.target.value))}
-                      placeholder="Enter stake amount"
-                      className={styles.amountInput}
-                      max={userBalance}
-                      min={selectedPool.minStakeAmount}
-                    />
-                    <div className={styles.tokenSelector}>
-                      <span>UNXV</span>
-                    </div>
+                <div className={styles.percentButtons}>
+                  <button onClick={() => applyUnstakePercent(0.25)} className={styles.percentBtn}>25%</button>
+                  <button onClick={() => applyUnstakePercent(0.5)} className={styles.percentBtn}>50%</button>
+                  <button onClick={() => applyUnstakePercent(0.75)} className={styles.percentBtn}>75%</button>
+                  <button onClick={() => applyUnstakePercent(1)} className={styles.percentBtn}>MAX</button>
+                </div>
+                
+                <div className={styles.stakeInfo}>
+                  <div className={styles.infoRow}>
+                    <span>Effective:</span>
+                    <span>Week {stakingData.currentWeek + 1}</span>
                   </div>
-                  
-                  <div className={styles.percentButtons}>
-                    <button onClick={() => applyPercent(0.25)} className={styles.percentBtn}>25%</button>
-                    <button onClick={() => applyPercent(0.5)} className={styles.percentBtn}>50%</button>
-                    <button onClick={() => applyPercent(0.75)} className={styles.percentBtn}>75%</button>
-                    <button onClick={() => applyPercent(1)} className={styles.percentBtn}>MAX</button>
+                  <div className={styles.infoRow}>
+                    <span>Principal returned:</span>
+                    <span>Immediately</span>
                   </div>
-                  
-                  <div className={styles.stakeInfo}>
-                    <div className={styles.infoRow}>
-                      <span>Estimated Daily Rewards:</span>
-                      <span className={styles.positive}>
-                        {((inputAmount * selectedPool.apy / 100) / 365).toFixed(4)} UNXV
-                      </span>
-                    </div>
-                    <div className={styles.infoRow}>
-                      <span>Lock Period:</span>
-                      <span>{selectedPool.lockPeriod === 0 ? 'Flexible' : `${selectedPool.lockPeriod} days`}</span>
-                    </div>
-                    <div className={styles.infoRow}>
-                      <span>Minimum Stake:</span>
-                      <span>{formatNumber(selectedPool.minStakeAmount)} UNXV</span>
-                    </div>
-                  </div>
-                  
-                  {!account?.address ? (
-                    <div className={styles.connectWallet}>
-                      <ConnectButton />
-                    </div>
-                  ) : (
-                    <button
-                      onClick={handleStake}
-                      disabled={submitting || inputAmount < selectedPool.minStakeAmount || inputAmount > userBalance}
-                      className={styles.stakeBtn}
-                    >
-                      {submitting 
-                        ? 'Staking...'
-                        : inputAmount < selectedPool.minStakeAmount
-                          ? `Minimum ${formatNumber(selectedPool.minStakeAmount)} UNXV`
-                          : inputAmount > userBalance
-                            ? 'Insufficient Balance'
-                            : `Stake ${inputAmount.toLocaleString()} UNXV`
-                      }
-                    </button>
-                  )}
+                </div>
+                
+                <button
+                  onClick={handleUnstake}
+                  disabled={submitting || unstakeAmount <= 0 || unstakeAmount > stakingData.userActiveStake}
+                  className={styles.unstakeBtn}
+                >
+                  {submitting 
+                    ? 'Unstaking...'
+                    : unstakeAmount <= 0
+                      ? 'Enter amount to unstake'
+                      : unstakeAmount > stakingData.userActiveStake
+                        ? 'Insufficient Active Stake'
+                        : `Unstake ${unstakeAmount.toLocaleString()} UNXV`
+                  }
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Claim Rewards Section */}
+          {stakingData.claimableRewards > 0 && (
+            <div className={styles.actionCard}>
+              <div className={styles.actionHeader}>
+                <h3>Claim Rewards</h3>
+                <div className={styles.balanceInfo}>
+                  Available: <span className={`${styles.balanceAmount} ${styles.positive}`}>
+                    {formatNumber(stakingData.claimableRewards)} UNXV
+                  </span>
                 </div>
               </div>
-            )}
-          </div>
-        )}
-
-        {viewMode === 'rewards' && (
-          <div className={styles.rewardsView}>
-            <div className={styles.rewardsHeader}>
-              <h3>Reward Summary</h3>
-              <button 
-                onClick={() => {
-                  // Claim all rewards
-                  stakingPools.forEach(pool => {
-                    if (pool.userRewards > 0) {
-                      handleClaimRewards(pool.id);
-                    }
-                  });
-                }}
-                disabled={submitting || portfolioStats.totalRewards === 0}
-                className={styles.claimAllBtn}
+              
+              <div className={styles.rewardDetails}>
+                <div className={styles.infoRow}>
+                  <span>Reward Period:</span>
+                  <span>Weeks {stakingData.lastClaimedWeek + 1} - {stakingData.currentWeek - 1}</span>
+                </div>
+                <div className={styles.infoRow}>
+                  <span>Amount:</span>
+                  <span className={styles.positive}>{formatNumber(stakingData.claimableRewards)} UNXV</span>
+                </div>
+              </div>
+              
+              <button
+                onClick={handleClaimRewards}
+                disabled={submitting}
+                className={styles.claimBtn}
               >
-                Claim All Rewards
+                {submitting ? 'Claiming...' : `Claim ${formatNumber(stakingData.claimableRewards)} UNXV`}
               </button>
             </div>
-            
-            <div className={styles.rewardsGrid}>
-              {stakingPools
-                .filter(pool => pool.userStaked > 0)
-                .map((pool) => (
-                  <div key={pool.id} className={styles.rewardCard}>
-                    <div className={styles.rewardHeader}>
-                      <span className={styles.rewardPoolName}>
-                        {pool.lockPeriod === 0 ? 'Flexible' : `${pool.lockPeriod} Day Lock`}
-                      </span>
-                      <span className={`${styles.rewardApy} ${styles.positive}`}>
-                        {pool.apy}% APY
-                      </span>
-                    </div>
-                    
-                    <div className={styles.rewardStats}>
-                      <div className={styles.rewardStat}>
-                        <span className={styles.statLabel}>Staked Amount</span>
-                        <span className={styles.statValue}>{formatNumber(pool.userStaked)} UNXV</span>
-                      </div>
-                      <div className={styles.rewardStat}>
-                        <span className={styles.statLabel}>Pending Rewards</span>
-                        <span className={`${styles.statValue} ${styles.positive}`}>
-                          {formatNumber(pool.userRewards)} UNXV
-                        </span>
-                      </div>
-                    </div>
-                    
-                    <button
-                      onClick={() => handleClaimRewards(pool.id)}
-                      disabled={submitting || pool.userRewards === 0}
-                      className={styles.claimBtn}
-                    >
-                      Claim Rewards
-                    </button>
-                  </div>
-                ))}
-            </div>
-          </div>
-        )}
-
-        {viewMode === 'history' && (
-          <div className={styles.historyView}>
-            <h3>Transaction History</h3>
-            <div className={styles.emptyState}>
-              <p>Transaction history will be displayed here once you start staking.</p>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Footer status */}
