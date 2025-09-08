@@ -158,6 +158,29 @@ select:focus {
   padding: 12px;
   flex-shrink: 0;
   background: #0a0c12;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.deepbookBranding {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.deepbookLogo {
+  width: 84px;
+  flex-shrink: 0;
+}
+
+.poweredByText {
+  color: #9ca3af;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
 
 .buttonArea {

@@ -446,6 +446,11 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
         </div>
 
         <div className={styles.orderFooter}>
+          <div className={styles.deepbookBranding}>
+            <span className={styles.poweredByText}>Powered by</span>
+            <img src="/deepbooklogo.svg" alt="DeepBook" className={styles.deepbookLogo} />
+          </div>
+          
           {!acct?.address ? (
             <div className={styles.connectWallet}>
               <ConnectButton />
