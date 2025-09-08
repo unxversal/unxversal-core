@@ -46,6 +46,7 @@
 .nav > span.active {
   color: #ffffff !important;
   font-weight: 500;
+  background: transparent !important;
 }
 .nav > span.disabled {
   color: #4b5563;

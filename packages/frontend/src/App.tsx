@@ -16,6 +16,8 @@ import styles from './components/AppShell.module.css'
 import { Wifi, WifiOff, Activity, Pause } from 'lucide-react'
 import { DexScreen } from './components/dex/DexScreen'
 import { GasFuturesScreen } from './components/gas-futures/GasFuturesScreen'
+import { FuturesScreen } from './components/futures/FuturesScreen'
+import { PerpsScreen } from './components/perps/PerpsScreen'
 import { LendingScreen } from './components/lending/LendingScreen'
 import { SettingsScreen } from './components/SettingsScreen'
 
@@ -137,7 +139,7 @@ function App() {
   }, [view]);
   
   return (
-    <div className={view === 'dex' || view === 'gas' ? styles.appRootDex : styles.appRoot}>
+    <div className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' ? styles.appRootDex : styles.appRoot}>
       <header className={styles.header}>
         <div className={styles.brand}>
           <img src="/whitetransparentunxvdolphin.png" alt="Unxversal" style={{ width: 32, height: 32 }} />
@@ -148,7 +150,8 @@ function App() {
           <span className={view==='gas'?styles.active:''} onClick={() => setView('gas')}>MIST Futures</span>
           <span className={view==='lending'?styles.active:''} onClick={() => setView('lending')}>Lending</span>
           <span className={styles.disabled}>Options</span>
-          <span className={styles.disabled}>Perps</span>
+          <span className={view==='futures'?styles.active:''} onClick={() => setView('futures')}>Futures</span>
+          <span className={view==='perps'?styles.active:''} onClick={() => setView('perps')}>Perps</span>
           <span className={styles.disabled}>Builder</span>
           <span className={view==='settings'?styles.active:''} onClick={() => setView('settings')}>Settings</span>
         </nav>
@@ -156,13 +159,15 @@ function App() {
           <ConnectButton />
         </div>
       </header>
-      <main className={view === 'dex' || view === 'gas' ? styles.mainDex : styles.main}>
+      <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' ? styles.mainDex : styles.main}>
         {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} />}
         {view === 'gas' && <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} />}
         {view === 'lending' && <LendingScreen />}
+        {view === 'futures' && <FuturesScreen started={started} surgeReady={surgeReady} network={network} />}
+        {view === 'perps' && <PerpsScreen started={started} surgeReady={surgeReady} network={network} />}
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>
-      {view !== 'dex' && view !== 'gas' && (
+      {view !== 'dex' && view !== 'gas' && view !== 'futures' && view !== 'perps' && (
         <footer className={styles.footer}>
           <div className={styles.statusBadges}>
             <div className={`${styles.badge} ${account?.address ? styles.connected : styles.disconnected}`}>

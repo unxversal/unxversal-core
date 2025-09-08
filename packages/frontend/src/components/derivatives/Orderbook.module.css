@@ -1,0 +1,139 @@
+.root { 
+  background: transparent; 
+  border: none; 
+  border-radius: 0; 
+  padding: 0; 
+  height: 100%; 
+  display: grid; 
+  grid-template-rows: 24px 1fr auto 1fr; 
+  overflow: hidden;
+}
+
+.header { display: none; }
+
+.columns { 
+  display: grid; 
+  grid-template-columns: 1fr 1fr; 
+  font-size: 12px; 
+  color: #6b7280; 
+  min-height: 20px;
+  align-items: center;
+  border-bottom: 1px solid #1b1e27;
+}
+.columns span { 
+  padding: 2px 6px;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+}
+.columns span:first-child { 
+  text-align: left; 
+  justify-content: flex-start;
+}
+.columns span:last-child { 
+  text-align: right; 
+  justify-content: flex-end;
+}
+
+.asksSection { 
+  overflow-y: auto; 
+  overflow-x: hidden;
+  display: grid; 
+  gap: 1px;
+  grid-auto-rows: min-content;
+}
+
+.bidsSection { 
+  overflow-y: auto; 
+  overflow-x: hidden;
+  display: grid; 
+  gap: 1px;
+  grid-auto-rows: min-content;
+}
+
+.bid, .ask { 
+  position: relative;
+  display: grid; 
+  grid-template-columns: 1fr 1fr; 
+  font-size: 12px; 
+  min-height: 20px;
+  align-items: center;
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+
+.bid span, .ask span { 
+  position: relative; 
+  z-index: 2;
+  padding: 2px 6px;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+}
+
+.bid span:first-child, .ask span:first-child { 
+  text-align: left; 
+  justify-content: flex-start;
+}
+.bid span:last-child, .ask span:last-child { 
+  text-align: right; 
+  justify-content: flex-end;
+}
+
+.depthBar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--depth, 0%);
+  transition: width 0.5s ease-in-out;
+  z-index: 1;
+}
+
+.bid { 
+  background: rgba(16,185,129,0.05); 
+}
+
+.bid .depthBar {
+  background: linear-gradient(90deg, rgba(16,185,129,0.15) 0%, transparent 100%);
+}
+
+.ask { 
+  background: rgba(239,68,68,0.05); 
+}
+
+.ask .depthBar {
+  background: linear-gradient(90deg, rgba(239,68,68,0.15) 0%, transparent 100%);
+}
+
+.bid:hover { 
+  background: rgba(16,185,129,0.12); 
+}
+
+.ask:hover { 
+  background: rgba(239,68,68,0.12); 
+}
+
+.spread {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  font-size: 11px;
+  color: #6b7280;
+  padding: 4px 6px;
+  background: rgba(59, 130, 246, 0.05);
+  align-items: center;
+  min-height: 20px;
+}
+
+.spread span:first-child { text-align: left; }
+.spread span:last-child { text-align: right; }
+
+.bidPrice {
+  color: #10b981 !important; /* Green for bid prices */
+}
+
+.askPrice {
+  color: #ef4444 !important; /* Red for ask prices */
+}
+
+

@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 import { DerivativesScreen } from '../derivatives/DerivativesScreen';
-import { GasFuturesTradePanel } from './GasFuturesTradePanel';
+import { GasFuturesTradePanel } from '../gas-futures/GasFuturesTradePanel';
 import { createMockDerivativesProvider, createMockTradePanelProvider } from '../derivatives/providers/mock';
 
-export function GasFuturesScreen({ started, surgeReady, network }: { started?: boolean; surgeReady?: boolean; network?: string }) {
+export function FuturesScreen({ started, surgeReady, network }: { started?: boolean; surgeReady?: boolean; network?: string }) {
   const dataProvider = useMemo(() => createMockDerivativesProvider(), []);
   const panelProvider = useMemo(() => createMockTradePanelProvider(), []);
   return (

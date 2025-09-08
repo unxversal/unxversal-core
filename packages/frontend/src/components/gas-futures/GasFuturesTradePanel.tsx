@@ -4,8 +4,9 @@ import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient, ConnectB
 import { loadSettings } from '../../lib/settings.config';
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
+import type { TradePanelDataProvider } from '../derivatives/types';
 
-export function GasFuturesTradePanel({ mid }: { mid: number }) {
+export function GasFuturesTradePanel({ mid, provider, baseSymbol = 'MIST', quoteSymbol = 'USDC' }: { mid: number; provider?: TradePanelDataProvider; baseSymbol?: string; quoteSymbol?: string }) {
   const acct = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
@@ -38,13 +39,24 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
     const load = async () => {
       if (!acct?.address) return;
       try {
-        // Mock balances - in real implementation, load from chain
-        setUsdcBal(25000); // $25,000 USDC for margin
-        setMistBal(1500000); // 1.5M MIST tokens
-        setAccountValue(27500); // Total account value including unrealized PnL
-        setMarginRatio(0.15); // 15% margin ratio
-        
-        // Mock positions - in real implementation, load from gas futures contract
+        if (provider?.getBalances) {
+          const { base, quote } = await provider.getBalances();
+          if (!mounted) return;
+          setMistBal(base);
+          setUsdcBal(quote);
+        } else {
+          setUsdcBal(25000);
+          setMistBal(1500000);
+        }
+        if (provider?.getAccountMetrics) {
+          const m = await provider.getAccountMetrics();
+          if (!mounted) return;
+          setAccountValue(m.accountValue);
+          setMarginRatio(m.marginRatio);
+        } else {
+          setAccountValue(27500);
+          setMarginRatio(0.15);
+        }
         setPositions([
           { 
             side: 'Long', 
@@ -61,7 +73,7 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
     void load();
     const id = setInterval(load, 5000);
     return () => { mounted = false; clearInterval(id); };
-  }, [acct?.address, client]);
+  }, [acct?.address, client, provider]);
 
   // Load staking active stake (via dynamic field on staking pool)
   useEffect(() => {
@@ -85,39 +97,36 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
   useEffect(() => {
     let mounted = true;
     const load = async () => {
-      if (!feeConfigId) return;
       try {
-        const o = await client.getObject({ id: feeConfigId, options: { showContent: true } });
-        const f = (o as any)?.data?.content?.fields;
-        const bps = Number(f?.dex_taker_fee_bps ?? 0) || Number(f?.dex_fee_bps ?? 0) || 70;
-        const disc = Number(f?.unxv_discount_bps ?? 3000);
-        if (!mounted) return;
-        setTakerBps(bps);
-        setUnxvDiscBps(disc);
+        if (provider?.getFeeInfo) {
+          const { takerBps, unxvDiscountBps } = await provider.getFeeInfo();
+          if (!mounted) return;
+          setTakerBps(takerBps);
+          setUnxvDiscBps(unxvDiscountBps);
+        } else {
+          if (!feeConfigId) return;
+          const o = await client.getObject({ id: feeConfigId, options: { showContent: true } });
+          const f = (o as any)?.data?.content?.fields;
+          const bps = Number(f?.dex_taker_fee_bps ?? 0) || Number(f?.dex_fee_bps ?? 0) || 70;
+          const disc = Number(f?.unxv_discount_bps ?? 3000);
+          if (!mounted) return;
+          setTakerBps(bps);
+          setUnxvDiscBps(disc);
+        }
       } catch {}
     };
     void load();
-  }, [feeConfigId, client]);
+  }, [feeConfigId, client, provider]);
 
   async function submit(): Promise<void> {
     if (size <= 0) return;
     setSubmitting(true);
     try {
-      // TODO: Implement gas futures order submission
-      // This would involve:
-      // 1. Calculate required margin
-      // 2. Submit order to gas futures contract
-      // 3. Handle leverage and position management
-      console.log('Submitting gas futures order:', {
-        side,
-        mode,
-        size,
-        price,
-        leverage,
-      });
-      
-      // Mock successful submission
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (provider?.submitOrder) {
+        await provider.submitOrder({ side, mode, size, price, leverage });
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -156,8 +165,8 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
         </div>
         {walletTab==='assets' ? (
           <div className={styles.balances}>
-            <div className={styles.balanceRow}><span>MIST:</span><span>{mistBal.toLocaleString()}</span></div>
-            <div className={styles.balanceRow}><span>USDC:</span><span>{usdcBal.toLocaleString()}</span></div>
+            <div className={styles.balanceRow}><span>{baseSymbol}:</span><span>{mistBal.toLocaleString()}</span></div>
+            <div className={styles.balanceRow}><span>{quoteSymbol}:</span><span>{usdcBal.toLocaleString()}</span></div>
           </div>
         ) : (
           <div className={styles.balances}>
@@ -188,7 +197,7 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
           <div className={styles.availableToTrade}>
             <div className={styles.availableLabel}>Available to Trade</div>
             <div className={styles.availableAmount}>
-              {usdcBal.toLocaleString()} USDC
+              {usdcBal.toLocaleString()} {quoteSymbol}
             </div>
           </div>
           
@@ -203,9 +212,7 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
                   placeholder="0.023"
                   className={styles.inputWithLabel}
                 />
-                <div className={styles.tokenSelector}>
-                  <span>USDC</span>
-                </div>
+                <div className={styles.tokenSelector}><span>{quoteSymbol}</span></div>
                 <span className={styles.midIndicator}>Mid</span>
               </div>
             </div>
@@ -222,7 +229,7 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
                 className={styles.inputWithLabel}
               />
               <div className={styles.tokenSelector}>
-                <span>MIST</span>
+                <span>{baseSymbol}</span>
                 <svg className={styles.dropdownIcon} width="12" height="8" viewBox="0 0 12 8" fill="none">
                   <path d="M1 1L6 6L11 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
@@ -310,14 +317,14 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
           <div className={styles.orderSummary}>
             <div className={styles.summaryRow}>
               <span>Order Value</span>
-              <span>{notionalValue.toFixed(2)} USDC</span>
+              <span>{notionalValue.toFixed(2)} {quoteSymbol}</span>
             </div>
             <div className={styles.summaryRow}>
               <span>Margin Required</span>
-              <span>{requiredMargin.toFixed(2)} USDC</span>
+              <span>{requiredMargin.toFixed(2)} {quoteSymbol}</span>
             </div>
             <div className={styles.summaryRow}>
-              <span>Collateral (USDC)</span>
+              <span>Collateral ({quoteSymbol})</span>
               <span>
                 {leverage > 0 
                   ? ((size || 0) * (price || mid || 0.023) / leverage).toFixed(2)
@@ -336,7 +343,7 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
                   const liqPrice = side === 'long' 
                     ? entryPrice * (1 - 0.75/leverage)
                     : entryPrice * (1 + 0.75/leverage);
-                  return liqPrice.toFixed(4) + ' USDC';
+                  return liqPrice.toFixed(4) + ' ' + quoteSymbol;
                 })()}
               </span>
             </div>
@@ -349,7 +356,7 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
                 className={`${styles.feeToggle} ${feeType === 'unxv' ? styles.active : ''}`}
                 onClick={() => setFeeType(feeType === 'unxv' ? 'input' : 'unxv')}
               >
-                {feeType === 'unxv' ? 'UNXV' : 'USDC'}
+                {feeType === 'unxv' ? 'UNXV' : quoteSymbol}
               </button>
             </div>
             
@@ -358,7 +365,7 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
               <span>
                 {feeType === 'unxv' 
                   ? (feeUnxvDisc ? feeUnxvDisc.toFixed(6) : '-') + ' UNXV' 
-                  : (feeInput ? feeInput.toFixed(6) : '-') + ' USDC'
+                  : (feeInput ? feeInput.toFixed(6) : '-') + ' ' + quoteSymbol
                 }
               </span>
             </div>
@@ -378,7 +385,7 @@ export function GasFuturesTradePanel({ mid }: { mid: number }) {
               onClick={() => void submit()}
               title={size <= 0 ? 'Enter a position size to continue' : ''}
             >
-              {submitting ? 'Submitting...' : size <= 0 ? `Enter Size to ${side === 'long' ? 'Long' : 'Short'}` : `${side === 'long' ? 'Long' : 'Short'} ${size.toLocaleString()} MIST`}
+              {submitting ? 'Submitting...' : size <= 0 ? `Enter Size to ${side === 'long' ? 'Long' : 'Short'}` : `${side === 'long' ? 'Long' : 'Short'} ${size.toLocaleString()} ${baseSymbol}`}
             </button>
           )}
         </div>
