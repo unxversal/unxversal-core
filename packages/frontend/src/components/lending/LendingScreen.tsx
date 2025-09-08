@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import styles from './LendingScreen.module.css';
 import { defaultSettings, getTokenTypeTag, type TokenInfo } from '../../lib/settings.config';
 import { TrendingUp, TrendingDown, Percent, AlertCircle } from 'lucide-react';
+import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
 
 type LendingPool = {
   id: string;
@@ -38,6 +39,11 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
   const [viewMode, setViewMode] = useState<ViewMode>('markets');
   const [selectedPool, setSelectedPool] = useState<LendingPool | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<'supply' | 'borrow'>('supply');
+  const [inputAmount, setInputAmount] = useState<number>(0);
+  const [userBalance] = useState<number>(1000); // Mock balance
+  const [submitting, setSubmitting] = useState(false);
+  const account = useCurrentAccount();
   
   // Generate lending pools for all tokens with realistic fake data
   const lendingPools: LendingPool[] = useMemo(() => {
@@ -142,6 +148,35 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
     if (rate < 60) return '#10b981';
     if (rate < 80) return '#f59e0b';
     return '#ef4444';
+  };
+
+  const applyPercent = (percent: number) => {
+    const amount = userBalance * percent;
+    setInputAmount(amount);
+  };
+
+  const handleSubmit = async () => {
+    if (!selectedPool || inputAmount <= 0 || !account?.address) return;
+    
+    setSubmitting(true);
+    try {
+      // TODO: Implement actual lending/borrowing transaction logic
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Mock delay
+      console.log(`${drawerMode} ${inputAmount} ${selectedPool.token.symbol}`);
+      
+      // Reset form after successful submission
+      setInputAmount(0);
+      setIsDrawerOpen(false);
+    } catch (error) {
+      console.error('Transaction failed:', error);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDrawerAction = (mode: 'supply' | 'borrow') => {
+    setDrawerMode(mode);
+    setInputAmount(0);
   };
 
   return (
@@ -345,8 +380,85 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
                 </div>
 
                 <div className={styles.drawerActions}>
-                  <button className={styles.drawerSupplyBtn}>Supply {selectedPool.token.symbol}</button>
-                  <button className={styles.drawerBorrowBtn}>Borrow {selectedPool.token.symbol}</button>
+                  <div className={styles.drawerTabs}>
+                    <button 
+                      className={drawerMode === 'supply' ? styles.active : ''}
+                      onClick={() => handleDrawerAction('supply')}
+                    >
+                      Supply
+                    </button>
+                    <button 
+                      className={drawerMode === 'borrow' ? styles.active : ''}
+                      onClick={() => handleDrawerAction('borrow')}
+                    >
+                      Borrow
+                    </button>
+                  </div>
+                  
+                  <div className={styles.inputSection}>
+                    <div className={styles.balanceInfo}>
+                      <span className={styles.balanceLabel}>Available Balance:</span>
+                      <span className={styles.balanceAmount}>
+                        {userBalance.toFixed(4)} {selectedPool.token.symbol}
+                      </span>
+                    </div>
+                    
+                    <div className={styles.inputGroup}>
+                      <input
+                        type="number"
+                        value={inputAmount || ''}
+                        onChange={(e) => setInputAmount(Number(e.target.value))}
+                        placeholder={`Enter ${drawerMode} amount`}
+                        className={styles.amountInput}
+                        max={userBalance}
+                        min={0}
+                      />
+                      <div className={styles.tokenSelector}>
+                        <span>{selectedPool.token.symbol}</span>
+                      </div>
+                    </div>
+                    
+                    <div className={styles.percentButtons}>
+                      <button onClick={() => applyPercent(0.25)} className={styles.percentBtn}>25%</button>
+                      <button onClick={() => applyPercent(0.5)} className={styles.percentBtn}>50%</button>
+                      <button onClick={() => applyPercent(0.75)} className={styles.percentBtn}>75%</button>
+                      <button onClick={() => applyPercent(1)} className={styles.percentBtn}>MAX</button>
+                    </div>
+                    
+                    <div className={styles.transactionInfo}>
+                      <div className={styles.infoRow}>
+                        <span>{drawerMode === 'supply' ? 'You will earn:' : 'You will pay:'}</span>
+                        <span className={drawerMode === 'supply' ? styles.positive : styles.negative}>
+                          {drawerMode === 'supply' ? selectedPool.supplyApy : selectedPool.borrowApy}% APY
+                        </span>
+                      </div>
+                      {drawerMode === 'borrow' && (
+                        <div className={styles.infoRow}>
+                          <span>Health Factor:</span>
+                          <span className={styles.warning}>1.45</span>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {!account?.address ? (
+                      <div className={styles.connectWallet}>
+                        <ConnectButton />
+                      </div>
+                    ) : (
+                      <button
+                        onClick={handleSubmit}
+                        disabled={submitting || inputAmount <= 0 || inputAmount > userBalance}
+                        className={`${styles.submitBtn} ${drawerMode === 'supply' ? styles.supplyBtn : styles.borrowBtn}`}
+                      >
+                        {submitting 
+                          ? `${drawerMode === 'supply' ? 'Supplying' : 'Borrowing'}...`
+                          : inputAmount <= 0 
+                            ? `Enter amount to ${drawerMode}`
+                            : `${drawerMode === 'supply' ? 'Supply' : 'Borrow'} ${inputAmount.toLocaleString()} ${selectedPool.token.symbol}`
+                        }
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className={styles.drawerDetailsGrid}>

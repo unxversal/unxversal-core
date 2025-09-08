@@ -14,6 +14,7 @@ import { GasFuturesScreen } from './components/gas-futures/GasFuturesScreen'
 import { FuturesScreen } from './components/futures/FuturesScreen'
 import { PerpsScreen } from './components/perps/PerpsScreen'
 import { LendingScreen } from './components/lending/LendingScreen'
+import { StakingScreen } from './components/staking/StakingScreen'
 import { SettingsScreen } from './components/SettingsScreen'
 import { OptionsScreen } from './components/options/OptionsScreen'
 import { createMockOptionsProvider } from './components/options/providers/mock'
@@ -143,6 +144,7 @@ function App() {
           <span className={view==='futures'?styles.active:''} onClick={() => setView('futures')}>Futures</span>
           <span className={view==='perps'?styles.active:''} onClick={() => setView('perps')}>Perps</span>
           <span className={view==='lending'?styles.active:''} onClick={() => setView('lending')}>Lending</span>
+          <span className={view==='staking'?styles.active:''} onClick={() => setView('staking')}>Staking</span>
           <span className={view==='dex'?styles.active:''} onClick={() => setView('dex')}>DEX</span>
           <span className={view==='settings'?styles.active:''} onClick={() => setView('settings')}>Settings</span>
         </nav>
@@ -150,10 +152,11 @@ function App() {
           <ConnectButton />
         </div>
       </header>
-      <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'lending' ? styles.mainDex : styles.main}>
+      <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'lending' || view === 'staking' ? styles.mainDex : styles.main}>
         {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'gas' && <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'lending' && <LendingScreen started={started} network={network} protocolStatus={protocolStatus} />}
+        {view === 'staking' && <StakingScreen started={started} network={network} protocolStatus={protocolStatus} />}
         {view === 'futures' && <FuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'perps' && <PerpsScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'options' && (
@@ -174,7 +177,7 @@ function App() {
         )}
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>
-      {!(view === 'dex' || view === 'gas' || view === 'futures' || view === 'lending' || view === 'perps') && (
+      {!(view === 'dex' || view === 'gas' || view === 'futures' || view === 'lending' || view === 'staking' || view === 'perps') && (
         <footer className={styles.footer}>
           <div className={styles.statusBadges}>
             <div className={`${styles.badge} ${protocolStatus.options ? styles.connected : styles.disconnected}`}>

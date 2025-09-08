@@ -493,10 +493,194 @@
 }
 
 .drawerActions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.drawerTabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  background: #0f131a;
+  border-radius: 8px;
+}
+
+.drawerTabs button {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.drawerTabs button.active {
+  background: #ffffff;
+  color: #000000;
+}
+
+.drawerTabs button:hover:not(.active) {
+  background: #1a1d29;
+  color: #e5e7eb;
+}
+
+.inputSection {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  margin-bottom: 24px;
+}
+
+.balanceInfo {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.balanceLabel {
+  color: #9ca3af;
+}
+
+.balanceAmount {
+  color: #e5e7eb;
+  font-weight: 500;
+}
+
+.inputGroup {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.amountInput {
+  width: 100%;
+  background: #1a1d29;
+  border: none;
+  color: #e5e7eb;
+  border-radius: 6px;
+  padding: 12px 80px 12px 12px;
+  font-size: 14px;
+  outline: none;
+  transition: background 0.2s ease;
+}
+
+.amountInput:focus {
+  background: #212530;
+}
+
+.amountInput::placeholder {
+  color: #9ca3af;
+}
+
+.tokenSelector {
+  position: absolute;
+  right: 12px;
+  color: #e5e7eb;
+  font-size: 12px;
+  font-weight: 500;
+  background: #0f131a;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.percentButtons {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.percentBtn {
+  border: none;
+  background: #1a1d29;
+  color: #9ca3af;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.percentBtn:hover {
+  background: #2a2d3a;
+  color: #e5e7eb;
+}
+
+.transactionInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: #151821;
+  border-radius: 6px;
+}
+
+.infoRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.infoRow span:last-child {
+  font-weight: 500;
+}
+
+.connectWallet {
+  width: 100%;
+}
+
+.connectWallet :global(button) {
+  width: 100% !important;
+  background: #3b82f6 !important;
+  border: none !important;
+  color: #ffffff !important;
+  padding: 12px 16px !important;
+  border-radius: 6px !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+}
+
+.submitBtn {
+  border: none;
+  padding: 12px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: 100%;
+}
+
+.submitBtn.supplyBtn {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.submitBtn.supplyBtn:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.25);
+}
+
+.submitBtn.borrowBtn {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.submitBtn.borrowBtn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+.submitBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .drawerSupplyBtn,
