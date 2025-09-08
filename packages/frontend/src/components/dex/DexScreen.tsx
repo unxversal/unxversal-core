@@ -7,16 +7,26 @@ import { Trades } from './Trades';
 import { TradePanel } from './TradePanel';
 import { Tooltip } from './Tooltip';
 import { loadSettings } from '../../lib/settings.config';
-import { useCurrentAccount } from '@mysten/dapp-kit';
-import { Wifi, WifiOff, Activity, Pause, TrendingUp, Minus, BarChart3, Crosshair, Square, LineChart, CandlestickChart, Waves, Eye } from 'lucide-react';
+import { TrendingUp, Minus, BarChart3, Crosshair, Square, LineChart, CandlestickChart, Waves, Eye } from 'lucide-react';
 
-export function DexScreen({ started, surgeReady, network }: { started?: boolean; surgeReady?: boolean; network?: string }) {
+export function DexScreen({ network, protocolStatus }: { 
+  started?: boolean; 
+  surgeReady?: boolean; 
+  network?: string;
+  protocolStatus?: {
+    options: boolean;
+    futures: boolean;
+    perps: boolean;
+    lending: boolean;
+    staking: boolean;
+    dex: boolean;
+  }
+}) {
   const s = loadSettings();
   const deepbookIndexerUrl = s.dex.deepbookIndexerUrl;
   const pool = s.dex.poolId.replace(/[\/-]/g, '_').toUpperCase();
   const displayPair = s.dex.poolId.replace(/[\/_]/g, '-').toUpperCase();
   const db = useMemo(() => buildDeepbookPublicIndexer(deepbookIndexerUrl), [deepbookIndexerUrl]);
-  const account = useCurrentAccount();
 
   const [summary, setSummary] = useState<{ last?: number; vol24h?: number; high24h?: number; low24h?: number; change24h?: number }>({});
   const [mid, setMid] = useState<number>(0);
@@ -655,19 +665,34 @@ export function DexScreen({ started, surgeReady, network }: { started?: boolean;
 
       <footer className={styles.footer}>
         <div className={styles.statusBadges}>
-          <div className={`${styles.badge} ${account?.address ? styles.connected : styles.disconnected}`}>
-            {account?.address ? <Wifi size={10} /> : <WifiOff size={10} />}
-            <span>{account?.address ? 'Online' : 'Offline'}</span>
+          <div className={`${styles.badge} ${protocolStatus?.options ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.options ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>Options</span>
           </div>
           
-          <div className={`${styles.badge} ${started ? styles.active : styles.inactive}`}>
-            {started ? <Activity size={10} /> : <Pause size={10} />}
-            <span>IDX</span>
+          <div className={`${styles.badge} ${protocolStatus?.futures ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.futures ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>Futures</span>
           </div>
           
-          <div className={`${styles.badge} ${surgeReady ? styles.active : styles.inactive}`}>
-            {surgeReady ? <Activity size={10} /> : <Pause size={10} />}
-            <span>PRC</span>
+          <div className={`${styles.badge} ${protocolStatus?.perps ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.perps ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>Perps</span>
+          </div>
+          
+          <div className={`${styles.badge} ${protocolStatus?.lending ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.lending ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>Lending</span>
+          </div>
+          
+          <div className={`${styles.badge} ${protocolStatus?.staking ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.staking ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>Staking</span>
+          </div>
+          
+          <div className={`${styles.badge} ${protocolStatus?.dex ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.dex ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>DEX</span>
           </div>
         </div>
         

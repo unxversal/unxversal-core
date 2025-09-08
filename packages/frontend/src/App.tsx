@@ -9,7 +9,6 @@ import { startPriceFeeds } from './lib/switchboard'
 import { startDefaultMarketWatcher } from './lib/marketWatcher'
 import { useCurrentAccount } from '@mysten/dapp-kit'
 import styles from './components/AppShell.module.css'
-import { Wifi, WifiOff, Activity, Pause } from 'lucide-react'
 import { DexScreen } from './components/dex/DexScreen'
 import { GasFuturesScreen } from './components/gas-futures/GasFuturesScreen'
 import { FuturesScreen } from './components/futures/FuturesScreen'
@@ -27,6 +26,16 @@ function App() {
   const [surgeReady, setSurgeReady] = useState(false)
   const [view, setView] = useState<View>('options')
   const account = useCurrentAccount()
+
+  // Protocol status tracking
+  const [protocolStatus, setProtocolStatus] = useState({
+    options: false,
+    futures: false,
+    perps: false,
+    lending: false,
+    staking: false,
+    dex: false
+  })
 
   useEffect(() => {
     if (started) return
@@ -47,6 +56,18 @@ function App() {
       .map((t) => ({ ...t, id: `${t.id}-${network}` }))
     if (trackers.length === 0) return
     setStarted(true)
+    
+    // Update protocol status based on available trackers
+    const newStatus = {
+      options: indexers.options && trackers.some(t => t.id.includes(':options')),
+      futures: indexers.futures && trackers.some(t => t.id.includes(':futures')),
+      perps: indexers.perps && trackers.some(t => t.id.includes(':perpetuals')),
+      lending: indexers.lending && trackers.some(t => t.id.includes(':lending')),
+      staking: indexers.staking && trackers.some(t => t.id.includes(':staking')),
+      dex: indexers.dex && trackers.some(t => t.id.startsWith('dex:'))
+    }
+    setProtocolStatus(newStatus)
+    
     startTrackers(client, trackers).catch(() => {})
   }, [network, started])
 
@@ -130,11 +151,11 @@ function App() {
         </div>
       </header>
       <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' ? styles.mainDex : styles.main}>
-        {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} />}
-        {view === 'gas' && <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} />}
+        {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
+        {view === 'gas' && <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'lending' && <LendingScreen />}
-        {view === 'futures' && <FuturesScreen started={started} surgeReady={surgeReady} network={network} />}
-        {view === 'perps' && <PerpsScreen started={started} surgeReady={surgeReady} network={network} />}
+        {view === 'futures' && <FuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
+        {view === 'perps' && <PerpsScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'options' && (
           <OptionsScreen
             started={started}
@@ -153,22 +174,37 @@ function App() {
         )}
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>
-      {view !== 'dex' && view !== 'gas' && view !== 'futures' && view !== 'perps' && (
+      {!(view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps') && (
         <footer className={styles.footer}>
           <div className={styles.statusBadges}>
-            <div className={`${styles.badge} ${account?.address ? styles.connected : styles.disconnected}`}>
-              {account?.address ? <Wifi size={10} /> : <WifiOff size={10} />}
-              <span>{account?.address ? 'Online' : 'Offline'}</span>
+            <div className={`${styles.badge} ${protocolStatus.options ? styles.connected : styles.disconnected}`}>
+              <div className={`${styles.dot} ${protocolStatus.options ? styles.dotConnected : styles.dotDisconnected}`}></div>
+              <span>Options</span>
             </div>
             
-            <div className={`${styles.badge} ${started ? styles.active : styles.inactive}`}>
-              {started ? <Activity size={10} /> : <Pause size={10} />}
-              <span>IDX</span>
+            <div className={`${styles.badge} ${protocolStatus.futures ? styles.connected : styles.disconnected}`}>
+              <div className={`${styles.dot} ${protocolStatus.futures ? styles.dotConnected : styles.dotDisconnected}`}></div>
+              <span>Futures</span>
             </div>
             
-            <div className={`${styles.badge} ${surgeReady ? styles.active : styles.inactive}`}>
-              {surgeReady ? <Activity size={10} /> : <Pause size={10} />}
-              <span>PRC</span>
+            <div className={`${styles.badge} ${protocolStatus.perps ? styles.connected : styles.disconnected}`}>
+              <div className={`${styles.dot} ${protocolStatus.perps ? styles.dotConnected : styles.dotDisconnected}`}></div>
+              <span>Perps</span>
+            </div>
+            
+            <div className={`${styles.badge} ${protocolStatus.lending ? styles.connected : styles.disconnected}`}>
+              <div className={`${styles.dot} ${protocolStatus.lending ? styles.dotConnected : styles.dotDisconnected}`}></div>
+              <span>Lending</span>
+            </div>
+            
+            <div className={`${styles.badge} ${protocolStatus.staking ? styles.connected : styles.disconnected}`}>
+              <div className={`${styles.dot} ${protocolStatus.staking ? styles.dotConnected : styles.dotDisconnected}`}></div>
+              <span>Staking</span>
+            </div>
+            
+            <div className={`${styles.badge} ${protocolStatus.dex ? styles.connected : styles.disconnected}`}>
+              <div className={`${styles.dot} ${protocolStatus.dex ? styles.dotConnected : styles.dotDisconnected}`}></div>
+              <span>DEX</span>
             </div>
           </div>
           

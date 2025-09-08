@@ -4,12 +4,10 @@ import { createChart, type IChartApi, type CandlestickData, type UTCTimestamp, C
 import { Orderbook } from './Orderbook';
 import { Trades } from './Trades';
 import { Tooltip } from '../dex/Tooltip';
-import { useCurrentAccount } from '@mysten/dapp-kit';
-import { Wifi, WifiOff, Activity, Pause, BarChart3, Crosshair, Square, LineChart, CandlestickChart, Waves, Eye, Clock, TrendingUp, Minus } from 'lucide-react';
+import { BarChart3, Crosshair, Square, LineChart, CandlestickChart, Waves, Eye, Clock, TrendingUp, Minus } from 'lucide-react';
 import type { DerivativesScreenProps } from './types';
 
-export function DerivativesScreen({ started, surgeReady, network, marketLabel, symbol, quoteSymbol = 'USDC', dataProvider, panelProvider, TradePanelComponent, availableExpiries, onExpiryChange }: DerivativesScreenProps) {
-  const account = useCurrentAccount();
+export function DerivativesScreen({ network, marketLabel, symbol, quoteSymbol = 'USDC', dataProvider, panelProvider, TradePanelComponent, availableExpiries, onExpiryChange, protocolStatus }: DerivativesScreenProps) {
 
   const [summary, setSummary] = useState<{ 
     last?: number; 
@@ -724,17 +722,34 @@ export function DerivativesScreen({ started, surgeReady, network, marketLabel, s
 
       <footer className={styles.footer}>
         <div className={styles.statusBadges}>
-          <div className={`${styles.badge} ${account?.address ? styles.connected : styles.disconnected}`}>
-            {account?.address ? <Wifi size={10} /> : <WifiOff size={10} />}
-            <span>{account?.address ? 'Online' : 'Offline'}</span>
+          <div className={`${styles.badge} ${protocolStatus?.options ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.options ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>Options</span>
           </div>
-          <div className={`${styles.badge} ${started ? styles.active : styles.inactive}`}>
-            {started ? <Activity size={10} /> : <Pause size={10} />}
-            <span>IDX</span>
+          
+          <div className={`${styles.badge} ${protocolStatus?.futures ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.futures ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>Futures</span>
           </div>
-          <div className={`${styles.badge} ${surgeReady ? styles.active : styles.inactive}`}>
-            {surgeReady ? <Activity size={10} /> : <Pause size={10} />}
-            <span>PRC</span>
+          
+          <div className={`${styles.badge} ${protocolStatus?.perps ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.perps ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>Perps</span>
+          </div>
+          
+          <div className={`${styles.badge} ${protocolStatus?.lending ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.lending ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>Lending</span>
+          </div>
+          
+          <div className={`${styles.badge} ${protocolStatus?.staking ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.staking ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>Staking</span>
+          </div>
+          
+          <div className={`${styles.badge} ${protocolStatus?.dex ? styles.connected : styles.disconnected}`}>
+            <div className={`${styles.dot} ${protocolStatus?.dex ? styles.dotConnected : styles.dotDisconnected}`}></div>
+            <span>DEX</span>
           </div>
         </div>
         <div className={styles.networkBadge}><span>{(network || 'testnet').toUpperCase()}</span></div>
