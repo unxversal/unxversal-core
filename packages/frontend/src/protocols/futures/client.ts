@@ -11,6 +11,7 @@ export class FuturesClient {
     feeConfigId: string;
     feeVaultId: string;
     stakingPoolId: string;
+    rewardsId: string;
     qty: bigint;
     maybeUnxvCoinId?: string;
   }) {
@@ -28,6 +29,7 @@ export class FuturesClient {
         tx.object(args.feeConfigId),
         tx.object(args.feeVaultId),
         tx.object(args.stakingPoolId),
+        tx.object(args.rewardsId),
         optUnxv,
         tx.object('0x6'),
         tx.pure.u64(args.qty),
@@ -43,6 +45,7 @@ export class FuturesClient {
     feeConfigId: string;
     feeVaultId: string;
     stakingPoolId: string;
+    rewardsId: string;
     qty: bigint;
     maybeUnxvCoinId?: string;
   }) {
@@ -60,6 +63,7 @@ export class FuturesClient {
         tx.object(args.feeConfigId),
         tx.object(args.feeVaultId),
         tx.object(args.stakingPoolId),
+        tx.object(args.rewardsId),
         optUnxv,
         tx.object('0x6'),
         tx.pure.u64(args.qty),

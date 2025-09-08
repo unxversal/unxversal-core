@@ -136,8 +136,8 @@ module unxversal::rewards {
     public struct FaucetClaimed has copy, drop { user: address, amount: u64, day_id: u64 }
 
     // ===== Init =====
-    public fun init(ctx: &mut TxContext): Rewards {
-        let r = Rewards {
+    entry fun init(ctx: &mut TxContext) {
+        let mut r = Rewards {
             id: object::new(ctx),
             // weights (defaults from spec; sum < 1e6)
             wV: 230_000,
@@ -186,11 +186,10 @@ module unxversal::rewards {
         vector::push_back<u128>(&mut r.hist_bucket_edges, 25_000u128);
         vector::push_back<u128>(&mut r.hist_bucket_edges, 100_000u128);
         vector::push_back<u128>(&mut r.hist_bucket_edges, 1_000_000u128);
-        r
+        transfer::share_object(r);
     }
 
-    /// Share the rewards object
-    public fun share(rew: Rewards) { transfer::share_object(rew); }
+    // init_and_share removed: deployment runs `init` directly and shares the object
 
     // ===== Admin updaters =====
     public fun set_weights(reg_admin: &AdminRegistry, rew: &mut Rewards, wV: u64, wM: u64, wP: u64, wF: u64, wB: u64, wL: u64, wQ: u64, clock: &Clock, ctx: &TxContext) {

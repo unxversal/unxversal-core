@@ -24,6 +24,7 @@ module unxversal::lending {
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::fees::{Self as fees};
     use unxversal::staking::StakingPool;
+    use unxversal::rewards as rewards;
     
     /// Errors
     const E_NOT_ADMIN: u64 = 1;
@@ -191,6 +192,22 @@ module unxversal::lending {
         event::emit(Deposit { who: ctx.sender(), amount: amt, shares, timestamp_ms: sui::clock::timestamp_ms(clock) });
     }
 
+    /// Deposit with rewards: computes USD internally via oracle and records lend-quality if util>kink.
+    public fun deposit_with_rewards<T>(pool: &mut LendingPool<T>, amount: Coin<T>, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext) {
+        let util_before = utilization_bps<T>(pool);
+        // read price in USD 1e6
+        let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
+        let amt_units = coin::value(&amount);
+        let usd_1e6: u128 = (amt_units as u128) * (px_1e6 as u128);
+        if (util_before > pool.irm.kink_util_bps && usd_1e6 > 0u128) {
+            rewards::on_supply_event(rewards_obj, ctx.sender(), usd_1e6, util_before, pool.irm.kink_util_bps, clock);
+        };
+        deposit<T>(pool, amount, clock, ctx);
+    }
+
+    // NOTE: Rewards for deposits should be computed using on-chain oracle pricing inside this module.
+    // Intentionally no "deposit_with_rewards" that accepts caller-provided USD to avoid spoofing.
+
     /// Public: withdraw liquidity by specifying share amount
     public fun withdraw<T>(pool: &mut LendingPool<T>, shares: u128, clock: &Clock, ctx: &mut TxContext): Coin<T> {
         accrue<T>(pool, clock);
@@ -244,6 +261,18 @@ module unxversal::lending {
         event::emit(Borrow { who: ctx.sender(), amount, new_principal, timestamp_ms: sui::clock::timestamp_ms(clock) });
         c
     }
+
+    /// Borrow with rewards: computes USD via oracle at borrow time and records borrow usage proxy.
+    public fun borrow_with_rewards<T>(pool: &mut LendingPool<T>, amount: u64, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext): Coin<T> {
+        let util = utilization_bps<T>(pool);
+        let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
+        let usd_1e6: u128 = (amount as u128) * (px_1e6 as u128);
+        if (usd_1e6 > 0u128) { rewards::on_borrow(rewards_obj, ctx.sender(), usd_1e6, util, 0u128, clock); };
+        borrow<T>(pool, amount, clock, ctx)
+    }
+
+    // NOTE: Rewards for borrow should be computed on-chain from oracle price within this module.
+    // Intentionally no "borrow_with_rewards" that accepts caller-provided USD to avoid spoofing.
 
     /// Borrow with one-time fee and staking-tier collateral bonus
     public fun borrow_with_fee<T>(
@@ -318,6 +347,25 @@ module unxversal::lending {
         leftover
     }
 
+    /// Repay with rewards: compute interest portion and convert to USD via oracle
+    public fun repay_with_rewards<T>(pool: &mut LendingPool<T>, mut pay: Coin<T>, borrower: address, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext): Coin<T> {
+        accrue<T>(pool, clock);
+        let amt = coin::value(&pay);
+        assert!(amt > 0, E_ZERO_AMOUNT);
+        let pos0 = get_borrow_position(&pool.borrows, borrower);
+        assert!(pos0.principal > 0, E_NO_BORROW);
+        let owed = current_borrow_balance_inner(pool.borrow_index, &pos0);
+        let pay_amt = if ((amt as u128) >= owed) { owed as u64 } else { amt };
+        let interest_remaining: u64 = if (owed > pos0.principal) { (owed - pos0.principal) as u64 } else { 0 };
+        let interest_applied: u64 = if (pay_amt > interest_remaining) { interest_remaining } else { pay_amt };
+        let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
+        let interest_usd_1e6: u128 = (interest_applied as u128) * (px_1e6 as u128);
+        if (interest_usd_1e6 > 0u128) { rewards::on_repay_interest(rewards_obj, borrower, interest_usd_1e6, clock); };
+        repay<T>(pool, pay, borrower, clock, ctx)
+    }
+
+    // NOTE: Rewards for repay interest should be computed via oracle; avoid trusting caller-provided USD.
+
     /// Keeper: liquidate an undercollateralized borrower by repaying up to `repay_amount` and seizing shares with a bonus
     public fun liquidate<T>(pool: &mut LendingPool<T>, borrower: address, repay_amount: Coin<T>, clock: &Clock, ctx: &mut TxContext): Coin<T> {
         accrue<T>(pool, clock);
@@ -353,6 +401,18 @@ module unxversal::lending {
         // return leftover of repay coin
         repay
     }
+
+    /// Liquidate with rewards: compute repay notional in USD via oracle and credit liquidator
+    public fun liquidate_with_rewards<T>(pool: &mut LendingPool<T>, borrower: address, repay_amount: Coin<T>, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext): Coin<T> {
+        let amt = coin::value(&repay_amount);
+        let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
+        let usd_1e6: u128 = (amt as u128) * (px_1e6 as u128);
+        let out = liquidate<T>(pool, borrower, repay_amount, clock, ctx);
+        if (usd_1e6 > 0u128) { rewards::on_liquidation(rewards_obj, ctx.sender(), usd_1e6, clock); };
+        out
+    }
+
+    // NOTE: Rewards for liquidation should be computed from actual repay notional using oracle in-module.
 
     /// Flash loan: borrow `amount` with immediate same-transaction repayment requirement.
     /// Returns the borrowed coin and a capability that must be consumed by `flash_repay` in the same transaction.

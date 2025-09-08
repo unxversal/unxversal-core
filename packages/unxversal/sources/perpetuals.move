@@ -21,6 +21,7 @@ module unxversal::perpetuals {
     use unxversal::unxv::UNXV;
     use unxversal::oracle::{Self as uoracle, OracleRegistry};
     use unxversal::book::{Self as ubk, Book};
+    use unxversal::rewards as rewards;
     use switchboard::aggregator::Aggregator;
 
     // Errors
@@ -252,12 +253,13 @@ module unxversal::perpetuals {
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
+        rewards_obj: &mut rewards::Rewards,
         mut maybe_unxv: Option<Coin<UNXV>>,
         clock: &Clock,
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        taker_trade_internal<Collat>(market, true, qty, ((1u128 << 63) - 1) as u64, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
+        taker_trade_internal<Collat>(market, true, qty, ((1u128 << 63) - 1) as u64, reg, agg, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
@@ -268,12 +270,13 @@ module unxversal::perpetuals {
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
+        rewards_obj: &mut rewards::Rewards,
         mut maybe_unxv: Option<Coin<UNXV>>,
         clock: &Clock,
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        taker_trade_internal<Collat>(market, false, qty, 1, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
+        taker_trade_internal<Collat>(market, false, qty, 1, reg, agg, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
@@ -284,12 +287,13 @@ module unxversal::perpetuals {
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
+        rewards_obj: &mut rewards::Rewards,
         mut maybe_unxv: Option<Coin<UNXV>>,
         clock: &Clock,
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        taker_trade_internal<Collat>(market, false, qty, 1, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
+        taker_trade_internal<Collat>(market, false, qty, 1, reg, agg, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
@@ -300,12 +304,13 @@ module unxversal::perpetuals {
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
+        rewards_obj: &mut rewards::Rewards,
         mut maybe_unxv: Option<Coin<UNXV>>,
         clock: &Clock,
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        taker_trade_internal<Collat>(market, true, qty, ((1u128 << 63) - 1) as u64, reg, agg, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
+        taker_trade_internal<Collat>(market, true, qty, ((1u128 << 63) - 1) as u64, reg, agg, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
@@ -318,12 +323,13 @@ module unxversal::perpetuals {
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
+        rewards_obj: &mut rewards::Rewards,
         maybe_unxv: &mut Option<Coin<UNXV>>,
         clock: &Clock,
         ctx: &mut TxContext,
     ) {
         let limit = if (is_buy) { ((1u128 << 63) - 1) as u64 } else { 1 };
-        taker_trade_internal<Collat>(market, is_buy, qty, limit, reg, agg, cfg, vault, staking_pool, maybe_unxv, clock, ctx);
+        taker_trade_internal<Collat>(market, is_buy, qty, limit, reg, agg, cfg, vault, staking_pool, rewards_obj, maybe_unxv, clock, ctx);
     }
 
     fun taker_trade_internal<Collat>(
@@ -336,6 +342,7 @@ module unxversal::perpetuals {
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
+        rewards_obj: &mut rewards::Rewards,
         maybe_unxv: &mut Option<Coin<UNXV>>,
         clock: &Clock,
         ctx: &mut TxContext,
@@ -347,6 +354,7 @@ module unxversal::perpetuals {
         let mut acc = load_or_new_account<Collat>(market, ctx.sender());
         let (_paid2, _cred2) = settle_funding_user_internal<Collat>(market, &mut acc, clock, ctx);
         let mut total_notional_1e6: u128 = 0u128;
+        let index_px = current_price_1e6(&market.params, reg, agg, clock);
         let fills_len = ubk::fillplan_num_fills(&plan);
         let mut i = 0u64;
         while (i < fills_len) {
@@ -363,25 +371,30 @@ module unxversal::perpetuals {
             let mut maker_acc = load_or_new_account<Collat>(market, maker_addr);
             if (is_buy) {
                 let r = if (acc.short_qty > 0) { if (fqty <= acc.short_qty) { fqty } else { acc.short_qty } } else { 0 };
-                if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px, r, market.params.contract_size); apply_realized_to_collat(&mut acc.collat, g, l, vault, clock, ctx); acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r; };
+                if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px, r, market.params.contract_size); rewards::on_realized_pnl(rewards_obj, ctx.sender(), (g as u128), (l as u128), clock); apply_realized_to_collat(&mut acc.collat, g, l, vault, clock, ctx); acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r; };
                 let a = if (fqty > r) { fqty - r } else { 0 };
                 if (a > 0) { acc.avg_long_1e6 = wavg(acc.avg_long_1e6, acc.long_qty, px, a); acc.long_qty = acc.long_qty + a; market.total_long_qty = market.total_long_qty + a; };
                 let r_m = if (maker_acc.long_qty > 0) { if (fqty <= maker_acc.long_qty) { fqty } else { maker_acc.long_qty } } else { 0 };
-                if (r_m > 0) { let (g_m,l_m) = realize_long_ul(maker_acc.avg_long_1e6, px, r_m, market.params.contract_size); apply_realized_to_collat(&mut maker_acc.collat, g_m, l_m, vault, clock, ctx); maker_acc.long_qty = maker_acc.long_qty - r_m; if (maker_acc.long_qty == 0) { maker_acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r_m; };
+                if (r_m > 0) { let (g_m,l_m) = realize_long_ul(maker_acc.avg_long_1e6, px, r_m, market.params.contract_size); rewards::on_realized_pnl(rewards_obj, maker_addr, (g_m as u128), (l_m as u128), clock); apply_realized_to_collat(&mut maker_acc.collat, g_m, l_m, vault, clock, ctx); maker_acc.long_qty = maker_acc.long_qty - r_m; if (maker_acc.long_qty == 0) { maker_acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r_m; };
                 let a_m = if (fqty > r_m) { fqty - r_m } else { 0 };
                 if (a_m > 0) { maker_acc.avg_short_1e6 = wavg(maker_acc.avg_short_1e6, maker_acc.short_qty, px, a_m); maker_acc.short_qty = maker_acc.short_qty + a_m; market.total_short_qty = market.total_short_qty + a_m; };
             } else {
                 let r2 = if (acc.long_qty > 0) { if (fqty <= acc.long_qty) { fqty } else { acc.long_qty } } else { 0 };
-                if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px, r2, market.params.contract_size); apply_realized_to_collat(&mut acc.collat, g2, l2, vault, clock, ctx); acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r2; };
+                if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px, r2, market.params.contract_size); rewards::on_realized_pnl(rewards_obj, ctx.sender(), (g2 as u128), (l2 as u128), clock); apply_realized_to_collat(&mut acc.collat, g2, l2, vault, clock, ctx); acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r2; };
                 let a2 = if (fqty > r2) { fqty - r2 } else { 0 };
                 if (a2 > 0) { acc.avg_short_1e6 = wavg(acc.avg_short_1e6, acc.short_qty, px, a2); acc.short_qty = acc.short_qty + a2; market.total_short_qty = market.total_short_qty + a2; };
                 let r_m2 = if (maker_acc.short_qty > 0) { if (fqty <= maker_acc.short_qty) { fqty } else { maker_acc.short_qty } } else { 0 };
-                if (r_m2 > 0) { let (g_m2,l_m2) = realize_short_ul(maker_acc.avg_short_1e6, px, r_m2, market.params.contract_size); apply_realized_to_collat(&mut maker_acc.collat, g_m2, l_m2, vault, clock, ctx); maker_acc.short_qty = maker_acc.short_qty - r_m2; if (maker_acc.short_qty == 0) { maker_acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r_m2; };
+                if (r_m2 > 0) { let (g_m2,l_m2) = realize_short_ul(maker_acc.avg_short_1e6, px, r_m2, market.params.contract_size); rewards::on_realized_pnl(rewards_obj, maker_addr, (g_m2 as u128), (l_m2 as u128), clock); apply_realized_to_collat(&mut maker_acc.collat, g_m2, l_m2, vault, clock, ctx); maker_acc.short_qty = maker_acc.short_qty - r_m2; if (maker_acc.short_qty == 0) { maker_acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r_m2; };
                 let a_m2 = if (fqty > r_m2) { fqty - r_m2 } else { 0 };
                 if (a_m2 > 0) { maker_acc.avg_long_1e6 = wavg(maker_acc.avg_long_1e6, maker_acc.long_qty, px, a_m2); maker_acc.long_qty = maker_acc.long_qty + a_m2; market.total_long_qty = market.total_long_qty + a_m2; };
             };
             let per_unit_1e6: u128 = ((px as u128) * (market.params.contract_size as u128)) / 1_000_000u128;
             total_notional_1e6 = total_notional_1e6 + (fqty as u128) * per_unit_1e6 * 1_000_000u128;
+            // rewards per fill (taker and maker)
+            let f_notional_1e6: u128 = (fqty as u128) * per_unit_1e6 * 1_000_000u128;
+            let improve_bps: u64 = if (is_buy) { if (index_px >= px) { (((index_px as u128 - px as u128) * 10_000u128) / (index_px as u128)) as u64 } else { 0 } } else { if (px >= index_px) { (((px as u128 - index_px as u128) * 10_000u128) / (index_px as u128)) as u64 } else { 0 } };
+            rewards::on_perp_fill(rewards_obj, ctx.sender(), maker_addr, f_notional_1e6, false, 0, clock);
+            rewards::on_perp_fill(rewards_obj, maker_addr, ctx.sender(), f_notional_1e6, true, improve_bps, clock);
             store_account<Collat>(market, maker_addr, maker_acc);
             if (!ubk::has_order(&market.book, maker_id)) { let _ = table::remove(&mut market.owners, maker_id); };
             i = i + 1;
@@ -485,6 +498,7 @@ module unxversal::perpetuals {
         reg: &OracleRegistry,
         agg: &Aggregator,
         vault: &mut FeeVault,
+        rewards_obj: &mut rewards::Rewards,
         clock: &Clock,
         ctx: &mut TxContext,
         qty: u64,
@@ -524,6 +538,9 @@ module unxversal::perpetuals {
 
         store_account<Collat>(market, victim, acc);
         event::emit(Liquidated { market_id: object::id(market), who: victim, qty_closed: closed, exec_price_1e6: px, penalty_collat: pay, timestamp_ms: clock.timestamp_ms() });
+        // credit liquidator with notional
+        let notional_liq_1e6: u128 = (closed as u128) * (px as u128) * (market.params.contract_size as u128);
+        rewards::on_liquidation(rewards_obj, ctx.sender(), notional_liq_1e6, clock);
     }
 
     // === Views & helpers ===

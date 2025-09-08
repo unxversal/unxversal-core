@@ -81,6 +81,7 @@ export class OptionsClient {
     feeConfigId: string;
     feeVaultId: string;
     stakingPoolId: string;
+    rewardsId: string;
     unxvFeeCoinId?: string;
   }) {
     const tx = new Transaction();
@@ -98,6 +99,7 @@ export class OptionsClient {
         tx.object(args.feeConfigId),
         tx.object(args.feeVaultId),
         tx.object(args.stakingPoolId),
+        tx.object(args.rewardsId),
         feeOpt,
         tx.object('0x6'),
       ],
@@ -122,6 +124,7 @@ export class OptionsClient {
     payBaseCoinId?: string;
   }) {
     const tx = new Transaction();
+    // Feed updates handled by backend/cron; no SDK usage in browser
     const { base, quote } = await this.getMarketTypeArgs(args.marketId);
     const coinBase = this.coinTypeOf(base);
     const coinQuote = this.coinTypeOf(quote);
