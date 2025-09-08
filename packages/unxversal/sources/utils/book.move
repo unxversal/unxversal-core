@@ -47,6 +47,12 @@ public struct Book has store {
     next_ask_order_id: u64,
 }
 
+/// A record describing a canceled order and its unfilled remaining quantity
+public struct OrderCancel has copy, drop, store {
+    order_id: u128,
+    remaining_qty: u64,
+}
+
 // A single fill against a maker order
 public struct Fill has copy, drop, store {
     maker_id: u128,
@@ -313,6 +319,44 @@ public fun order_expiry(self: &Book, order_id: u128): u64 {
     let o = side.borrow(order_id);
     o.expire_timestamp
 }
+
+/// Drain up to `max_removals` resting orders from both sides and collect their ids and remaining quantities
+public fun drain_all_collect(self: &mut Book, max_removals: u64): vector<OrderCancel> {
+    let mut removed = vector[];
+    let mut count = 0u64;
+    // Drain asks from best towards worse
+    let (mut ar, mut ao) = self.asks.min_slice();
+    while (!ar.is_null() && count < max_removals) {
+        let ord = slice_borrow(self.asks.borrow_slice(ar), ao);
+        let oid = ord.order_id;
+        let rem = ord.quantity - ord.filled_quantity;
+        // Compute next BEFORE removal
+        let (next_ar, next_ao) = self.asks.next_slice(ar, ao);
+        self.asks.remove(oid);
+        removed.push_back(OrderCancel { order_id: oid, remaining_qty: rem });
+        (ar, ao) = (next_ar, next_ao);
+        count = count + 1;
+    };
+    // Drain bids from best towards worse
+    let (mut br, mut bo) = self.bids.max_slice();
+    while (!br.is_null() && count < max_removals) {
+        let ord2 = slice_borrow(self.bids.borrow_slice(br), bo);
+        let oid2 = ord2.order_id;
+        let rem2 = ord2.quantity - ord2.filled_quantity;
+        // Compute prev BEFORE removal
+        let (prev_br, prev_bo) = self.bids.prev_slice(br, bo);
+        self.bids.remove(oid2);
+        removed.push_back(OrderCancel { order_id: oid2, remaining_qty: rem2 });
+        (br, bo) = (prev_br, prev_bo);
+        count = count + 1;
+    };
+    removed
+}
+
+/// Accessor: get canceled order id
+public fun cancel_order_id(c: &OrderCancel): u128 { c.order_id }
+/// Accessor: get remaining unfilled quantity
+public fun cancel_remaining_qty(c: &OrderCancel): u64 { c.remaining_qty }
 
 /// Remove up to `max_removals` expired orders from both sides and return their order_ids
 public fun remove_expired_collect(self: &mut Book, now_ts: u64, max_removals: u64): vector<u128> {

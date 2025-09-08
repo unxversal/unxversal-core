@@ -28,6 +28,7 @@ export type AppConfig = {
   };
   futures: {
     markets: string[];                  // Linear futures market ids
+    aggregatorByMarket: Record<string, string>; // marketId -> aggregatorId
   };
   gasFutures: {
     markets: string[];                  // Gas futures market ids
@@ -58,6 +59,7 @@ export const config: AppConfig = {
   },
   futures: {
     markets: [],
+    aggregatorByMarket: {},
   },
   gasFutures: {
     markets: [],

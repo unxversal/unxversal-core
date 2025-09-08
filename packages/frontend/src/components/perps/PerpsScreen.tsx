@@ -4,7 +4,7 @@ import { GasFuturesTradePanel } from '../gas-futures/GasFuturesTradePanel';
 import { createMockDerivativesProvider, createMockTradePanelProvider } from '../derivatives/providers/mock';
 
 export function PerpsScreen({ started, surgeReady, network }: { started?: boolean; surgeReady?: boolean; network?: string }) {
-  const dataProvider = useMemo(() => createMockDerivativesProvider(), []);
+  const dataProvider = useMemo(() => createMockDerivativesProvider('perps'), []);
   const panelProvider = useMemo(() => createMockTradePanelProvider(), []);
   return (
     <DerivativesScreen

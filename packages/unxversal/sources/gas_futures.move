@@ -29,6 +29,7 @@ module unxversal::gas_futures {
     const E_CLOSE_ONLY: u64 = 8;
     const E_PRICE_DEVIATION: u64 = 9;
     const E_EXPOSURE_CAP: u64 = 10;
+    const E_ALREADY_SETTLED: u64 = 11;
 
     /// Price scaling: treat reference gas price (MIST) as 1e6-scaled units for simplicity,
     /// and divide by 1_000_000 when converting notional to whole collateral units via `contract_size`.
@@ -62,6 +63,8 @@ module unxversal::gas_futures {
         imbalance_threshold_bps: u64,
         book: Book,
         owners: Table<u128, address>,
+        settlement_price_1e6: u64,
+        is_settled: bool,
     }
 
     public struct MarketInitialized has copy, drop { market_id: ID, expiry_ms: u64, contract_size: u64, initial_margin_bps: u64, maintenance_margin_bps: u64, liquidation_fee_bps: u64, keeper_incentive_bps: u64 }
@@ -81,7 +84,7 @@ module unxversal::gas_futures {
     // === Init ===
     public fun init_market<Collat>(reg_admin: &AdminRegistry, expiry_ms: u64, contract_size: u64, im_bps: u64, mm_bps: u64, liq_fee_bps: u64, keeper_bps: u64, tick_size: u64, lot_size: u64, min_size: u64, ctx: &mut TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        let m = GasMarket<Collat> { id: object::new(ctx), series: GasSeries { expiry_ms, contract_size }, accounts: table::new<address, Account<Collat>>(ctx), initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps, close_only: false, max_deviation_bps: 0, last_price_1e6: 0, pnl_fee_share_bps: 0, liq_target_buffer_bps: 0, account_max_gross_qty: 0, market_max_gross_qty: 0, total_long_qty: 0, total_short_qty: 0, imbalance_surcharge_bps_max: 0, imbalance_threshold_bps: 0, book: ubk::empty(tick_size, lot_size, min_size, ctx), owners: table::new<u128, address>(ctx) };
+        let m = GasMarket<Collat> { id: object::new(ctx), series: GasSeries { expiry_ms, contract_size }, accounts: table::new<address, Account<Collat>>(ctx), initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps, close_only: false, max_deviation_bps: 0, last_price_1e6: 0, pnl_fee_share_bps: 0, liq_target_buffer_bps: 0, account_max_gross_qty: 0, market_max_gross_qty: 0, total_long_qty: 0, total_short_qty: 0, imbalance_surcharge_bps_max: 0, imbalance_threshold_bps: 0, book: ubk::empty(tick_size, lot_size, min_size, ctx), owners: table::new<u128, address>(ctx), settlement_price_1e6: 0, is_settled: false };
         event::emit(MarketInitialized { market_id: object::id(&m), expiry_ms, contract_size, initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps });
         transfer::share_object(m);
     }
@@ -144,7 +147,7 @@ module unxversal::gas_futures {
 
     public fun withdraw_collateral<Collat>(market: &mut GasMarket<Collat>, amount: u64, clock: &Clock, ctx: &mut TxContext): Coin<Collat> {
         assert!(amount > 0, E_ZERO);
-        let price_1e6 = gated_price_and_update<Collat>(market, ctx);
+        let price_1e6 = if (market.is_settled) { market.settlement_price_1e6 } else { gated_price_and_update<Collat>(market, ctx) };
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         let eq = equity(&acc, price_1e6, market.series.contract_size);
         assert!(eq >= amount, E_INSUFF);
@@ -161,17 +164,20 @@ module unxversal::gas_futures {
 
     // === Trading via matched orderbook (index = reference gas price) ===
     public fun open_long<Collat>(market: &mut GasMarket<Collat>, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, mut maybe_unxv: Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext, qty: u64) {
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
         taker_limit_trade<Collat>(market, /*is_buy=*/true, /*limit_price=*/max_order_price(), qty, /*expire_ts=*/clock.timestamp_ms() + 60_000, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
     public fun open_short<Collat>(market: &mut GasMarket<Collat>, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, mut maybe_unxv: Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext, qty: u64) {
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
         taker_limit_trade<Collat>(market, /*is_buy=*/false, /*limit_price=*/min_order_price(), qty, /*expire_ts=*/clock.timestamp_ms() + 60_000, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
     fun taker_limit_trade<Collat>(market: &mut GasMarket<Collat>, is_buy: bool, limit_price_1e6: u64, qty: u64, expire_ts: u64, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, maybe_unxv: &mut Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext) {
         assert!(qty > 0, E_ZERO);
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
         let now = clock.timestamp_ms();
         if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
         // Price gate on index only
@@ -297,8 +303,10 @@ module unxversal::gas_futures {
     // === Maker order APIs ===
     public fun place_limit_bid<Collat>(market: &mut GasMarket<Collat>, price_1e6: u64, qty: u64, expire_ts: u64, clock: &Clock, ctx: &mut TxContext) {
         assert!(qty > 0, E_ZERO);
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
         let now = clock.timestamp_ms();
         assert!(expire_ts > now, E_EXPIRED);
+        if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         let idx = current_gas_price_1e6(ctx);
         let need = im_for_qty(&market.series, qty, idx, market.initial_margin_bps);
@@ -316,8 +324,10 @@ module unxversal::gas_futures {
 
     public fun place_limit_ask<Collat>(market: &mut GasMarket<Collat>, price_1e6: u64, qty: u64, expire_ts: u64, clock: &Clock, ctx: &mut TxContext) {
         assert!(qty > 0, E_ZERO);
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
         let now = clock.timestamp_ms();
         assert!(expire_ts > now, E_EXPIRED);
+        if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         let idx = current_gas_price_1e6(ctx);
         let need = im_for_qty(&market.series, qty, idx, market.initial_margin_bps);
@@ -339,7 +349,7 @@ module unxversal::gas_futures {
         assert!(owner == ctx.sender(), E_NOT_ADMIN);
         let (filled, qty) = ubk::order_progress(&market.book, order_id);
         let remaining = if (qty > filled) { qty - filled } else { 0 };
-        let idx = current_gas_price_1e6(ctx);
+        let idx = if (market.is_settled) { market.settlement_price_1e6 } else { current_gas_price_1e6(ctx) };
         let unlock = im_for_qty(&market.series, remaining, idx, market.initial_margin_bps);
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         if (acc.locked_im >= unlock) { acc.locked_im = acc.locked_im - unlock; } else { acc.locked_im = 0; };
@@ -352,6 +362,9 @@ module unxversal::gas_futures {
     public fun liquidate<Collat>(market: &mut GasMarket<Collat>, victim: address, qty: u64, vault: &mut FeeVault, clock: &Clock, ctx: &mut TxContext) {
         assert!(table::contains(&market.accounts, victim), E_NO_ACCOUNT);
         assert!(qty > 0, E_ZERO);
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
+        let now = clock.timestamp_ms();
+        if (market.series.expiry_ms > 0) { assert!(now < market.series.expiry_ms, E_EXPIRED); };
         let px = current_gas_price_1e6(ctx);
         let mut acc = table::remove(&mut market.accounts, victim);
         let eq = equity(&acc, px, market.series.contract_size);
@@ -417,6 +430,42 @@ module unxversal::gas_futures {
         };
         market.last_price_1e6 = cur;
         cur
+    }
+
+    // === Keeper utilities ===
+    /// Entry: update last observed gas price without trading
+    public fun update_index_price<Collat>(market: &mut GasMarket<Collat>, _clock: &Clock, ctx: &mut TxContext) {
+        let _ = gated_price_and_update<Collat>(market, ctx);
+    }
+
+    /// Entry: snap settlement price after expiry and cancel all resting orders, unlocking IM
+    public fun snap_settlement_price<Collat>(market: &mut GasMarket<Collat>, clock: &Clock, ctx: &mut TxContext) {
+        let now = clock.timestamp_ms();
+        assert!(market.series.expiry_ms > 0 && now >= market.series.expiry_ms, E_EXPIRED);
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
+        let px = current_gas_price_1e6(ctx);
+        market.settlement_price_1e6 = px;
+        market.is_settled = true;
+        market.close_only = true;
+        // Drain all orders and unlock IM
+        let cancels = ubk::drain_all_collect(&mut market.book, 1_000_000);
+        let mut i: u64 = 0; let n = vector::length(&cancels);
+        while (i < n) {
+            let c = *vector::borrow(&cancels, i);
+            let oid = ubk::cancel_order_id(&c);
+            if (table::contains(&market.owners, oid)) {
+                let maker = *table::borrow(&market.owners, oid);
+                let rem = ubk::cancel_remaining_qty(&c);
+                if (rem > 0) {
+                    let mut acc = take_or_new_account<Collat>(market, maker);
+                    let unlock = im_for_qty(&market.series, rem, px, market.initial_margin_bps);
+                    if (acc.locked_im >= unlock) { acc.locked_im = acc.locked_im - unlock; } else { acc.locked_im = 0; };
+                    store_account<Collat>(market, maker, acc);
+                };
+                let _ = table::remove(&mut market.owners, oid);
+            };
+            i = i + 1;
+        };
     }
 
     fun equity<Collat>(acc: &Account<Collat>, price_1e6: u64, cs: u64): u64 {
@@ -545,7 +594,8 @@ module unxversal::gas_futures {
 
     public fun settle_self<Collat>(market: &mut GasMarket<Collat>, vault: &mut FeeVault, clock: &Clock, ctx: &mut TxContext) {
         assert!(table::contains(&market.accounts, ctx.sender()), E_NO_ACCOUNT);
-        let px = gated_price_and_update<Collat>(market, ctx);
+        assert!(market.is_settled, E_ALREADY_SETTLED);
+        let px = market.settlement_price_1e6;
         let mut acc = table::remove(&mut market.accounts, ctx.sender());
         let lq = acc.long_qty; let sq = acc.short_qty;
         let (g1,l1) = realize_long_ul(acc.avg_long_1e6, px, lq, market.series.contract_size);

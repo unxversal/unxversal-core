@@ -18,6 +18,8 @@ export interface MarketSummary {
   openInterest?: number;
   fundingRate?: number;
   nextFunding?: number; // ms timestamp
+  expiryDate?: number; // ms timestamp for futures contracts
+  timeToExpiry?: number; // ms remaining until expiry
 }
 
 export interface OrderbookSnapshot {
@@ -94,6 +96,13 @@ export interface TradePanelProps {
   provider?: TradePanelDataProvider;
 }
 
+export interface ExpiryContract {
+  id: string;
+  label: string; // e.g. "Jan 25", "Mar 25"
+  expiryDate: number; // ms timestamp
+  isActive?: boolean; // currently selected
+}
+
 export interface DerivativesScreenProps {
   started?: boolean;
   surgeReady?: boolean;
@@ -104,6 +113,8 @@ export interface DerivativesScreenProps {
   dataProvider?: DerivativesDataProvider;
   panelProvider?: TradePanelDataProvider;
   TradePanelComponent?: (props: TradePanelProps) => React.ReactElement;
+  availableExpiries?: ExpiryContract[]; // for futures contracts
+  onExpiryChange?: (expiryId: string) => void;
 }
 
 

@@ -43,6 +43,7 @@ module unxversal::futures {
     const E_CLOSE_ONLY: u64 = 8;
     const E_PRICE_DEVIATION: u64 = 9;
     const E_EXPOSURE_CAP: u64 = 10;
+    const E_ALREADY_SETTLED: u64 = 11;
 
     /// Futures series parameters
     public struct FuturesSeries has copy, drop, store {
@@ -98,6 +99,9 @@ module unxversal::futures {
         book: Book,
         /// Mapping from resting order_id to maker address
         owners: Table<u128, address>,
+        /// Canonical settlement state
+        settlement_price_1e6: u64,
+        is_settled: bool,
     }
 
     // Events
@@ -154,6 +158,8 @@ module unxversal::futures {
             imbalance_threshold_bps: 0,
             book: ubk::empty(tick_size, lot_size, min_size, ctx),
             owners: table::new<u128, address>(ctx),
+            settlement_price_1e6: 0,
+            is_settled: false,
         };
         event::emit(MarketInitialized { market_id: object::id(&m), symbol: clone_string(&m.series.symbol), expiry_ms, contract_size, initial_margin_bps, maintenance_margin_bps, liquidation_fee_bps, keeper_incentive_bps });
         transfer::share_object(m);
@@ -231,7 +237,7 @@ module unxversal::futures {
         ctx: &mut TxContext,
     ): Coin<Collat> {
         assert!(amount > 0, E_ZERO);
-        let price_1e6 = gated_price_and_update<Collat>(market, reg, agg, clock);
+        let price_1e6 = if (market.is_settled) { market.settlement_price_1e6 } else { gated_price_and_update<Collat>(market, reg, agg, clock) };
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         // compute equity and required initial margin after withdrawal
         let equity_before = equity_collat(&acc, price_1e6, market.series.contract_size);
@@ -337,6 +343,7 @@ module unxversal::futures {
         ctx: &mut TxContext,
     ) {
         assert!(qty > 0, E_ZERO);
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
         let now = clock.timestamp_ms();
         if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
         // Price gating for index/mark only
@@ -459,6 +466,9 @@ module unxversal::futures {
     ) {
         assert!(table::contains(&market.accounts, victim), E_NO_ACCOUNT);
         assert!(qty > 0, E_ZERO);
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
+        let now = clock.timestamp_ms();
+        if (market.series.expiry_ms > 0) { assert!(now < market.series.expiry_ms, E_EXPIRED); };
         let px_1e6 = current_price_1e6(&market.series, reg, agg, clock);
         let mut acc = table::remove(&mut market.accounts, victim);
         // Check maintenance margin
@@ -539,9 +549,10 @@ module unxversal::futures {
     ) {
         let now = clock.timestamp_ms();
         assert!(market.series.expiry_ms > 0 && now >= market.series.expiry_ms, E_EXPIRED);
-        // Users call withdraw/adjust explicitly; here we only emit a marker and do nothing heavy
-        event::emit(Settled { market_id: object::id(market), who: ctx.sender(), price_1e6: current_price_1e6(&market.series, reg, agg, clock), timestamp_ms: clock.timestamp_ms() });
-        let _ = ctx; // silence
+        assert!(market.is_settled, E_ALREADY_SETTLED);
+        event::emit(Settled { market_id: object::id(market), who: ctx.sender(), price_1e6: market.settlement_price_1e6, timestamp_ms: clock.timestamp_ms() });
+        let _ = (reg, agg);
+        let _ = ctx;
     }
 
     /// User-triggered settlement to flatten positions and realize PnL with credit fallback
@@ -554,7 +565,8 @@ module unxversal::futures {
         ctx: &mut TxContext,
     ) {
         assert!(table::contains(&market.accounts, ctx.sender()), E_NO_ACCOUNT);
-        let px = gated_price_and_update<Collat>(market, reg, agg, clock);
+        assert!(market.is_settled, E_ALREADY_SETTLED);
+        let px = market.settlement_price_1e6;
         let mut acc = table::remove(&mut market.accounts, ctx.sender());
         let lq = acc.long_qty; let sq = acc.short_qty;
         let (g1,l1) = realize_long_ul(acc.avg_long_1e6, px, lq, market.series.contract_size);
@@ -570,7 +582,7 @@ module unxversal::futures {
     public fun account_equity_1e6<Collat>(market: &FuturesMarket<Collat>, who: address, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock): u128 {
         if (!table::contains(&market.accounts, who)) return 0;
         let acc = table::borrow(&market.accounts, who);
-        let px = current_price_1e6(&market.series, reg, agg, clock);
+        let px = if (market.is_settled) { market.settlement_price_1e6 } else { current_price_1e6(&market.series, reg, agg, clock) };
         let eq = equity_collat(acc, px, market.series.contract_size);
         (eq as u128) * 1_000_000u128
     }
@@ -743,11 +755,49 @@ module unxversal::futures {
         cur
     }
 
+    // === Keeper utilities ===
+    /// Entry: update last index price without trading, for off-chain keepers
+    public fun update_index_price<Collat>(market: &mut FuturesMarket<Collat>, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, _ctx: &mut TxContext) {
+        let _ = gated_price_and_update<Collat>(market, reg, agg, clock);
+    }
+
+    /// Entry: snap canonical settlement price once after expiry; cancels all resting orders and unlocks maker IM
+    public fun snap_settlement_price<Collat>(market: &mut FuturesMarket<Collat>, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, _ctx: &mut TxContext) {
+        let now = clock.timestamp_ms();
+        assert!(market.series.expiry_ms > 0 && now >= market.series.expiry_ms, E_EXPIRED);
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
+        let px = current_price_1e6(&market.series, reg, agg, clock);
+        market.settlement_price_1e6 = px;
+        market.is_settled = true;
+        market.close_only = true;
+        // Drain all orders and unlock IM to makers
+        let cancels = ubk::drain_all_collect(&mut market.book, 1_000_000);
+        let mut i: u64 = 0; let n = vector::length(&cancels);
+        while (i < n) {
+            let c = *vector::borrow(&cancels, i);
+            let oid = ubk::cancel_order_id(&c);
+            if (table::contains(&market.owners, oid)) {
+                let maker = *table::borrow(&market.owners, oid);
+                let rem = ubk::cancel_remaining_qty(&c);
+                if (rem > 0) {
+                    let mut acc = take_or_new_account<Collat>(market, maker);
+                    let unlock = im_for_qty(&market.series, rem, px, market.initial_margin_bps);
+                    if (acc.locked_im >= unlock) { acc.locked_im = acc.locked_im - unlock; } else { acc.locked_im = 0; };
+                    store_account<Collat>(market, maker, acc);
+                };
+                let _ = table::remove(&mut market.owners, oid);
+            };
+            i = i + 1;
+        };
+    }
+
     // ===== Maker order APIs =====
     public fun place_limit_bid<Collat>(market: &mut FuturesMarket<Collat>, price_1e6: u64, qty: u64, expire_ts: u64, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, ctx: &mut TxContext) {
         assert!(qty > 0, E_ZERO);
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
         let now = clock.timestamp_ms();
         assert!(expire_ts > now, E_EXPIRED);
+        if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         let idx = current_price_1e6(&market.series, reg, agg, clock);
         let need = im_for_qty(&market.series, qty, idx, market.initial_margin_bps);
@@ -765,8 +815,10 @@ module unxversal::futures {
 
     public fun place_limit_ask<Collat>(market: &mut FuturesMarket<Collat>, price_1e6: u64, qty: u64, expire_ts: u64, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, ctx: &mut TxContext) {
         assert!(qty > 0, E_ZERO);
+        assert!(!market.is_settled, E_ALREADY_SETTLED);
         let now = clock.timestamp_ms();
         assert!(expire_ts > now, E_EXPIRED);
+        if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         let idx = current_price_1e6(&market.series, reg, agg, clock);
         let need = im_for_qty(&market.series, qty, idx, market.initial_margin_bps);
@@ -788,7 +840,7 @@ module unxversal::futures {
         assert!(owner == ctx.sender(), E_NOT_ADMIN);
         let (filled, qty) = ubk::order_progress(&market.book, order_id);
         let remaining = if (qty > filled) { qty - filled } else { 0 };
-        let idx = current_price_1e6(&market.series, reg, agg, clock);
+        let idx = if (market.is_settled) { market.settlement_price_1e6 } else { current_price_1e6(&market.series, reg, agg, clock) };
         let unlock = im_for_qty(&market.series, remaining, idx, market.initial_margin_bps);
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         if (acc.locked_im >= unlock) { acc.locked_im = acc.locked_im - unlock; } else { acc.locked_im = 0; };

@@ -53,7 +53,35 @@
   height: 44px;
 }
 
-.pair { font-weight: 600; }
+.pair { 
+  font-weight: 600; 
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.expirySelector {
+  background: rgba(59, 130, 246, 0.2);
+  border: none;
+  color: #3b82f6;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.expirySelector:hover {
+  background: rgba(59, 130, 246, 0.3);
+  color: #60a5fa;
+}
+
+.expirySelector:focus {
+  background: rgba(59, 130, 246, 0.3);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
 
 .metrics { 
   display: flex; 

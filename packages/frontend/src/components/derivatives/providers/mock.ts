@@ -1,4 +1,4 @@
-import type { Candle, DerivativesDataProvider, FundingHistoryRow, OrderRow, PositionRow, RecentTradeRow, TwapRow, UTCTimestamp } from '../types';
+import type { Candle, DerivativesDataProvider, ExpiryContract, FundingHistoryRow, OrderRow, PositionRow, RecentTradeRow, TwapRow, UTCTimestamp } from '../types';
 
 function generateCandles(now: number, step: number, count: number): { candles: Candle[]; volumes: { time: UTCTimestamp; value: number }[] } {
   const candles: Candle[] = [];
@@ -18,19 +18,41 @@ function generateCandles(now: number, step: number, count: number): { candles: C
   return { candles, volumes };
 }
 
-export function createMockDerivativesProvider(): DerivativesDataProvider {
+export function createMockDerivativesProvider(marketType: 'futures' | 'perps' | 'gas-futures' = 'gas-futures'): DerivativesDataProvider {
   return {
     async getSummary() {
-      return {
+      const baseData = {
         last: 0.0234,
         vol24h: 2150000,
         high24h: 0.0256,
         low24h: 0.0221,
         change24h: 4.70,
         openInterest: 15750000,
-        fundingRate: 0.0125,
-        nextFunding: Date.now() + 3599000,
       };
+
+      if (marketType === 'perps') {
+        return {
+          ...baseData,
+          fundingRate: 0.0125,
+          nextFunding: Date.now() + 3599000,
+        };
+      } else if (marketType === 'futures') {
+        // Futures expire in 30 days for this example
+        const expiryDate = Date.now() + (30 * 24 * 60 * 60 * 1000);
+        return {
+          ...baseData,
+          expiryDate,
+          timeToExpiry: expiryDate - Date.now(),
+        };
+      } else {
+        // Gas futures - shorter expiry (7 days)
+        const expiryDate = Date.now() + (7 * 24 * 60 * 60 * 1000);
+        return {
+          ...baseData,
+          expiryDate,
+          timeToExpiry: expiryDate - Date.now(),
+        };
+      }
     },
     async getOhlc(tf) {
       const now = Math.floor(Date.now()/1000);
@@ -107,6 +129,45 @@ export function createMockTradePanelProvider() {
       await new Promise(r => setTimeout(r, 500));
     },
   };
+}
+
+export function createMockExpiryContracts(marketType: 'futures' | 'gas-futures'): ExpiryContract[] {
+  const now = new Date();
+  const contracts: ExpiryContract[] = [];
+  
+  if (marketType === 'futures') {
+    // Monthly futures contracts for next 6 months
+    for (let i = 0; i < 6; i++) {
+      const expiryDate = new Date(now.getFullYear(), now.getMonth() + i + 1, 25); // 25th of each month
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const label = `${monthNames[expiryDate.getMonth()]} ${expiryDate.getFullYear().toString().slice(-2)}`;
+      
+      contracts.push({
+        id: `${expiryDate.getFullYear()}-${(expiryDate.getMonth() + 1).toString().padStart(2, '0')}`,
+        label,
+        expiryDate: expiryDate.getTime(),
+        isActive: i === 0, // First contract is active by default
+      });
+    }
+  } else if (marketType === 'gas-futures') {
+    // Weekly gas futures for next 4 weeks
+    for (let i = 0; i < 4; i++) {
+      const expiryDate = new Date(now);
+      expiryDate.setDate(now.getDate() + (7 * (i + 1))); // Next 4 Fridays
+      expiryDate.setHours(16, 0, 0, 0); // 4 PM UTC
+      
+      const label = `${expiryDate.getMonth() + 1}/${expiryDate.getDate()}`;
+      
+      contracts.push({
+        id: `week-${i + 1}`,
+        label,
+        expiryDate: expiryDate.getTime(),
+        isActive: i === 0, // First contract is active by default
+      });
+    }
+  }
+  
+  return contracts;
 }
 
 

@@ -59,6 +59,77 @@ async function updateSwitchboardFeeds(): Promise<void> {
 }
 
 /**
+ * Keeper: proactively refresh last observed index price for all futures & gas_futures markets.
+ * This helps the live price be fresh without requiring a trade.
+ */
+async function refreshIndexPrices(): Promise<void> {
+  const tx = new Transaction();
+  // Update futures markets
+  for (const m of FUTURES_MARKET_IDS) {
+    try {
+      tx.moveCall({
+        target: `${config.pkgId}::futures::update_index_price`,
+        arguments: [tx.object(m), tx.object(ORACLE_REGISTRY_ID), tx.pure.id('0x0'), tx.object('0x6')],
+      });
+    } catch (e) {
+      // ignore build issues per market; continue batching others
+    }
+  }
+  // Update gas futures
+  for (const m of GAS_FUTURES_MARKET_IDS) {
+    try {
+      tx.moveCall({
+        target: `${config.pkgId}::gas_futures::update_index_price`,
+        arguments: [tx.object(m), tx.object('0x6')],
+      });
+    } catch (e) {}
+  }
+  // If nothing added, skip send
+  if ((tx as any).blockData?.commands?.length === 0) return;
+  try {
+    const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
+    await client.waitForTransaction({ digest: res.digest });
+    logger.info(`Refreshed index prices for futures=${FUTURES_MARKET_IDS.length} gas=${GAS_FUTURES_MARKET_IDS.length}`);
+  } catch (e) {
+    logger.error(`refreshIndexPrices failed: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Keeper: snap settlement prices for any markets past expiry. We attempt all; settled ones will revert gracefully.
+ */
+async function snapSettlements(): Promise<void> {
+  // Futures snap
+  for (const m of FUTURES_MARKET_IDS) {
+    try {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${config.pkgId}::futures::snap_settlement_price`,
+        arguments: [tx.object(m), tx.object(ORACLE_REGISTRY_ID), tx.pure.id('0x0'), tx.object('0x6')],
+      });
+      const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
+      await client.waitForTransaction({ digest: res.digest });
+      logger.info(`Futures settlement snapped market=${m}`);
+    } catch (e) {
+      // Ignore if not yet expired or already settled
+    }
+  }
+  // Gas futures snap
+  for (const m of GAS_FUTURES_MARKET_IDS) {
+    try {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${config.pkgId}::gas_futures::snap_settlement_price`,
+        arguments: [tx.object(m), tx.object('0x6')],
+      });
+      const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
+      await client.waitForTransaction({ digest: res.digest });
+      logger.info(`Gas futures settlement snapped market=${m}`);
+    } catch (e) {}
+  }
+}
+
+/**
  * Options: sweep expired orders for each market/series key.
  * This requires you to provide the list of series keys per market; for simplicity
  * we accept a comma-separated list in env per market: UNXV_OPTIONS_SERIES_<index>
@@ -154,6 +225,8 @@ async function runCron(): Promise<void> {
       (async () => { await updateSwitchboardFeeds(); })(),
       (async () => { await sweepExpiredOptions(); })(),
       (async () => { await applyPerpFunding(); })(),
+      (async () => { await refreshIndexPrices(); })(),
+      (async () => { await snapSettlements(); })(),
     ]);
     await sleep(CRON_SLEEP_MS);
   }

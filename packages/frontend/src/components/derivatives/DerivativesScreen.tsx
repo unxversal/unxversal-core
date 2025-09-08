@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import styles from './DerivativesScreen.module.css';
 import { createChart, type IChartApi, type CandlestickData, type UTCTimestamp, CandlestickSeries, LineSeries, BarSeries } from 'lightweight-charts';
 import { Orderbook } from './Orderbook';
@@ -8,7 +8,7 @@ import { useCurrentAccount } from '@mysten/dapp-kit';
 import { Wifi, WifiOff, Activity, Pause, BarChart3, Crosshair, Square, LineChart, CandlestickChart, Waves, Eye, Clock, TrendingUp, Minus } from 'lucide-react';
 import type { DerivativesScreenProps } from './types';
 
-export function DerivativesScreen({ started, surgeReady, network, marketLabel, symbol, quoteSymbol = 'USDC', dataProvider, panelProvider, TradePanelComponent }: DerivativesScreenProps) {
+export function DerivativesScreen({ started, surgeReady, network, marketLabel, symbol, quoteSymbol = 'USDC', dataProvider, panelProvider, TradePanelComponent, availableExpiries, onExpiryChange }: DerivativesScreenProps) {
   const account = useCurrentAccount();
 
   const [summary, setSummary] = useState<{ 
@@ -20,9 +20,13 @@ export function DerivativesScreen({ started, surgeReady, network, marketLabel, s
     openInterest?: number;
     fundingRate?: number;
     nextFunding?: number;
+    expiryDate?: number;
+    timeToExpiry?: number;
   }>({});
   const [mid, setMid] = useState<number>(0);
   const [centerTab, setCenterTab] = useState<'orderbook' | 'trades'>('orderbook');
+  // Determine if this is a perpetual market (has funding) vs futures (has expiry)
+  const isPerp = summary.fundingRate !== undefined;
   const [activityTab, setActivityTab] = useState<'positions' | 'orders' | 'twap' | 'trades' | 'funding' | 'history'>('positions');
   const chartRef = useRef<HTMLDivElement | null>(null);
   const chartApi = useRef<IChartApi | null>(null);
@@ -49,14 +53,16 @@ export function DerivativesScreen({ started, surgeReady, network, marketLabel, s
     let mounted = true;
     const load = async () => {
       try {
+        let currentSummaryData;
         if (dataProvider?.getSummary) {
           const s = await dataProvider.getSummary();
           if (!mounted) return;
           setSummary(s);
+          currentSummaryData = s;
         } else {
           // Mock
           if (!mounted) return;
-          setSummary({ 
+          const mockSummary = { 
             last: 0.0234, 
             vol24h: 2150000, 
             high24h: 0.0256, 
@@ -65,7 +71,9 @@ export function DerivativesScreen({ started, surgeReady, network, marketLabel, s
             openInterest: 15750000,
             fundingRate: 0.012500,
             nextFunding: Date.now() + 3599000
-          });
+          };
+          setSummary(mockSummary);
+          currentSummaryData = mockSummary;
         }
 
         if (dataProvider?.getPositions) setSamplePositions(await dataProvider.getPositions());
@@ -87,11 +95,16 @@ export function DerivativesScreen({ started, surgeReady, network, marketLabel, s
         ] as any);
 
         if (dataProvider?.getFundingHistory) setSampleFundingHistory(await dataProvider.getFundingHistory());
-        else setSampleFundingHistory([
-          { timestamp: '2024-01-15 08:00:00', rate: '0.0125%', payment: '-1.25 USDC' },
-          { timestamp: '2024-01-15 00:00:00', rate: '0.0087%', payment: '-0.87 USDC' },
-          { timestamp: '2024-01-14 16:00:00', rate: '-0.0043%', payment: '+0.43 USDC' },
-        ]);
+        else if (currentSummaryData?.fundingRate !== undefined) {
+          // Only load mock funding history for perps
+          setSampleFundingHistory([
+            { timestamp: '2024-01-15 08:00:00', rate: '0.0125%', payment: '-1.25 USDC' },
+            { timestamp: '2024-01-15 00:00:00', rate: '0.0087%', payment: '-0.87 USDC' },
+            { timestamp: '2024-01-14 16:00:00', rate: '-0.0043%', payment: '+0.43 USDC' },
+          ]);
+        } else {
+          setSampleFundingHistory([]);
+        }
 
         if (dataProvider?.getTwap) setSampleTwapData(await dataProvider.getTwap());
         else setSampleTwapData([
@@ -171,7 +184,7 @@ export function DerivativesScreen({ started, surgeReady, network, marketLabel, s
           try {
             const r = await dataProvider.getOhlc(tf);
             data = r.candles.map(c => ({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close }));
-            vols = r.volumes ?? [];
+            vols = (r.volumes ?? []).map(v => ({ time: v.time as UTCTimestamp, value: v.value }));
           } catch {}
         }
         if (data.length === 0) {
@@ -290,11 +303,51 @@ export function DerivativesScreen({ started, surgeReady, network, marketLabel, s
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
 
+  // Format expiry countdown for futures
+  const formatExpiryCountdown = (timeToExpiry: number) => {
+    if (timeToExpiry <= 0) return 'EXPIRED';
+    const days = Math.floor(timeToExpiry / (24 * 60 * 60 * 1000));
+    const hours = Math.floor((timeToExpiry % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+    const minutes = Math.floor((timeToExpiry % (60 * 60 * 1000)) / (60 * 1000));
+    
+    if (days > 0) {
+      return `${days}d ${hours}h ${minutes}m`;
+    } else if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    } else {
+      return `${minutes}m`;
+    }
+  };
+
+  // Format expiry date
+  const formatExpiryDate = (timestamp: number) => {
+    return new Date(timestamp).toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      year: 'numeric' 
+    });
+  };
+
   return (
     <div className={styles.root}>
       <div className={styles.priceCard}>
         <div className={styles.pairBar}>
-          <div className={styles.pair}>{marketLabel}</div>
+          <div className={styles.pair}>
+            {marketLabel}
+            {availableExpiries && availableExpiries.length > 0 && (
+              <select 
+                className={styles.expirySelector}
+                value={availableExpiries.find(e => e.isActive)?.id || availableExpiries[0]?.id || ''}
+                onChange={(e) => onExpiryChange?.(e.target.value)}
+              >
+                {availableExpiries.map(expiry => (
+                  <option key={expiry.id} value={expiry.id}>
+                    {expiry.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
           <div className={styles.metrics}>
             <div className={styles.metricItem}>
               <div className={styles.metricValue}>{summary.last?.toFixed(4) ?? '-'}</div>
@@ -314,19 +367,40 @@ export function DerivativesScreen({ started, surgeReady, network, marketLabel, s
               <div className={styles.metricValue}>{summary.openInterest?.toLocaleString() ?? '-'}</div>
               <div className={styles.metricLabel}>OI</div>
             </div>
-            <div className={styles.metricItem}>
-              <div className={styles.metricValue}>
-                {summary.fundingRate ? (summary.fundingRate * 100).toFixed(4) + '%' : '-'}
-              </div>
-              <div className={styles.metricLabel}>Funding</div>
-            </div>
-            <div className={`${styles.metricItem} ${styles.fundingItem}`}>
-              <div className={styles.metricValue}>
-                <Clock size={10} />
-                {summary.nextFunding ? formatCountdown(summary.nextFunding) : '--:--:--'}
-              </div>
-              <div className={styles.metricLabel}>Countdown</div>
-            </div>
+            {isPerp && summary.fundingRate !== undefined && (
+              <>
+                <div className={styles.metricItem}>
+                  <div className={styles.metricValue}>
+                    {(summary.fundingRate * 100).toFixed(4)}%
+                  </div>
+                  <div className={styles.metricLabel}>Funding</div>
+                </div>
+                <div className={`${styles.metricItem} ${styles.fundingItem}`}>
+                  <div className={styles.metricValue}>
+                    <Clock size={10} />
+                    {summary.nextFunding ? formatCountdown(summary.nextFunding) : '--:--:--'}
+                  </div>
+                  <div className={styles.metricLabel}>Next Funding</div>
+                </div>
+              </>
+            )}
+            {summary.expiryDate !== undefined && (
+              <>
+                <div className={styles.metricItem}>
+                  <div className={styles.metricValue}>
+                    {formatExpiryDate(summary.expiryDate)}
+                  </div>
+                  <div className={styles.metricLabel}>Expiry</div>
+                </div>
+                <div className={`${styles.metricItem} ${styles.fundingItem}`}>
+                  <div className={styles.metricValue}>
+                    <Clock size={10} />
+                    {summary.timeToExpiry ? formatExpiryCountdown(summary.timeToExpiry) : 'EXPIRED'}
+                  </div>
+                  <div className={styles.metricLabel}>Time to Expiry</div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -442,7 +516,9 @@ export function DerivativesScreen({ started, surgeReady, network, marketLabel, s
             <button className={activityTab === 'orders' ? styles.active : ''} onClick={() => setActivityTab('orders')}>Open Orders</button>
             <button className={activityTab === 'twap' ? styles.active : ''} onClick={() => setActivityTab('twap')}>TWAP</button>
             <button className={activityTab === 'trades' ? styles.active : ''} onClick={() => setActivityTab('trades')}>Trade History</button>
-            <button className={activityTab === 'funding' ? styles.active : ''} onClick={() => setActivityTab('funding')}>Funding History</button>
+            {isPerp && (
+              <button className={activityTab === 'funding' ? styles.active : ''} onClick={() => setActivityTab('funding')}>Funding History</button>
+            )}
             <button className={activityTab === 'history' ? styles.active : ''} onClick={() => setActivityTab('history')}>Order History</button>
           </div>
           <div className={styles.activityContent}>
@@ -572,7 +648,7 @@ export function DerivativesScreen({ started, surgeReady, network, marketLabel, s
                 )}
               </>
             )}
-            {activityTab === 'funding' && (
+            {activityTab === 'funding' && isPerp && (
               <>
                 {sampleFundingHistory.length > 0 ? (
                   <table className={styles.ordersTable}>
