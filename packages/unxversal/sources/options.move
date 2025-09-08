@@ -49,6 +49,10 @@ module unxversal::options {
     // const E_NOT_ITM: u64 = 10;
     const E_SERIES_EXISTS: u64 = 11;
 
+    // Settlement anchoring (pre-expiry sampling)
+    const TWAP_MAX_SAMPLES: u64 = 64;
+    const TWAP_WINDOW_MS: u64 = 300_000; // 5 minutes
+
     /// Fixed-point scale for proceeds per unit index (1e12)
     const PROCEEDS_INDEX_SCALE: u128 = 1_000_000_000_000;
 
@@ -87,6 +91,14 @@ module unxversal::options {
         /// Cumulative proceeds per sold unit scaled by PROCEEDS_INDEX_SCALE
         proceeds_index_1e12: u128,
         settled: bool,
+        /// Frozen settlement price for the series (1e6 scale)
+        settlement_price_1e6: u64,
+        /// Last valid pre-expiry oracle print and timestamp
+        lvp_price_1e6: u64,
+        lvp_ts_ms: u64,
+        /// Pre-expiry TWAP sample buffers
+        twap_ts_ms: vector<u64>,
+        twap_px_1e6: vector<u64>,
     }
 
     public struct OptionsMarket<phantom Base, phantom Quote> has key, store {
@@ -121,6 +133,8 @@ module unxversal::options {
     public struct OptionPositionUpdated has copy, drop { key: u128, owner: address, position_id: ID, increase: bool, delta_units: u64, new_amount: u64, timestamp_ms: u64 }
     /// Writer proceeds claim confirmation
     public struct WriterClaimed has copy, drop { key: u128, writer: address, amount_base: u64, amount_quote: u64, timestamp_ms: u64 }
+    /// Series settlement event
+    public struct SeriesSettled has copy, drop { key: u128, price_1e6: u64, timestamp_ms: u64 }
 
     // === Init ===
     public fun init_market<Base, Quote>(reg_admin: &AdminRegistry, ctx: &mut TxContext) {
@@ -157,6 +171,11 @@ module unxversal::options {
             total_exercised_units: 0,
             proceeds_index_1e12: 0,
             settled: false,
+            settlement_price_1e6: 0,
+            lvp_price_1e6: 0,
+            lvp_ts_ms: 0,
+            twap_ts_ms: vector::empty<u64>(),
+            twap_px_1e6: vector::empty<u64>(),
         };
         table::add(&mut market.series, key, ser);
         event::emit(SeriesCreated { key, expiry_ms, strike_1e6, is_call });
@@ -415,6 +434,177 @@ module unxversal::options {
             transfer::public_transfer(pos, ctx.sender());
             (option::none<Coin<Base>>(), option::some(q_out))
         }
+    }
+
+    // === Keeper utilities: pre-expiry sampling and snap ===
+    /// Record a pre-expiry price sample for a series (LVP + TWAP buffers)
+    public fun update_series_index_price<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, key: u128, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, _ctx: &mut TxContext) {
+        assert!(table::contains(&market.series, key), E_INVALID_SERIES);
+        let ser = table::borrow_mut(&mut market.series, key);
+        let now = clock.timestamp_ms();
+        if (now > ser.series.expiry_ms) return;
+        let px = uoracle::get_price_for_symbol(reg, clock, &ser.series.symbol, agg);
+        ser.lvp_price_1e6 = px; ser.lvp_ts_ms = now;
+        twap_append(&mut ser.twap_ts_ms, &mut ser.twap_px_1e6, now, px, ser.series.expiry_ms);
+    }
+
+    /// Snap canonical settlement price once after expiry (LVP preferred, else TWAP, else live)
+    public fun snap_series_settlement<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, key: u128, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, ctx: &mut TxContext) {
+        assert!(table::contains(&market.series, key), E_INVALID_SERIES);
+        let ser = table::borrow_mut(&mut market.series, key);
+        let now = clock.timestamp_ms();
+        assert!(now >= ser.series.expiry_ms, E_EXPIRED);
+        assert!(!ser.settled, E_EXPIRED);
+        let px = if (ser.lvp_ts_ms > 0 && ser.lvp_ts_ms <= ser.series.expiry_ms) {
+            ser.lvp_price_1e6
+        } else {
+            let tw = compute_twap_in_window(&ser.twap_ts_ms, &ser.twap_px_1e6, ser.series.expiry_ms, TWAP_WINDOW_MS);
+            if (tw > 0) { tw } else { uoracle::get_price_for_symbol(reg, clock, &ser.series.symbol, agg) }
+        };
+        ser.settlement_price_1e6 = px;
+        ser.settled = true;
+        // Drain all resting orders and unlock remaining collateral for asks
+        let cancels = ubk::drain_all_collect(&mut ser.book, 1_000_000);
+        let mut i = 0u64; let n = vector::length(&cancels);
+        while (i < n) {
+            let c = *vector::borrow(&cancels, i);
+            let oid = ubk::cancel_order_id(&c);
+            if (table::contains(&ser.owners, oid)) {
+                let maker = *table::borrow(&ser.owners, oid);
+                // Only unlock for asks
+                let (is_bid_side, _, _) = uutils::decode_order_id(oid);
+                if (!is_bid_side) {
+                    let rem = ubk::cancel_remaining_qty(&c);
+                    if (rem > 0) { unlock_excess_collateral(ser, maker, rem, clock, ctx); };
+                };
+                let _ = table::remove(&mut ser.owners, oid);
+            };
+            i = i + 1;
+        };
+        event::emit(SeriesSettled { key, price_1e6: px, timestamp_ms: now });
+    }
+
+    /// Settle a long position after expiry at frozen price (physical settlement using provided coins)
+    public fun settle_position_after_expiry<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, mut pos: OptionPosition<Base, Quote>, amount: u64, reg: &OracleRegistry, agg: &Aggregator, mut pay_quote: Option<Coin<Quote>>, mut pay_base: Option<Coin<Base>>, clock: &Clock, ctx: &mut TxContext): (Option<Coin<Base>>, Option<Coin<Quote>>) {
+        assert!(table::contains(&market.series, pos.key), E_INVALID_SERIES);
+        assert!(amount > 0 && amount <= pos.amount, E_ZERO);
+        let ser = table::borrow_mut(&mut market.series, pos.key);
+        assert!(clock.timestamp_ms() >= ser.series.expiry_ms && ser.settled, E_EXPIRED);
+        let spot_1e6 = ser.settlement_price_1e6;
+        let strike = ser.series.strike_1e6;
+        if (ser.series.is_call) {
+            if (!(spot_1e6 > strike)) {
+                // worthless
+                if (option::is_some(&pay_quote)) { let q = option::extract(&mut pay_quote); transfer::public_transfer(q, ctx.sender()); };
+                option::destroy_none(pay_quote);
+                if (option::is_some(&pay_base)) { let b = option::extract(&mut pay_base); transfer::public_transfer(b, ctx.sender()); };
+                option::destroy_none(pay_base);
+                transfer::public_transfer(pos, ctx.sender());
+                return (option::none<Coin<Base>>(), option::none<Coin<Quote>>())
+            };
+            // Pay strike*amount in Quote; receive Base
+            let due_q = mul_u64_u64(strike, amount);
+            assert!(option::is_some(&pay_quote), E_ZERO);
+            let mut q_in = option::extract(&mut pay_quote);
+            assert!(coin::value(&q_in) >= due_q, E_ZERO);
+            let q_due = coin::split(&mut q_in, due_q, ctx);
+            let qbal = coin::into_balance(q_due);
+            ser.pooled_quote.join(qbal);
+            transfer::public_transfer(q_in, ctx.sender());
+            let bsplit = balance::split(&mut ser.pooled_base, amount);
+            let base_out = coin::from_balance(bsplit, ctx);
+            ser.total_exercised_units = ser.total_exercised_units + amount;
+            if (ser.total_sold_units > 0) {
+                let delta_index: u128 = ((due_q as u128) * PROCEEDS_INDEX_SCALE) / (ser.total_sold_units as u128);
+                ser.proceeds_index_1e12 = ser.proceeds_index_1e12 + delta_index;
+            };
+            if (ser.total_sold_units >= amount) { ser.total_sold_units = ser.total_sold_units - amount; } else { ser.total_sold_units = 0; };
+            pos.amount = pos.amount - amount;
+            event::emit(OptionPositionUpdated { key: pos.key, owner: ctx.sender(), position_id: object::id(&pos), increase: false, delta_units: amount, new_amount: pos.amount, timestamp_ms: clock.timestamp_ms() });
+            option::destroy_none(pay_quote);
+            if (option::is_some(&pay_base)) { let b2 = option::extract(&mut pay_base); transfer::public_transfer(b2, ctx.sender()); };
+            option::destroy_none(pay_base);
+            transfer::public_transfer(pos, ctx.sender());
+            (option::some(base_out), option::none<Coin<Quote>>())
+        } else {
+            if (!(spot_1e6 < strike)) {
+                if (option::is_some(&pay_quote)) { let q2 = option::extract(&mut pay_quote); transfer::public_transfer(q2, ctx.sender()); };
+                option::destroy_none(pay_quote);
+                if (option::is_some(&pay_base)) { let b2 = option::extract(&mut pay_base); transfer::public_transfer(b2, ctx.sender()); };
+                option::destroy_none(pay_base);
+                transfer::public_transfer(pos, ctx.sender());
+                return (option::none<Coin<Base>>(), option::none<Coin<Quote>>())
+            };
+            assert!(option::is_some(&pay_base), E_ZERO);
+            let mut b_in = option::extract(&mut pay_base);
+            assert!(coin::value(&b_in) >= amount, E_ZERO);
+            let b_due = coin::split(&mut b_in, amount, ctx);
+            ser.pooled_base.join(coin::into_balance(b_due));
+            transfer::public_transfer(b_in, ctx.sender());
+            let due_q = mul_u64_u64(strike, amount);
+            let qsplit = balance::split(&mut ser.pooled_quote, due_q);
+            let q_out = coin::from_balance(qsplit, ctx);
+            ser.total_exercised_units = ser.total_exercised_units + amount;
+            if (ser.total_sold_units > 0) {
+                let delta_index2: u128 = ((amount as u128) * PROCEEDS_INDEX_SCALE) / (ser.total_sold_units as u128);
+                ser.proceeds_index_1e12 = ser.proceeds_index_1e12 + delta_index2;
+            };
+            if (ser.total_sold_units >= amount) { ser.total_sold_units = ser.total_sold_units - amount; } else { ser.total_sold_units = 0; };
+            pos.amount = pos.amount - amount;
+            event::emit(OptionPositionUpdated { key: pos.key, owner: ctx.sender(), position_id: object::id(&pos), increase: false, delta_units: amount, new_amount: pos.amount, timestamp_ms: clock.timestamp_ms() });
+            if (option::is_some(&pay_quote)) { let q3 = option::extract(&mut pay_quote); transfer::public_transfer(q3, ctx.sender()); };
+            option::destroy_none(pay_quote);
+            option::destroy_none(pay_base);
+            transfer::public_transfer(pos, ctx.sender());
+            (option::none<Coin<Base>>(), option::some(q_out))
+        }
+    }
+
+    /// Writer unlock after expiry for OTM series (returns remaining locked collateral)
+    public fun writer_unlock_after_expiry<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, key: u128, clock: &Clock, ctx: &mut TxContext) {
+        assert!(table::contains(&market.series, key), E_INVALID_SERIES);
+        let ser = table::borrow_mut(&mut market.series, key);
+        assert!(clock.timestamp_ms() >= ser.series.expiry_ms && ser.settled, E_EXPIRED);
+        let strike = ser.series.strike_1e6;
+        let spot = ser.settlement_price_1e6;
+        let mut wi = if (table::contains(&ser.writer, ctx.sender())) { table::remove(&mut ser.writer, ctx.sender()) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0, proceeds_index_snap_1e12: ser.proceeds_index_1e12 } };
+        if (ser.series.is_call) {
+            if (spot <= strike && wi.locked_base > 0) {
+                let amt = wi.locked_base; wi.locked_base = 0;
+                let bsplit = balance::split(&mut ser.pooled_base, amt);
+                let c = coin::from_balance(bsplit, ctx);
+                transfer::public_transfer(c, ctx.sender());
+                event::emit(CollateralUnlocked { key, writer: ctx.sender(), is_call: true, amount_base: amt, amount_quote: 0, reason: 1, timestamp_ms: clock.timestamp_ms() });
+            };
+        } else {
+            if (spot >= strike) {
+                let need_q = wi.locked_quote; if (need_q > 0) {
+                    let qsplit = balance::split(&mut ser.pooled_quote, need_q);
+                    let cq = coin::from_balance(qsplit, ctx);
+                    wi.locked_quote = 0;
+                    transfer::public_transfer(cq, ctx.sender());
+                    event::emit(CollateralUnlocked { key, writer: ctx.sender(), is_call: false, amount_base: 0, amount_quote: need_q, reason: 1, timestamp_ms: clock.timestamp_ms() });
+                };
+            };
+        };
+        table::add(&mut ser.writer, ctx.sender(), wi);
+    }
+
+    // === TWAP helpers ===
+    fun twap_append(ts: &mut vector<u64>, px: &mut vector<u64>, now: u64, price_1e6: u64, expiry_ms: u64) {
+        vector::push_back(ts, now); vector::push_back(px, price_1e6);
+        let mut n = vector::length(ts);
+        if (n > TWAP_MAX_SAMPLES) { let remove = n - TWAP_MAX_SAMPLES; let mut i = 0; while (i < remove) { let _ = vector::remove(ts, 0); let _2 = vector::remove(px, 0); i = i + 1; }; };
+        let window_start = if (TWAP_WINDOW_MS < expiry_ms) { expiry_ms - TWAP_WINDOW_MS } else { 0 };
+        while (vector::length(ts) > 0) { let t0 = *vector::borrow(ts, 0); if (t0 >= window_start) break; let _ = vector::remove(ts, 0); let _3 = vector::remove(px, 0); };
+    }
+
+    fun compute_twap_in_window(ts: &vector<u64>, px: &vector<u64>, end_ms: u64, window_ms: u64): u64 {
+        let n = vector::length(ts); if (n == 0) return 0;
+        let start_ms = if (window_ms < end_ms) { end_ms - window_ms } else { 0 };
+        let mut i = 0; let mut sum_weighted: u128 = 0; let mut sum_dt: u128 = 0; let mut prev_t = start_ms; let mut prev_px = *vector::borrow(px, 0);
+        while (i < n) { let t = *vector::borrow(ts, i); let p = *vector::borrow(px, i); if (t < start_ms) { i = i + 1; prev_t = t; prev_px = p; continue }; let dt = if (t > prev_t) { (t - prev_t) as u128 } else { 0u128 }; sum_weighted = sum_weighted + dt * (prev_px as u128); sum_dt = sum_dt + dt; prev_t = t; prev_px = p; i = i + 1; };
+        let tail_dt = if (end_ms > prev_t) { (end_ms - prev_t) as u128 } else { 0u128 }; sum_weighted = sum_weighted + tail_dt * (prev_px as u128); sum_dt = sum_dt + tail_dt; if (sum_dt == 0) return *vector::borrow(px, n - 1); (sum_weighted / sum_dt) as u64
     }
 
     // === Writer claims ===

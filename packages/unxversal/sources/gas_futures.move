@@ -31,6 +31,9 @@ module unxversal::gas_futures {
     const E_EXPOSURE_CAP: u64 = 10;
     const E_ALREADY_SETTLED: u64 = 11;
 
+    const TWAP_MAX_SAMPLES: u64 = 64;
+    const TWAP_WINDOW_MS: u64 = 300_000; // 5 minutes
+
     /// Price scaling: treat reference gas price (MIST) as 1e6-scaled units for simplicity,
     /// and divide by 1_000_000 when converting notional to whole collateral units via `contract_size`.
     public struct GasSeries has copy, drop, store {
@@ -65,6 +68,10 @@ module unxversal::gas_futures {
         owners: Table<u128, address>,
         settlement_price_1e6: u64,
         is_settled: bool,
+        lvp_price_1e6: u64,
+        lvp_ts_ms: u64,
+        twap_ts_ms: vector<u64>,
+        twap_px_1e6: vector<u64>,
     }
 
     public struct MarketInitialized has copy, drop { market_id: ID, expiry_ms: u64, contract_size: u64, initial_margin_bps: u64, maintenance_margin_bps: u64, liquidation_fee_bps: u64, keeper_incentive_bps: u64 }
@@ -84,7 +91,7 @@ module unxversal::gas_futures {
     // === Init ===
     public fun init_market<Collat>(reg_admin: &AdminRegistry, expiry_ms: u64, contract_size: u64, im_bps: u64, mm_bps: u64, liq_fee_bps: u64, keeper_bps: u64, tick_size: u64, lot_size: u64, min_size: u64, ctx: &mut TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        let m = GasMarket<Collat> { id: object::new(ctx), series: GasSeries { expiry_ms, contract_size }, accounts: table::new<address, Account<Collat>>(ctx), initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps, close_only: false, max_deviation_bps: 0, last_price_1e6: 0, pnl_fee_share_bps: 0, liq_target_buffer_bps: 0, account_max_gross_qty: 0, market_max_gross_qty: 0, total_long_qty: 0, total_short_qty: 0, imbalance_surcharge_bps_max: 0, imbalance_threshold_bps: 0, book: ubk::empty(tick_size, lot_size, min_size, ctx), owners: table::new<u128, address>(ctx), settlement_price_1e6: 0, is_settled: false };
+        let m = GasMarket<Collat> { id: object::new(ctx), series: GasSeries { expiry_ms, contract_size }, accounts: table::new<address, Account<Collat>>(ctx), initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps, close_only: false, max_deviation_bps: 0, last_price_1e6: 0, pnl_fee_share_bps: 0, liq_target_buffer_bps: 0, account_max_gross_qty: 0, market_max_gross_qty: 0, total_long_qty: 0, total_short_qty: 0, imbalance_surcharge_bps_max: 0, imbalance_threshold_bps: 0, book: ubk::empty(tick_size, lot_size, min_size, ctx), owners: table::new<u128, address>(ctx), settlement_price_1e6: 0, is_settled: false, lvp_price_1e6: 0, lvp_ts_ms: 0, twap_ts_ms: vector::empty<u64>(), twap_px_1e6: vector::empty<u64>() };
         event::emit(MarketInitialized { market_id: object::id(&m), expiry_ms, contract_size, initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps });
         transfer::share_object(m);
     }
@@ -429,7 +436,29 @@ module unxversal::gas_futures {
             assert!(dev_bps <= market.max_deviation_bps, E_PRICE_DEVIATION);
         };
         market.last_price_1e6 = cur;
+        // Record LVP and TWAP sample pre-expiry
+        let now = sui::tx_context::epoch_timestamp_ms(ctx);
+        if (market.series.expiry_ms == 0 || now <= market.series.expiry_ms) {
+            market.lvp_price_1e6 = cur; market.lvp_ts_ms = now;
+            twap_append(&mut market.twap_ts_ms, &mut market.twap_px_1e6, now, cur, market.series.expiry_ms);
+        };
         cur
+    }
+
+    fun twap_append(ts: &mut vector<u64>, px: &mut vector<u64>, now: u64, price_1e6: u64, expiry_ms: u64) {
+        vector::push_back(ts, now); vector::push_back(px, price_1e6);
+        let mut n = vector::length(ts);
+        if (n > TWAP_MAX_SAMPLES) { let remove = n - TWAP_MAX_SAMPLES; let mut i = 0; while (i < remove) { let _ = vector::remove(ts, 0); let _2 = vector::remove(px, 0); i = i + 1; }; n = vector::length(ts); };
+        let window_start = if (expiry_ms > 0) { if (TWAP_WINDOW_MS < expiry_ms) { expiry_ms - TWAP_WINDOW_MS } else { 0 } } else { if (TWAP_WINDOW_MS < now) { now - TWAP_WINDOW_MS } else { 0 } };
+        while (vector::length(ts) > 0) { let oldest = *vector::borrow(ts, 0); if (oldest >= window_start) break; let _ = vector::remove(ts, 0); let _3 = vector::remove(px, 0); };
+    }
+
+    fun compute_twap_in_window(ts: &vector<u64>, px: &vector<u64>, end_ms: u64, window_ms: u64): u64 {
+        let n = vector::length(ts); if (n == 0) return 0;
+        let start_ms = if (window_ms < end_ms) { end_ms - window_ms } else { 0 };
+        let mut i = 0; let mut sum_weighted: u128 = 0; let mut sum_dt: u128 = 0; let mut prev_t = start_ms; let mut prev_px = *vector::borrow(px, 0);
+        while (i < n) { let t = *vector::borrow(ts, i); let p = *vector::borrow(px, i); if (t < start_ms) { i = i + 1; prev_t = t; prev_px = p; continue }; let dt = if (t > prev_t) { (t - prev_t) as u128 } else { 0u128 }; sum_weighted = sum_weighted + dt * (prev_px as u128); sum_dt = sum_dt + dt; prev_t = t; prev_px = p; i = i + 1; };
+        let tail_dt = if (end_ms > prev_t) { (end_ms - prev_t) as u128 } else { 0u128 }; sum_weighted = sum_weighted + tail_dt * (prev_px as u128); sum_dt = sum_dt + tail_dt; if (sum_dt == 0) return *vector::borrow(px, n - 1); (sum_weighted / sum_dt) as u64
     }
 
     // === Keeper utilities ===
@@ -439,11 +468,12 @@ module unxversal::gas_futures {
     }
 
     /// Entry: snap settlement price after expiry and cancel all resting orders, unlocking IM
+    /// Settlement selection: prefer LVP (<= expiry). If missing, fall back to pre-expiry TWAP over TWAP_WINDOW_MS.
     public fun snap_settlement_price<Collat>(market: &mut GasMarket<Collat>, clock: &Clock, ctx: &mut TxContext) {
         let now = clock.timestamp_ms();
         assert!(market.series.expiry_ms > 0 && now >= market.series.expiry_ms, E_EXPIRED);
         assert!(!market.is_settled, E_ALREADY_SETTLED);
-        let px = current_gas_price_1e6(ctx);
+        let px = if (market.lvp_ts_ms > 0 && market.lvp_ts_ms <= market.series.expiry_ms) { market.lvp_price_1e6 } else { let tw = compute_twap_in_window(&market.twap_ts_ms, &market.twap_px_1e6, market.series.expiry_ms, TWAP_WINDOW_MS); if (tw > 0) { tw } else { current_gas_price_1e6(ctx) } };
         market.settlement_price_1e6 = px;
         market.is_settled = true;
         market.close_only = true;

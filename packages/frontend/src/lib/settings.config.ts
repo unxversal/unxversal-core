@@ -28,9 +28,6 @@ export type AppSettings = {
     staking: boolean;
     prices: boolean; // start price feeds
   };
-  keepers: {
-    autoResume: boolean;
-  };
   markets: {
     autostartOnConnect: boolean;
     watchlist: string[]; // pool symbols like "SUI/USDC"
@@ -56,9 +53,6 @@ const defaultSettings: AppSettings = {
     perps: false,
     staking: false,
     prices: false,
-  },
-  keepers: {
-    autoResume: false,
   },
   markets: {
     autostartOnConnect: true,

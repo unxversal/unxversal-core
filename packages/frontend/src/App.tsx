@@ -5,13 +5,9 @@ import { createSuiClient, defaultRpc } from './lib/network'
 import { startTrackers } from './lib/indexer'
 import { loadSettings } from './lib/settings.config'
 import { allProtocolTrackers } from './protocols'
-import { KeeperManager } from './strategies/keeperManager.ts'
-import { buildKeeperFromStrategy } from './strategies/factory.ts'
-import { SuiClient } from '@mysten/sui/client'
-import { Transaction } from '@mysten/sui/transactions'
 import { startPriceFeeds } from './lib/switchboard'
 import { startDefaultMarketWatcher } from './lib/marketWatcher'
-import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
+import { useCurrentAccount } from '@mysten/dapp-kit'
 import styles from './components/AppShell.module.css'
 import { Wifi, WifiOff, Activity, Pause } from 'lucide-react'
 import { DexScreen } from './components/dex/DexScreen'
@@ -21,7 +17,7 @@ import { PerpsScreen } from './components/perps/PerpsScreen'
 import { LendingScreen } from './components/lending/LendingScreen'
 import { SettingsScreen } from './components/SettingsScreen'
 
-type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'builder' | 'settings'
+type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'settings'
 
 function App() {
   const [network] = useState<'testnet' | 'mainnet'>(loadSettings().network)
@@ -29,7 +25,6 @@ function App() {
   const [surgeReady, setSurgeReady] = useState(false)
   const [view, setView] = useState<View>('dex')
   const account = useCurrentAccount()
-  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction()
 
   useEffect(() => {
     if (started) return
@@ -53,29 +48,6 @@ function App() {
     startTrackers(client, trackers).catch(() => {})
   }, [network, started])
 
-  // Auto-resume ephemeral keepers in this tab (leader) after wallet connects
-  useEffect(() => {
-    const { keepers } = loadSettings()
-    if (!keepers.autoResume) return
-    
-    // crude leader election using BroadcastChannel
-    const bc = new BroadcastChannel('uxv-keepers')
-    let isLeader = true
-    let pong = false
-    bc.onmessage = (ev) => { if (ev.data === 'pong') pong = true }
-    bc.postMessage('ping')
-    setTimeout(async () => {
-      if (pong) { isLeader = false }
-      if (!isLeader || !account?.address) return
-      const rpc = defaultRpc(network)
-      const sui = createSuiClient(rpc)
-      const exec = async (tx: Transaction) => { await signAndExecute({ transaction: tx }) }
-      const sender = account.address
-      const km = new KeeperManager()
-      await km.autoResume((cfg) => buildKeeperFromStrategy(sui as unknown as SuiClient, sender, exec, cfg)!)
-    }, 300)
-    return () => { bc.close() }
-  }, [network, account?.address, signAndExecute])
 
   // Start price feeds when wallet connects
   useEffect(() => {
@@ -126,9 +98,6 @@ function App() {
         // TODO: Future implementation should show: PRICE | MARKET | Unxversal Perps
         document.title = 'Unxversal Perps';
         break;
-      case 'builder':
-        document.title = 'Unxversal Builder';
-        break;
       case 'settings':
         document.title = 'Unxversal Settings';
         break;
@@ -152,7 +121,6 @@ function App() {
           <span className={styles.disabled}>Options</span>
           <span className={view==='futures'?styles.active:''} onClick={() => setView('futures')}>Futures</span>
           <span className={view==='perps'?styles.active:''} onClick={() => setView('perps')}>Perps</span>
-          <span className={styles.disabled}>Builder</span>
           <span className={view==='settings'?styles.active:''} onClick={() => setView('settings')}>Settings</span>
         </nav>
         <div className={styles.tools}>

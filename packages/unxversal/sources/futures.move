@@ -45,6 +45,10 @@ module unxversal::futures {
     const E_EXPOSURE_CAP: u64 = 10;
     const E_ALREADY_SETTLED: u64 = 11;
 
+    // Settlement anchoring parameters
+    const TWAP_MAX_SAMPLES: u64 = 64;
+    const TWAP_WINDOW_MS: u64 = 300_000; // 5 minutes
+
     /// Futures series parameters
     public struct FuturesSeries has copy, drop, store {
         expiry_ms: u64,              // epoch ms; 0 means perpetual-style (no expiry) but used only for clamp
@@ -102,6 +106,12 @@ module unxversal::futures {
         /// Canonical settlement state
         settlement_price_1e6: u64,
         is_settled: bool,
+        /// Last valid pre-expiry oracle print and timestamp
+        lvp_price_1e6: u64,
+        lvp_ts_ms: u64,
+        /// Pre-expiry samples for TWAP (timestamps and prices)
+        twap_ts_ms: vector<u64>,
+        twap_px_1e6: vector<u64>,
     }
 
     // Events
@@ -160,6 +170,10 @@ module unxversal::futures {
             owners: table::new<u128, address>(ctx),
             settlement_price_1e6: 0,
             is_settled: false,
+            lvp_price_1e6: 0,
+            lvp_ts_ms: 0,
+            twap_ts_ms: vector::empty<u64>(),
+            twap_px_1e6: vector::empty<u64>(),
         };
         event::emit(MarketInitialized { market_id: object::id(&m), symbol: clone_string(&m.series.symbol), expiry_ms, contract_size, initial_margin_bps, maintenance_margin_bps, liquidation_fee_bps, keeper_incentive_bps });
         transfer::share_object(m);
@@ -551,8 +565,6 @@ module unxversal::futures {
         assert!(market.series.expiry_ms > 0 && now >= market.series.expiry_ms, E_EXPIRED);
         assert!(market.is_settled, E_ALREADY_SETTLED);
         event::emit(Settled { market_id: object::id(market), who: ctx.sender(), price_1e6: market.settlement_price_1e6, timestamp_ms: clock.timestamp_ms() });
-        let _ = (reg, agg);
-        let _ = ctx;
     }
 
     /// User-triggered settlement to flatten positions and realize PnL with credit fallback
@@ -752,7 +764,60 @@ module unxversal::futures {
             assert!(dev_bps <= market.max_deviation_bps, E_PRICE_DEVIATION);
         };
         market.last_price_1e6 = cur;
+        // If not past expiry, record LVP and append to TWAP buffer
+        let now = clock.timestamp_ms();
+        if (market.series.expiry_ms == 0 || now <= market.series.expiry_ms) {
+            market.lvp_price_1e6 = cur; market.lvp_ts_ms = now;
+            twap_append(&mut market.twap_ts_ms, &mut market.twap_px_1e6, now, cur, market.series.expiry_ms);
+        };
         cur
+    }
+
+    fun twap_append(ts: &mut vector<u64>, px: &mut vector<u64>, now: u64, price_1e6: u64, expiry_ms: u64) {
+        // push sample
+        vector::push_back(ts, now);
+        vector::push_back(px, price_1e6);
+        // trim by count
+        let mut n = vector::length(ts);
+        if (n > TWAP_MAX_SAMPLES) {
+            let remove = n - TWAP_MAX_SAMPLES;
+            let mut i: u64 = 0;
+            while (i < remove) { let _ = vector::remove(ts, 0); let _ = vector::remove(px, 0); i = i + 1; };
+            n = vector::length(ts);
+        };
+        // trim by window (pre-expiry only)
+        let window_start = if (expiry_ms > 0) { if (TWAP_WINDOW_MS < expiry_ms) { expiry_ms - TWAP_WINDOW_MS } else { 0 } } else { if (TWAP_WINDOW_MS < now) { now - TWAP_WINDOW_MS } else { 0 } };
+        let mut j: u64 = 0;
+        while (vector::length(ts) > 0) {
+            let oldest = *vector::borrow(ts, 0);
+            if (oldest >= window_start) break;
+            let _ = vector::remove(ts, 0); let _2 = vector::remove(px, 0);
+            j = j + 1;
+        };
+    }
+
+    fun compute_twap_in_window(ts: &vector<u64>, px: &vector<u64>, end_ms: u64, window_ms: u64): u64 {
+        let n = vector::length(ts);
+        if (n == 0) return 0;
+        let start_ms = if (window_ms < end_ms) { end_ms - window_ms } else { 0 };
+        let mut i: u64 = 0;
+        let mut sum_weighted: u128 = 0; let mut sum_dt: u128 = 0;
+        let mut prev_t = start_ms; let mut prev_px = *vector::borrow(px, 0);
+        while (i < n) {
+            let t = *vector::borrow(ts, i);
+            let p = *vector::borrow(px, i);
+            if (t < start_ms) { i = i + 1; prev_t = t; prev_px = p; continue };
+            let dt = if (t > prev_t) { (t - prev_t) as u128 } else { 0u128 };
+            sum_weighted = sum_weighted + dt * (prev_px as u128);
+            sum_dt = sum_dt + dt;
+            prev_t = t; prev_px = p; i = i + 1;
+        };
+        // include tail to end_ms
+        let tail_dt = if (end_ms > prev_t) { (end_ms - prev_t) as u128 } else { 0u128 };
+        sum_weighted = sum_weighted + tail_dt * (prev_px as u128);
+        sum_dt = sum_dt + tail_dt;
+        if (sum_dt == 0) return *vector::borrow(px, n - 1);
+        (sum_weighted / sum_dt) as u64
     }
 
     // === Keeper utilities ===
@@ -762,11 +827,18 @@ module unxversal::futures {
     }
 
     /// Entry: snap canonical settlement price once after expiry; cancels all resting orders and unlocks maker IM
+    /// Settlement selection: prefer Last Valid Print (<= expiry). If missing, fall back to pre-expiry TWAP over TWAP_WINDOW_MS.
     public fun snap_settlement_price<Collat>(market: &mut FuturesMarket<Collat>, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, _ctx: &mut TxContext) {
         let now = clock.timestamp_ms();
         assert!(market.series.expiry_ms > 0 && now >= market.series.expiry_ms, E_EXPIRED);
         assert!(!market.is_settled, E_ALREADY_SETTLED);
-        let px = current_price_1e6(&market.series, reg, agg, clock);
+        // Compute settlement from recorded pre-expiry data
+        let px = if (market.lvp_ts_ms > 0 && market.lvp_ts_ms <= market.series.expiry_ms) {
+            market.lvp_price_1e6
+        } else {
+            let tw = compute_twap_in_window(&market.twap_ts_ms, &market.twap_px_1e6, market.series.expiry_ms, TWAP_WINDOW_MS);
+            if (tw > 0) { tw } else { current_price_1e6(&market.series, reg, agg, clock) }
+        };
         market.settlement_price_1e6 = px;
         market.is_settled = true;
         market.close_only = true;
