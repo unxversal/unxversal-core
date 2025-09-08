@@ -51,7 +51,7 @@ export type AppSettings = {
 
 const KEY = 'uxv:app-settings:v1';
 
-const defaultSettings: AppSettings = {
+export const defaultSettings: AppSettings = {
   network: 'testnet',
   contracts: {
     pkgUnxversal: '',

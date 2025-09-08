@@ -150,10 +150,10 @@ function App() {
           <ConnectButton />
         </div>
       </header>
-      <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' ? styles.mainDex : styles.main}>
+      <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'lending' ? styles.mainDex : styles.main}>
         {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'gas' && <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
-        {view === 'lending' && <LendingScreen />}
+        {view === 'lending' && <LendingScreen started={started} network={network} protocolStatus={protocolStatus} />}
         {view === 'futures' && <FuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'perps' && <PerpsScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'options' && (
@@ -174,7 +174,7 @@ function App() {
         )}
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>
-      {!(view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps') && (
+      {!(view === 'dex' || view === 'gas' || view === 'futures' || view === 'lending' || view === 'perps') && (
         <footer className={styles.footer}>
           <div className={styles.statusBadges}>
             <div className={`${styles.badge} ${protocolStatus.options ? styles.connected : styles.disconnected}`}>

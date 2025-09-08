@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
+import React from 'react';
 import { Plus } from 'lucide-react';
 import styles from '../OptionsScreen.module.css';
 import type { OptionsChainRow, OptionsDataProvider } from '../types';
@@ -172,8 +173,8 @@ export function OptionsChain({
               }
               
               return (
-                <>
-                  <tr key={i} className={styles.optionRow}>
+                <React.Fragment key={`row-${i}`}>
+                  <tr className={styles.optionRow}>
                     <td style={{textAlign:'left'}}>${r.strike.toFixed(0)}</td>
                     <td style={{textAlign:'left'}}>${(r.breakeven || r.strike + r.callAsk).toFixed(2)}</td>
                     <td style={{textAlign:'left'}}>{(r.chanceOfProfit || Math.random() * 40 + 50).toFixed(2)}%</td>
@@ -233,7 +234,7 @@ export function OptionsChain({
                       </td>
                     </tr>
                   )}
-                </>
+                </React.Fragment>
               );
             })}
           </tbody>

@@ -4,6 +4,8 @@
   min-height: 100vh;
   display: grid;
   grid-template-rows: 56px 1fr 36px;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 .appRootDex {
@@ -12,6 +14,8 @@
   min-height: 100vh;
   display: grid;
   grid-template-rows: 56px 1fr;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 .header {
@@ -78,9 +82,9 @@
   color: #ffffff !important;
 }
 
-.main { height: calc(100vh - 56px - 36px); }
+.main { height: calc(100vh - 56px - 36px); overflow: hidden; }
 
-.mainDex { height: calc(100vh - 56px); }
+.mainDex { height: calc(100vh - 56px); overflow: hidden; }
 
 .footer {
   background: #030507;
