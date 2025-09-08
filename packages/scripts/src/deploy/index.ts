@@ -265,6 +265,27 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
         tx.moveCall({ target: `${cfg.pkgId}::futures::set_keeper_incentive_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).keeperIncentiveBps)] });
         await execTx(client, tx, keypair, `futures.set_keeper_incentive_bps ${f.symbol}`);
       }
+
+      // Apply new risk controls
+      if (f.marketId) {
+        if ((f as any).accountMaxNotional1e6 || (f as any).marketMaxNotional1e6) {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::futures::set_notional_caps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u128(BigInt((f as any).accountMaxNotional1e6 || '0')), tx.pure.u128(BigInt((f as any).marketMaxNotional1e6 || '0'))] as any });
+          await execTx(client, tx, keypair, `futures.set_notional_caps ${f.symbol}`);
+        }
+        if (typeof (f as any).accountShareOfOiBps === 'number') {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::futures::set_share_of_oi_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).accountShareOfOiBps)] });
+          await execTx(client, tx, keypair, `futures.set_share_of_oi_bps ${f.symbol}`);
+        }
+        if ((f as any).tierThresholds1e6 && (f as any).tierImBps) {
+          const thresholds = (f as any).tierThresholds1e6 as number[];
+          const imbps = (f as any).tierImBps as number[];
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::futures::set_risk_tiers`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.vector('u64', thresholds), tx.pure.vector('u64', imbps)] as any });
+          await execTx(client, tx, keypair, `futures.set_risk_tiers ${f.symbol}`);
+        }
+      }
     }
   }
 }
@@ -297,6 +318,27 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
         const tx = new Transaction();
         tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_keeper_incentive_bps`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.u64((g as any).keeperIncentiveBps)] });
         await execTx(client, tx, keypair, 'gas_futures.set_keeper_incentive_bps');
+      }
+
+      // Apply new gas futures risk controls
+      if (g.marketId) {
+        if ((g as any).accountMaxNotional1e6 || (g as any).marketMaxNotional1e6) {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_notional_caps`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.u128(BigInt((g as any).accountMaxNotional1e6 || '0')), tx.pure.u128(BigInt((g as any).marketMaxNotional1e6 || '0'))] as any });
+          await execTx(client, tx, keypair, 'gas_futures.set_notional_caps');
+        }
+        if (typeof (g as any).accountShareOfOiBps === 'number') {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_share_of_oi_bps`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.u64((g as any).accountShareOfOiBps)] });
+          await execTx(client, tx, keypair, 'gas_futures.set_share_of_oi_bps');
+        }
+        if ((g as any).tierThresholds1e6 && (g as any).tierImBps) {
+          const thresholds = (g as any).tierThresholds1e6 as number[];
+          const imbps = (g as any).tierImBps as number[];
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_risk_tiers`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.vector('u64', thresholds), tx.pure.vector('u64', imbps)] as any });
+          await execTx(client, tx, keypair, 'gas_futures.set_risk_tiers');
+        }
       }
     }
   }
@@ -331,6 +373,26 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
         const tx = new Transaction();
         tx.moveCall({ target: `${cfg.pkgId}::perpetuals::set_keeper_incentive_bps`, typeArguments: [p.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(p.marketId), tx.pure.u64((p as any).keeperIncentiveBps)] });
         await execTx(client, tx, keypair, `perpetuals.set_keeper_incentive_bps ${p.symbol}`);
+      }
+      // Apply new perps risk controls
+      if (p.marketId) {
+        if ((p as any).accountMaxNotional1e6 || (p as any).marketMaxNotional1e6) {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::perpetuals::set_notional_caps`, typeArguments: [p.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(p.marketId), tx.pure.u128(BigInt((p as any).accountMaxNotional1e6 || '0')), tx.pure.u128(BigInt((p as any).marketMaxNotional1e6 || '0'))] as any });
+          await execTx(client, tx, keypair, `perpetuals.set_notional_caps ${p.symbol}`);
+        }
+        if (typeof (p as any).accountShareOfOiBps === 'number') {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::perpetuals::set_share_of_oi_bps`, typeArguments: [p.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(p.marketId), tx.pure.u64((p as any).accountShareOfOiBps)] });
+          await execTx(client, tx, keypair, `perpetuals.set_share_of_oi_bps ${p.symbol}`);
+        }
+        if ((p as any).tierThresholds1e6 && (p as any).tierImBps) {
+          const thresholds = (p as any).tierThresholds1e6 as number[];
+          const imbps = (p as any).tierImBps as number[];
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::perpetuals::set_risk_tiers`, typeArguments: [p.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(p.marketId), tx.pure.vector('u64', thresholds), tx.pure.vector('u64', imbps)] as any });
+          await execTx(client, tx, keypair, `perpetuals.set_risk_tiers ${p.symbol}`);
+        }
       }
     }
   }

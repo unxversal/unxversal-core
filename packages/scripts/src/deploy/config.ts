@@ -75,6 +75,13 @@ export type DeployConfig = {
     maintenanceMarginBps: number;
     liquidationFeeBps: number;
     keeperIncentiveBps?: number;
+    // New risk controls
+    accountMaxNotional1e6?: string; // use string to avoid JS precision issues
+    marketMaxNotional1e6?: string;
+    accountShareOfOiBps?: number;
+    // Tiered IM
+    tierThresholds1e6?: number[];
+    tierImBps?: number[];
   }>;
   gasFutures?: Array<{
     marketId?: string;
@@ -85,6 +92,12 @@ export type DeployConfig = {
     maintenanceMarginBps: number;
     liquidationFeeBps: number;
     keeperIncentiveBps?: number;
+    // New risk controls
+    accountMaxNotional1e6?: string;
+    marketMaxNotional1e6?: string;
+    accountShareOfOiBps?: number;
+    tierThresholds1e6?: number[];
+    tierImBps?: number[];
   }>;
   perpetuals?: Array<{
     marketId?: string;
@@ -96,6 +109,12 @@ export type DeployConfig = {
     maintenanceMarginBps: number;
     liquidationFeeBps: number;
     keeperIncentiveBps?: number;
+    // New risk controls (optional future parity)
+    accountMaxNotional1e6?: string;
+    marketMaxNotional1e6?: string;
+    accountShareOfOiBps?: number;
+    tierThresholds1e6?: number[];
+    tierImBps?: number[];
   }>;
   dexPools?: Array<{
     registryId: string;

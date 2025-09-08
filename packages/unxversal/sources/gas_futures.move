@@ -30,6 +30,7 @@ module unxversal::gas_futures {
     const E_PRICE_DEVIATION: u64 = 9;
     const E_EXPOSURE_CAP: u64 = 10;
     const E_ALREADY_SETTLED: u64 = 11;
+    const E_INVALID_TIERS: u64 = 12;
 
     const TWAP_MAX_SAMPLES: u64 = 64;
     const TWAP_WINDOW_MS: u64 = 300_000; // 5 minutes
@@ -58,8 +59,16 @@ module unxversal::gas_futures {
         last_price_1e6: u64,
         pnl_fee_share_bps: u64,
         liq_target_buffer_bps: u64,
-        account_max_gross_qty: u64,
-        market_max_gross_qty: u64,
+        /// Max account gross notional in 1e6 units (0 = unlimited)
+        account_max_notional_1e6: u128,
+        /// Max market gross notional in 1e6 units (0 = unlimited)
+        market_max_notional_1e6: u128,
+        /// Max share of OI per account in bps of total gross contracts (0 = disabled)
+        account_share_of_oi_bps: u64,
+        /// Tiered IM thresholds in 1e6 notional units (non-decreasing)
+        tier_thresholds_notional_1e6: vector<u64>,
+        /// Tiered IM bps (same length as thresholds, non-decreasing)
+        tier_im_bps: vector<u64>,
         total_long_qty: u64,
         total_short_qty: u64,
         imbalance_surcharge_bps_max: u64,
@@ -91,7 +100,7 @@ module unxversal::gas_futures {
     // === Init ===
     public fun init_market<Collat>(reg_admin: &AdminRegistry, expiry_ms: u64, contract_size: u64, im_bps: u64, mm_bps: u64, liq_fee_bps: u64, keeper_bps: u64, tick_size: u64, lot_size: u64, min_size: u64, ctx: &mut TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        let m = GasMarket<Collat> { id: object::new(ctx), series: GasSeries { expiry_ms, contract_size }, accounts: table::new<address, Account<Collat>>(ctx), initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps, close_only: false, max_deviation_bps: 0, last_price_1e6: 0, pnl_fee_share_bps: 0, liq_target_buffer_bps: 0, account_max_gross_qty: 0, market_max_gross_qty: 0, total_long_qty: 0, total_short_qty: 0, imbalance_surcharge_bps_max: 0, imbalance_threshold_bps: 0, book: ubk::empty(tick_size, lot_size, min_size, ctx), owners: table::new<u128, address>(ctx), settlement_price_1e6: 0, is_settled: false, lvp_price_1e6: 0, lvp_ts_ms: 0, twap_ts_ms: vector::empty<u64>(), twap_px_1e6: vector::empty<u64>() };
+        let m = GasMarket<Collat> { id: object::new(ctx), series: GasSeries { expiry_ms, contract_size }, accounts: table::new<address, Account<Collat>>(ctx), initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps, close_only: false, max_deviation_bps: 0, last_price_1e6: 0, pnl_fee_share_bps: 0, liq_target_buffer_bps: 0, account_max_notional_1e6: 0, market_max_notional_1e6: 0, account_share_of_oi_bps: 0, tier_thresholds_notional_1e6: vector::empty<u64>(), tier_im_bps: vector::empty<u64>(), total_long_qty: 0, total_short_qty: 0, imbalance_surcharge_bps_max: 0, imbalance_threshold_bps: 0, book: ubk::empty(tick_size, lot_size, min_size, ctx), owners: table::new<u128, address>(ctx), settlement_price_1e6: 0, is_settled: false, lvp_price_1e6: 0, lvp_ts_ms: 0, twap_ts_ms: vector::empty<u64>(), twap_px_1e6: vector::empty<u64>() };
         event::emit(MarketInitialized { market_id: object::id(&m), expiry_ms, contract_size, initial_margin_bps: im_bps, maintenance_margin_bps: mm_bps, liquidation_fee_bps: liq_fee_bps, keeper_incentive_bps: keeper_bps });
         transfer::share_object(m);
     }
@@ -130,10 +139,28 @@ module unxversal::gas_futures {
         market.liq_target_buffer_bps = buffer_bps;
     }
 
-    public fun set_exposure_caps<Collat>(reg_admin: &AdminRegistry, market: &mut GasMarket<Collat>, account_max_gross_qty: u64, market_max_gross_qty: u64, ctx: &TxContext) {
+    /// Admin: set notional caps (1e6 units). 0 disables a cap.
+    public fun set_notional_caps<Collat>(reg_admin: &AdminRegistry, market: &mut GasMarket<Collat>, account_max_notional_1e6: u128, market_max_notional_1e6: u128, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        market.account_max_gross_qty = account_max_gross_qty;
-        market.market_max_gross_qty = market_max_gross_qty;
+        market.account_max_notional_1e6 = account_max_notional_1e6;
+        market.market_max_notional_1e6 = market_max_notional_1e6;
+    }
+
+    /// Admin: set account share-of-OI cap in bps (0 disables)
+    public fun set_share_of_oi_bps<Collat>(reg_admin: &AdminRegistry, market: &mut GasMarket<Collat>, share_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(share_bps <= fees::bps_denom(), E_EXPOSURE_CAP);
+        market.account_share_of_oi_bps = share_bps;
+    }
+
+    /// Admin: set tiered IM schedule. thresholds_1e6 and im_bps must have same length; lists must be non-decreasing.
+    public fun set_risk_tiers<Collat>(reg_admin: &AdminRegistry, market: &mut GasMarket<Collat>, thresholds_1e6: vector<u64>, im_bps: vector<u64>, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        let n = vector::length(&thresholds_1e6);
+        assert!(n == vector::length(&im_bps), E_INVALID_TIERS);
+        if (n > 1) { let mut i: u64 = 1; while (i < n) { let prev_t = *vector::borrow(&thresholds_1e6, i - 1); let cur_t = *vector::borrow(&thresholds_1e6, i); let prev_b = *vector::borrow(&im_bps, i - 1); let cur_b = *vector::borrow(&im_bps, i); assert!(cur_t >= prev_t && cur_b >= prev_b, E_INVALID_TIERS); i = i + 1; }; };
+        market.tier_thresholds_notional_1e6 = thresholds_1e6;
+        market.tier_im_bps = im_bps;
     }
 
     public fun set_imbalance_params<Collat>(reg_admin: &AdminRegistry, market: &mut GasMarket<Collat>, surcharge_max_bps: u64, threshold_bps: u64, ctx: &TxContext) {
@@ -254,11 +281,19 @@ module unxversal::gas_futures {
             if (is_buy) { assert!(total_qty <= acc.short_qty, E_CLOSE_ONLY); } else { assert!(total_qty <= acc.long_qty, E_CLOSE_ONLY); };
         };
 
-        // Enforce exposure caps
+        // Enforce notional caps and share-of-OI caps (contract caps removed)
         let gross_acc_post = acc.long_qty + acc.short_qty;
-        if (market.account_max_gross_qty > 0) { assert!(gross_acc_post <= market.account_max_gross_qty, E_EXPOSURE_CAP); };
         let gross_mkt_post = market.total_long_qty + market.total_short_qty;
-        if (market.market_max_gross_qty > 0) { assert!(gross_mkt_post <= market.market_max_gross_qty, E_EXPOSURE_CAP); };
+        let per_unit_1e6: u128 = ((index_px as u128) * (market.series.contract_size as u128)) / 1_000_000u128;
+        let acc_notional_post_1e6: u128 = (gross_acc_post as u128) * per_unit_1e6 * 1_000_000u128;
+        let mkt_notional_post_1e6: u128 = (gross_mkt_post as u128) * per_unit_1e6 * 1_000_000u128;
+        if (market.account_max_notional_1e6 > 0) { assert!(acc_notional_post_1e6 <= market.account_max_notional_1e6, E_EXPOSURE_CAP); };
+        if (market.market_max_notional_1e6 > 0) { assert!(mkt_notional_post_1e6 <= market.market_max_notional_1e6, E_EXPOSURE_CAP); };
+        if (market.account_share_of_oi_bps > 0 && gross_mkt_post > 0) {
+            let allowed_u128: u128 = ((gross_mkt_post as u128) * (market.account_share_of_oi_bps as u128)) / (fees::bps_denom() as u128);
+            let allowed: u64 = allowed_u128 as u64;
+            assert!(gross_acc_post <= allowed, E_EXPOSURE_CAP);
+        };
 
         // Protocol taker fee
         let taker_bps = fees::gasfut_taker_fee_bps(cfg);
@@ -316,7 +351,7 @@ module unxversal::gas_futures {
         if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         let idx = current_gas_price_1e6(ctx);
-        let need = im_for_qty(&market.series, qty, idx, market.initial_margin_bps);
+        let need = im_for_qty_tiered<Collat>(market, &acc, qty, idx);
         let eq = equity(&acc, idx, market.series.contract_size);
         let free = if (eq > acc.locked_im) { eq - acc.locked_im } else { 0 };
         assert!(free >= need, E_UNDER_IM);
@@ -337,7 +372,7 @@ module unxversal::gas_futures {
         if (market.series.expiry_ms > 0) { assert!(now <= market.series.expiry_ms, E_EXPIRED); };
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         let idx = current_gas_price_1e6(ctx);
-        let need = im_for_qty(&market.series, qty, idx, market.initial_margin_bps);
+        let need = im_for_qty_tiered<Collat>(market, &acc, qty, idx);
         let eq = equity(&acc, idx, market.series.contract_size);
         let free = if (eq > acc.locked_im) { eq - acc.locked_im } else { 0 };
         assert!(free >= need, E_UNDER_IM);
@@ -521,7 +556,12 @@ module unxversal::gas_futures {
     }
 
     fun required_margin_effective<Collat>(market: &GasMarket<Collat>, acc: &Account<Collat>, price_1e6: u64): u64 {
-        let base = market.initial_margin_bps;
+        let per_unit_1e6: u128 = ((price_1e6 as u128) * (market.series.contract_size as u128)) / 1_000_000u128;
+        let gross_contracts: u64 = acc.long_qty + acc.short_qty;
+        let acc_notional_1e6: u128 = (gross_contracts as u128) * per_unit_1e6 * 1_000_000u128;
+        let tier_bps = tier_bps_for_notional<Collat>(market, acc_notional_1e6);
+        let mut base = market.initial_margin_bps;
+        if (tier_bps > base) { base = tier_bps; };
         let oi = (market.total_long_qty as u128) + (market.total_short_qty as u128);
         if (market.imbalance_surcharge_bps_max == 0 || oi == 0) { return required_margin_bps<Collat>(acc, price_1e6, market.series.contract_size, base) };
         let tl = market.total_long_qty as u128; let ts = market.total_short_qty as u128;
@@ -594,6 +634,24 @@ module unxversal::gas_futures {
         let gross_1e6: u128 = (qty as u128) * (price_1e6 as u128) * (series.contract_size as u128);
         let im_1e6: u128 = (gross_1e6 * (im_bps as u128)) / (fees::bps_denom() as u128);
         (im_1e6 / 1_000_000u128) as u64
+    }
+
+    fun im_for_qty_tiered<Collat>(market: &GasMarket<Collat>, acc: &Account<Collat>, qty: u64, price_1e6: u64): u64 {
+        let per_unit_1e6: u128 = ((price_1e6 as u128) * (market.series.contract_size as u128)) / 1_000_000u128;
+        let gross_after: u64 = acc.long_qty + acc.short_qty + qty;
+        let notional_after_1e6: u128 = (gross_after as u128) * per_unit_1e6 * 1_000_000u128;
+        let tier_bps = tier_bps_for_notional<Collat>(market, notional_after_1e6);
+        let mut eff_bps = market.initial_margin_bps;
+        if (tier_bps > eff_bps) { eff_bps = tier_bps; };
+        im_for_qty(&market.series, qty, price_1e6, eff_bps)
+    }
+
+    fun tier_bps_for_notional<Collat>(market: &GasMarket<Collat>, notional_1e6: u128): u64 {
+        let n = vector::length(&market.tier_thresholds_notional_1e6);
+        if (n == 0) return market.initial_margin_bps;
+        let mut i: u64 = 0; let mut out: u64 = market.initial_margin_bps;
+        while (i < n) { let th_1e6 = *vector::borrow(&market.tier_thresholds_notional_1e6, i); if (notional_1e6 >= (th_1e6 as u128)) { out = *vector::borrow(&market.tier_im_bps, i); }; i = i + 1; };
+        out
     }
 
     fun unlock_locked_im_for_fill<Collat>(market: &GasMarket<Collat>, acc: &mut Account<Collat>, price_1e6: u64, added_qty: u64) {

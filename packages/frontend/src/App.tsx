@@ -16,6 +16,8 @@ import { FuturesScreen } from './components/futures/FuturesScreen'
 import { PerpsScreen } from './components/perps/PerpsScreen'
 import { LendingScreen } from './components/lending/LendingScreen'
 import { SettingsScreen } from './components/SettingsScreen'
+import { OptionsScreen } from './components/options/OptionsScreen'
+import { createMockOptionsProvider } from './components/options/providers/mock'
 
 type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'settings'
 
@@ -118,7 +120,7 @@ function App() {
           <span className={view==='dex'?styles.active:''} onClick={() => setView('dex')}>DEX</span>
           <span className={view==='gas'?styles.active:''} onClick={() => setView('gas')}>MIST Futures</span>
           <span className={view==='lending'?styles.active:''} onClick={() => setView('lending')}>Lending</span>
-          <span className={styles.disabled}>Options</span>
+          <span className={view==='options'?styles.active:''} onClick={() => setView('options')}>Options</span>
           <span className={view==='futures'?styles.active:''} onClick={() => setView('futures')}>Futures</span>
           <span className={view==='perps'?styles.active:''} onClick={() => setView('perps')}>Perps</span>
           <span className={view==='settings'?styles.active:''} onClick={() => setView('settings')}>Settings</span>
@@ -133,6 +135,22 @@ function App() {
         {view === 'lending' && <LendingScreen />}
         {view === 'futures' && <FuturesScreen started={started} surgeReady={surgeReady} network={network} />}
         {view === 'perps' && <PerpsScreen started={started} surgeReady={surgeReady} network={network} />}
+        {view === 'options' && (
+          <OptionsScreen
+            started={started}
+            surgeReady={surgeReady}
+            network={network}
+            marketLabel={'Options'}
+            symbol={'MIST'}
+            quoteSymbol={'USDC'}
+            dataProvider={createMockOptionsProvider()}
+            panelProvider={{
+              async submitOrder() {
+                await new Promise(r => setTimeout(r, 300));
+              }
+            }}
+          />
+        )}
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>
       {view !== 'dex' && view !== 'gas' && view !== 'futures' && view !== 'perps' && (

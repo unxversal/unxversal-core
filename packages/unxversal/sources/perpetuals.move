@@ -31,6 +31,7 @@ module unxversal::perpetuals {
     const E_UNDER_IM: u64 = 5;
     const E_UNDER_MM: u64 = 6;
     const E_EXPOSURE_CAP: u64 = 7;
+    const E_INVALID_TIERS: u64 = 8;
 
     /// Market parameters
     public struct PerpParams has copy, drop, store {
@@ -65,10 +66,16 @@ module unxversal::perpetuals {
         last_funding_ms: u64,
         funding_vault: Balance<Collat>,
         keeper_incentive_bps: u64,
-        /// Per-account gross contract cap (0 = unlimited)
-        account_max_gross_qty: u64,
-        /// Per-market gross contract cap across all users (0 = unlimited)
-        market_max_gross_qty: u64,
+        /// Max account gross notional in 1e6 units (0 = unlimited)
+        account_max_notional_1e6: u128,
+        /// Max market gross notional in 1e6 units (0 = unlimited)
+        market_max_notional_1e6: u128,
+        /// Max share of OI per account in bps of total gross contracts (0 = disabled)
+        account_share_of_oi_bps: u64,
+        /// Tiered IM thresholds in 1e6 notional units (non-decreasing)
+        tier_thresholds_notional_1e6: vector<u64>,
+        /// Tiered IM bps (same length as thresholds, non-decreasing)
+        tier_im_bps: vector<u64>,
         /// Open interest tracking (sum of outstanding contracts per side)
         total_long_qty: u64,
         total_short_qty: u64,
@@ -114,8 +121,11 @@ module unxversal::perpetuals {
             last_funding_ms: sui::tx_context::epoch_timestamp_ms(ctx),
             funding_vault: balance::zero<Collat>(),
             keeper_incentive_bps,
-            account_max_gross_qty: 0,
-            market_max_gross_qty: 0,
+            account_max_notional_1e6: 0,
+            market_max_notional_1e6: 0,
+            account_share_of_oi_bps: 0,
+            tier_thresholds_notional_1e6: vector::empty<u64>(),
+            tier_im_bps: vector::empty<u64>(),
             total_long_qty: 0,
             total_short_qty: 0,
             book: ubk::empty(tick_size, lot_size, min_size, ctx),
@@ -138,11 +148,40 @@ module unxversal::perpetuals {
         market.keeper_incentive_bps = keeper_bps;
     }
 
-    /// Admin: set exposure caps (gross contracts)
-    public fun set_exposure_caps<Collat>(reg_admin: &AdminRegistry, market: &mut PerpMarket<Collat>, account_max_gross_qty: u64, market_max_gross_qty: u64, ctx: &TxContext) {
+    // contract caps removed (deprecated)
+
+    /// Admin: set notional caps (1e6 units). 0 disables a cap.
+    public fun set_notional_caps<Collat>(reg_admin: &AdminRegistry, market: &mut PerpMarket<Collat>, account_max_notional_1e6: u128, market_max_notional_1e6: u128, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        market.account_max_gross_qty = account_max_gross_qty;
-        market.market_max_gross_qty = market_max_gross_qty;
+        market.account_max_notional_1e6 = account_max_notional_1e6;
+        market.market_max_notional_1e6 = market_max_notional_1e6;
+    }
+
+    /// Admin: set account share-of-OI cap in bps (0 disables)
+    public fun set_share_of_oi_bps<Collat>(reg_admin: &AdminRegistry, market: &mut PerpMarket<Collat>, share_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(share_bps <= fees::bps_denom(), E_EXPOSURE_CAP);
+        market.account_share_of_oi_bps = share_bps;
+    }
+
+    /// Admin: set tiered IM schedule. thresholds_1e6 and im_bps must have same length; lists must be non-decreasing.
+    public fun set_risk_tiers<Collat>(reg_admin: &AdminRegistry, market: &mut PerpMarket<Collat>, thresholds_1e6: vector<u64>, im_bps: vector<u64>, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        let n = vector::length(&thresholds_1e6);
+        assert!(n == vector::length(&im_bps), E_INVALID_TIERS);
+        if (n > 1) {
+            let mut i: u64 = 1;
+            while (i < n) {
+                let prev_t = *vector::borrow(&thresholds_1e6, i - 1);
+                let cur_t = *vector::borrow(&thresholds_1e6, i);
+                let prev_b = *vector::borrow(&im_bps, i - 1);
+                let cur_b = *vector::borrow(&im_bps, i);
+                assert!(cur_t >= prev_t && cur_b >= prev_b, E_INVALID_TIERS);
+                i = i + 1;
+            };
+        };
+        market.tier_thresholds_notional_1e6 = thresholds_1e6;
+        market.tier_im_bps = im_bps;
     }
 
     /// Admin/keeper: apply funding update (per contract, 1e6 scale).
@@ -333,11 +372,20 @@ module unxversal::perpetuals {
             i = i + 1;
         };
 
-        // Enforce exposure caps after applying all fills
-        let gross_acc_post = acc.long_qty + acc.short_qty;
-        if (market.account_max_gross_qty > 0) { assert!(gross_acc_post <= market.account_max_gross_qty, E_EXPOSURE_CAP); };
-        let gross_market_post = market.total_long_qty + market.total_short_qty;
-        if (market.market_max_gross_qty > 0) { assert!(gross_market_post <= market.market_max_gross_qty, E_EXPOSURE_CAP); };
+        // Enforce notional caps and share-of-OI caps after applying all fills
+        let px_index = current_price_1e6(&market.params, reg, agg, clock);
+        let gross_acc_post: u64 = acc.long_qty + acc.short_qty;
+        let gross_mkt_post: u64 = market.total_long_qty + market.total_short_qty;
+        let per_unit_1e6: u128 = ((px_index as u128) * (market.params.contract_size as u128)) / 1_000_000u128;
+        let acc_notional_post_1e6: u128 = (gross_acc_post as u128) * per_unit_1e6 * 1_000_000u128;
+        let mkt_notional_post_1e6: u128 = (gross_mkt_post as u128) * per_unit_1e6 * 1_000_000u128;
+        if (market.account_max_notional_1e6 > 0) { assert!(acc_notional_post_1e6 <= market.account_max_notional_1e6, E_EXPOSURE_CAP); };
+        if (market.market_max_notional_1e6 > 0) { assert!(mkt_notional_post_1e6 <= market.market_max_notional_1e6, E_EXPOSURE_CAP); };
+        if (market.account_share_of_oi_bps > 0 && gross_mkt_post > 0) {
+            let allowed_u128: u128 = ((gross_mkt_post as u128) * (market.account_share_of_oi_bps as u128)) / (fees::bps_denom() as u128);
+            let allowed: u64 = allowed_u128 as u64;
+            assert!(gross_acc_post <= allowed, E_EXPOSURE_CAP);
+        };
 
         let taker_bps = fees::futures_taker_fee_bps(cfg);
         let pay_with_unxv = option::is_some(maybe_unxv);
@@ -358,7 +406,7 @@ module unxversal::perpetuals {
 
         let px_mark = current_price_1e6(&market.params, reg, agg, clock);
         let eq = equity_collat(&acc, px_mark, market.params.contract_size);
-        let req_im = required_margin_bps(&acc, px_mark, market.params.contract_size, market.initial_margin_bps);
+        let req_im = required_margin_effective<Collat>(market, &acc, px_mark);
         let free = if (eq > acc.locked_im) { eq - acc.locked_im } else { 0 };
         assert!(free >= req_im, E_UNDER_IM);
 
@@ -506,6 +554,28 @@ module unxversal::perpetuals {
         let im_1e6: u128 = (gross * (bps as u128)) / (fees::bps_denom() as u128);
         let im: u128 = im_1e6 / 1_000_000u128;
         if (im > (U64_MAX_LITERAL as u128)) { U64_MAX_LITERAL } else { im as u64 }
+    }
+
+    fun required_margin_effective<Collat>(market: &PerpMarket<Collat>, acc: &PerpAccount<Collat>, px_1e6: u64): u64 {
+        let per_unit_1e6: u128 = ((px_1e6 as u128) * (market.params.contract_size as u128)) / 1_000_000u128;
+        let gross_contracts: u64 = acc.long_qty + acc.short_qty;
+        let acc_notional_1e6: u128 = (gross_contracts as u128) * per_unit_1e6 * 1_000_000u128;
+        let tier_bps = tier_bps_for_notional<Collat>(market, acc_notional_1e6);
+        let mut base = market.initial_margin_bps;
+        if (tier_bps > base) { base = tier_bps; };
+        required_margin_bps<Collat>(acc, px_1e6, market.params.contract_size, base)
+    }
+
+    fun tier_bps_for_notional<Collat>(market: &PerpMarket<Collat>, notional_1e6: u128): u64 {
+        let n = vector::length(&market.tier_thresholds_notional_1e6);
+        if (n == 0) return market.initial_margin_bps;
+        let mut i: u64 = 0; let mut out: u64 = market.initial_margin_bps;
+        while (i < n) {
+            let th_1e6 = *vector::borrow(&market.tier_thresholds_notional_1e6, i);
+            if (notional_1e6 >= (th_1e6 as u128)) { out = *vector::borrow(&market.tier_im_bps, i); };
+            i = i + 1;
+        };
+        out
     }
 
     fun realize_long_ul(entry_1e6: u64, exit_1e6: u64, qty: u64, cs: u64): (u64, u64) {
