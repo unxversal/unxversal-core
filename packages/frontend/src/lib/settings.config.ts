@@ -123,7 +123,7 @@ export const defaultSettings: AppSettings = {
       structName: 'UNXV',
       isNative: true,
       decimals: 6,
-      iconUrl: 'https://unxversal.com/assets/unxv-token.png'
+      iconUrl: 'public/unxvcoin.jpg'
     },
     {
       symbol: 'DEEP',
