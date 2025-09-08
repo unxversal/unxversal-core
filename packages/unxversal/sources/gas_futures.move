@@ -18,6 +18,7 @@ module unxversal::gas_futures {
     use unxversal::staking::{Self as staking, StakingPool};
     use unxversal::unxv::UNXV;
     use unxversal::book::{Self as ubk, Book};
+    use unxversal::rewards as rewards;
 
     const E_NOT_ADMIN: u64 = 1;
     const E_ZERO: u64 = 2;
@@ -212,19 +213,19 @@ module unxversal::gas_futures {
     }
 
     // === Trading via matched orderbook (index = reference gas price) ===
-    public fun open_long<Collat>(market: &mut GasMarket<Collat>, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, mut maybe_unxv: Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext, qty: u64) {
+    public fun open_long<Collat>(market: &mut GasMarket<Collat>, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, rewards_obj: &mut rewards::Rewards, mut maybe_unxv: Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext, qty: u64) {
         assert!(!market.is_settled, E_ALREADY_SETTLED);
-        taker_limit_trade<Collat>(market, /*is_buy=*/true, /*limit_price=*/max_order_price(), qty, /*expire_ts=*/clock.timestamp_ms() + 60_000, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
+        taker_limit_trade<Collat>(market, /*is_buy=*/true, /*limit_price=*/max_order_price(), qty, /*expire_ts=*/clock.timestamp_ms() + 60_000, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
-    public fun open_short<Collat>(market: &mut GasMarket<Collat>, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, mut maybe_unxv: Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext, qty: u64) {
+    public fun open_short<Collat>(market: &mut GasMarket<Collat>, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, rewards_obj: &mut rewards::Rewards, mut maybe_unxv: Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext, qty: u64) {
         assert!(!market.is_settled, E_ALREADY_SETTLED);
-        taker_limit_trade<Collat>(market, /*is_buy=*/false, /*limit_price=*/min_order_price(), qty, /*expire_ts=*/clock.timestamp_ms() + 60_000, cfg, vault, staking_pool, &mut maybe_unxv, clock, ctx);
+        taker_limit_trade<Collat>(market, /*is_buy=*/false, /*limit_price=*/min_order_price(), qty, /*expire_ts=*/clock.timestamp_ms() + 60_000, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
-    fun taker_limit_trade<Collat>(market: &mut GasMarket<Collat>, is_buy: bool, limit_price_1e6: u64, qty: u64, expire_ts: u64, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, maybe_unxv: &mut Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext) {
+    fun taker_limit_trade<Collat>(market: &mut GasMarket<Collat>, is_buy: bool, limit_price_1e6: u64, qty: u64, expire_ts: u64, cfg: &FeeConfig, vault: &mut FeeVault, staking_pool: &mut StakingPool, rewards_obj: &mut rewards::Rewards, maybe_unxv: &mut Option<Coin<UNXV>>, clock: &Clock, ctx: &mut TxContext) {
         assert!(qty > 0, E_ZERO);
         assert!(!market.is_settled, E_ALREADY_SETTLED);
         let now = clock.timestamp_ms();
@@ -258,29 +259,35 @@ module unxversal::gas_futures {
             if (is_buy) {
                 // Taker: reduce short then add long
                 let r = if (acc.short_qty > 0) { if (fqty <= acc.short_qty) { fqty } else { acc.short_qty } } else { 0 };
-                if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px, r, market.series.contract_size); apply_realized_to_account<Collat>(market, &mut acc, g, l, vault, clock, ctx); acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r; };
+                if (r > 0) { let (g,l) = realize_short_ul(acc.avg_short_1e6, px, r, market.series.contract_size); rewards::on_realized_pnl(rewards_obj, ctx.sender(), (g as u128), (l as u128), clock); apply_realized_to_account<Collat>(market, &mut acc, g, l, vault, clock, ctx); acc.short_qty = acc.short_qty - r; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r; };
                 let a = if (fqty > r) { fqty - r } else { 0 };
                 if (a > 0) { acc.avg_long_1e6 = wavg(acc.avg_long_1e6, acc.long_qty, px, a); acc.long_qty = acc.long_qty + a; market.total_long_qty = market.total_long_qty + a; };
                 // Maker: reduce long then add short
                 let r_m = if (maker_acc.long_qty > 0) { if (fqty <= maker_acc.long_qty) { fqty } else { maker_acc.long_qty } } else { 0 };
-                if (r_m > 0) { let (g_m,l_m) = realize_long_ul(maker_acc.avg_long_1e6, px, r_m, market.series.contract_size); apply_realized_to_account<Collat>(market, &mut maker_acc, g_m, l_m, vault, clock, ctx); maker_acc.long_qty = maker_acc.long_qty - r_m; if (maker_acc.long_qty == 0) { maker_acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r_m; };
+                if (r_m > 0) { let (g_m,l_m) = realize_long_ul(maker_acc.avg_long_1e6, px, r_m, market.series.contract_size); rewards::on_realized_pnl(rewards_obj, maker_addr, (g_m as u128), (l_m as u128), clock); apply_realized_to_account<Collat>(market, &mut maker_acc, g_m, l_m, vault, clock, ctx); maker_acc.long_qty = maker_acc.long_qty - r_m; if (maker_acc.long_qty == 0) { maker_acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r_m; };
                 let a_m = if (fqty > r_m) { fqty - r_m } else { 0 };
                 if (a_m > 0) { maker_acc.avg_short_1e6 = wavg(maker_acc.avg_short_1e6, maker_acc.short_qty, px, a_m); maker_acc.short_qty = maker_acc.short_qty + a_m; market.total_short_qty = market.total_short_qty + a_m; unlock_locked_im_for_fill<Collat>(market, &mut maker_acc, index_px, a_m); };
             } else {
                 // Taker sell: reduce long then add short
                 let r2 = if (acc.long_qty > 0) { if (fqty <= acc.long_qty) { fqty } else { acc.long_qty } } else { 0 };
-                if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px, r2, market.series.contract_size); apply_realized_to_account<Collat>(market, &mut acc, g2, l2, vault, clock, ctx); acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r2; };
+                if (r2 > 0) { let (g2,l2) = realize_long_ul(acc.avg_long_1e6, px, r2, market.series.contract_size); rewards::on_realized_pnl(rewards_obj, ctx.sender(), (g2 as u128), (l2 as u128), clock); apply_realized_to_account<Collat>(market, &mut acc, g2, l2, vault, clock, ctx); acc.long_qty = acc.long_qty - r2; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - r2; };
                 let a2 = if (fqty > r2) { fqty - r2 } else { 0 };
                 if (a2 > 0) { acc.avg_short_1e6 = wavg(acc.avg_short_1e6, acc.short_qty, px, a2); acc.short_qty = acc.short_qty + a2; market.total_short_qty = market.total_short_qty + a2; };
                 // Maker: reduce short then add long
                 let r_m2 = if (maker_acc.short_qty > 0) { if (fqty <= maker_acc.short_qty) { fqty } else { maker_acc.short_qty } } else { 0 };
-                if (r_m2 > 0) { let (g_m2,l_m2) = realize_short_ul(maker_acc.avg_short_1e6, px, r_m2, market.series.contract_size); apply_realized_to_account<Collat>(market, &mut maker_acc, g_m2, l_m2, vault, clock, ctx); maker_acc.short_qty = maker_acc.short_qty - r_m2; if (maker_acc.short_qty == 0) { maker_acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r_m2; };
+                if (r_m2 > 0) { let (g_m2,l_m2) = realize_short_ul(maker_acc.avg_short_1e6, px, r_m2, market.series.contract_size); rewards::on_realized_pnl(rewards_obj, maker_addr, (g_m2 as u128), (l_m2 as u128), clock); apply_realized_to_account<Collat>(market, &mut maker_acc, g_m2, l_m2, vault, clock, ctx); maker_acc.short_qty = maker_acc.short_qty - r_m2; if (maker_acc.short_qty == 0) { maker_acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - r_m2; };
                 let a_m2 = if (fqty > r_m2) { fqty - r_m2 } else { 0 };
                 if (a_m2 > 0) { maker_acc.avg_long_1e6 = wavg(maker_acc.avg_long_1e6, maker_acc.long_qty, px, a_m2); maker_acc.long_qty = maker_acc.long_qty + a_m2; market.total_long_qty = market.total_long_qty + a_m2; unlock_locked_im_for_fill<Collat>(market, &mut maker_acc, index_px, a_m2); };
             };
             // Update notional and VWAP for event
             let per_unit_1e6: u128 = ((px as u128) * (market.series.contract_size as u128)) / 1_000_000u128;
             total_notional_1e6 = total_notional_1e6 + (fqty as u128) * per_unit_1e6 * 1_000_000u128;
+            // Rewards volume & maker quality
+            let f_notional_1e6: u128 = (fqty as u128) * per_unit_1e6 * 1_000_000u128;
+            let index_px = current_gas_price_1e6(ctx);
+            let improve_bps: u64 = if (is_buy) { if (index_px >= px) { (((index_px as u128 - px as u128) * 10_000u128) / (index_px as u128)) as u64 } else { 0 } } else { if (px >= index_px) { (((px as u128 - index_px as u128) * 10_000u128) / (index_px as u128)) as u64 } else { 0 } };
+            rewards::on_perp_fill(rewards_obj, ctx.sender(), maker_addr, f_notional_1e6, false, 0, clock);
+            rewards::on_perp_fill(rewards_obj, maker_addr, ctx.sender(), f_notional_1e6, true, improve_bps, clock);
             total_qty = total_qty + fqty;
             wsum_px_qty = wsum_px_qty + (px as u128) * (fqty as u128);
             // Persist maker
@@ -416,7 +423,7 @@ module unxversal::gas_futures {
         event::emit(OrderCanceled { market_id: object::id(market), order_id, maker: owner, remaining_qty: remaining, timestamp_ms: clock.timestamp_ms() });
     }
 
-    public fun liquidate<Collat>(market: &mut GasMarket<Collat>, victim: address, qty: u64, vault: &mut FeeVault, clock: &Clock, ctx: &mut TxContext) {
+    public fun liquidate<Collat>(market: &mut GasMarket<Collat>, victim: address, qty: u64, vault: &mut FeeVault, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext) {
         assert!(table::contains(&market.accounts, victim), E_NO_ACCOUNT);
         assert!(qty > 0, E_ZERO);
         assert!(!market.is_settled, E_ALREADY_SETTLED);
@@ -467,6 +474,9 @@ module unxversal::gas_futures {
         if (pay > 0) { let keeper_bps: u64 = market.keeper_incentive_bps; let keeper_cut: u64 = ((pay as u128) * (keeper_bps as u128) / (fees::bps_denom() as u128)) as u64; let mut pen_coin = coin::from_balance(balance::split(&mut acc.collat, pay), ctx); if (keeper_cut > 0) { let kc = coin::split(&mut pen_coin, keeper_cut, ctx); transfer::public_transfer(kc, ctx.sender()); }; fees::pnl_deposit<Collat>(vault, pen_coin); };
         store_account<Collat>(market, victim, acc);
         event::emit(Liquidated { market_id: object::id(market), who: victim, qty_closed: closed, exec_price_1e6: px, penalty_collat: pay, timestamp_ms: clock.timestamp_ms() });
+        // Rewards: liquidation credit
+        let notional_1e6: u128 = (closed as u128) * (px as u128) * (market.series.contract_size as u128);
+        rewards::on_liquidation(rewards_obj, ctx.sender(), notional_1e6, clock);
     }
 
     // Views & helpers

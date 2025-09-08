@@ -34,6 +34,42 @@
   max-width: 100% !important;
 }
 
+/* Override Wormhole Connect button styles to match protocol pages */
+.widgetCard :global(button) {
+  border: none !important;
+  background: #0f131a !important;
+  color: #cbd5e1 !important;
+  border-radius: 6px !important;
+  font-weight: 500 !important;
+  transition: all 0.2s ease !important;
+}
+
+.widgetCard :global(button:hover) {
+  background: #1a1d29 !important;
+  color: #ffffff !important;
+}
+
+.widgetCard :global(button:disabled) {
+  background: #0a0c12 !important;
+  color: #4b5563 !important;
+  cursor: not-allowed !important;
+}
+
+/* Primary action buttons (like Connect Wallet) */
+.widgetCard :global(button[data-testid*="connect"]),
+.widgetCard :global(button[class*="primary"]),
+.widgetCard :global(button[class*="connect"]) {
+  background: #ffffff !important;
+  color: #000000 !important;
+}
+
+.widgetCard :global(button[data-testid*="connect"]:hover),
+.widgetCard :global(button[class*="primary"]:hover),
+.widgetCard :global(button[class*="connect"]:hover) {
+  background: #e5e7eb !important;
+  color: #000000 !important;
+}
+
 /* Footer (copied from AppShell.module.css) */
 .footer {
   background: #030507;

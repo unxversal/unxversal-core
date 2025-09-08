@@ -227,7 +227,7 @@
 
 /* Order Summary */
 .orderSummary {
-  background: #0a0c12;
+  background: #0f131a;
   border-radius: 6px;
   padding: 12px;
   display: flex;
@@ -371,7 +371,7 @@
 
 /* Market Info Section */
 .marketInfo {
-  background: #0a0c12;
+  background: #0f131a;
   border-radius: 6px;
   padding: 12px;
   display: flex;

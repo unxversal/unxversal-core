@@ -148,9 +148,9 @@ function App() {
           <span className={view==='futures'?styles.active:''} onClick={() => setView('futures')}>Futures</span>
           <span className={view==='perps'?styles.active:''} onClick={() => setView('perps')}>Perps</span>
           <span className={view==='lending'?styles.active:''} onClick={() => setView('lending')}>Lending</span>
-          <span className={view==='bridge'?styles.active:''} onClick={() => setView('bridge')}>Bridge</span>
-          <span className={view==='staking'?styles.active:''} onClick={() => setView('staking')}>Staking</span>
           <span className={view==='dex'?styles.active:''} onClick={() => setView('dex')}>DEX</span>
+          <span className={view==='staking'?styles.active:''} onClick={() => setView('staking')}>Staking</span>
+          <span className={view==='bridge'?styles.active:''} onClick={() => setView('bridge')}>Bridge</span>
           <span className={view==='settings'?styles.active:''} onClick={() => setView('settings')}>Settings</span>
         </nav>
         <div className={styles.tools}>

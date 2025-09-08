@@ -33,6 +33,7 @@ module unxversal::options {
     use unxversal::unxv::UNXV;
     use unxversal::oracle::{Self as uoracle, OracleRegistry};
     use switchboard::aggregator::Aggregator;
+    use unxversal::rewards as rewards;
 
     // Errors
     const E_NOT_ADMIN: u64 = 1;
@@ -250,6 +251,7 @@ module unxversal::options {
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
+        rewards_obj: &mut rewards::Rewards,
         mut fee_unxv_in: Option<Coin<UNXV>>,
         clock: &Clock,
         ctx: &mut TxContext,
@@ -288,6 +290,8 @@ module unxversal::options {
             let maker_rem_before = qty0 - filled0;
             let maker_rem_after = if (maker_rem_before > qty) { maker_rem_before - qty } else { 0 };
             event::emit(OrderFilled { key, maker_order_id: ubk::fill_maker_id(&f), maker, taker: ctx.sender(), price: p, base_qty: qty, premium_quote: prem, maker_remaining_qty: maker_rem_after, timestamp_ms: clock.timestamp_ms() });
+            // Rewards for options premium (USD assumed stable)
+            rewards::on_option_fill(rewards_obj, ctx.sender(), maker, (prem as u128), clock);
             transfer::public_transfer(pay, maker);
             total_units = total_units + qty;
             total_premium = total_premium + prem;

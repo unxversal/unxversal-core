@@ -22,7 +22,7 @@ export function BridgeScreen({ network, protocolStatus }: {
     return {
       network: net as 'Mainnet' | 'Testnet' | 'Devnet',
       ui: {
-        title: 'Unxversal Bridge',
+        title: 'Bridge to Sui',
         showHamburgerMenu: false,
         defaultInputs: {
           toChain: 'Sui',
@@ -33,7 +33,13 @@ export function BridgeScreen({ network, protocolStatus }: {
 
   const theme: WormholeConnectTheme = useMemo(() => ({
     mode: 'dark',
-    primary: '#78c4b6',
+    primary: '#ffffff',
+    secondary: '#0f131a',
+    text: '#e5e7eb',
+    textSecondary: '#9ca3af',
+    input: '#0f131a',
+    error: '#ef4444',
+    success: '#10b981',
   }), []);
 
   return (
