@@ -17,9 +17,10 @@ import { LendingScreen } from './components/lending/LendingScreen'
 import { StakingScreen } from './components/staking/StakingScreen'
 import { SettingsScreen } from './components/SettingsScreen'
 import { OptionsScreen } from './components/options/OptionsScreen'
+import { BridgeScreen } from './components/bridge/BridgeScreen'
 import { createMockOptionsProvider } from './components/options/providers/mock'
 
-type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'settings'
+type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'bridge' | 'settings'
 
 function App() {
   const [network] = useState<'testnet' | 'mainnet'>(loadSettings().network)
@@ -122,6 +123,9 @@ function App() {
         // TODO: Future implementation should show: PRICE | MARKET | Unxversal Perps
         document.title = 'Unxversal Perps';
         break;
+      case 'bridge':
+        document.title = 'Unxversal Bridge';
+        break;
       case 'settings':
         document.title = 'Unxversal Settings';
         break;
@@ -132,7 +136,7 @@ function App() {
   }, [view]);
   
   return (
-    <div className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' ? styles.appRootDex : styles.appRoot}>
+    <div className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'bridge' ? styles.appRootDex : styles.appRoot}>
       <header className={styles.header}>
         <div className={styles.brand}>
           <img src="/whitetransparentunxvdolphin.png" alt="Unxversal" style={{ width: 32, height: 32 }} />
@@ -144,6 +148,7 @@ function App() {
           <span className={view==='futures'?styles.active:''} onClick={() => setView('futures')}>Futures</span>
           <span className={view==='perps'?styles.active:''} onClick={() => setView('perps')}>Perps</span>
           <span className={view==='lending'?styles.active:''} onClick={() => setView('lending')}>Lending</span>
+          <span className={view==='bridge'?styles.active:''} onClick={() => setView('bridge')}>Bridge</span>
           <span className={view==='staking'?styles.active:''} onClick={() => setView('staking')}>Staking</span>
           <span className={view==='dex'?styles.active:''} onClick={() => setView('dex')}>DEX</span>
           <span className={view==='settings'?styles.active:''} onClick={() => setView('settings')}>Settings</span>
@@ -159,6 +164,7 @@ function App() {
         {view === 'staking' && <StakingScreen started={started} network={network} protocolStatus={protocolStatus} />}
         {view === 'futures' && <FuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'perps' && <PerpsScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
+        {view === 'bridge' && <BridgeScreen network={network} protocolStatus={protocolStatus} />}
         {view === 'options' && (
           <OptionsScreen
             started={started}
@@ -177,7 +183,7 @@ function App() {
         )}
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>
-      {!(view === 'dex' || view === 'gas' || view === 'futures' || view === 'lending' || view === 'staking' || view === 'perps') && (
+      {!(view === 'dex' || view === 'gas' || view === 'futures' || view === 'lending' || view === 'staking' || view === 'perps' || view === 'bridge') && (
         <footer className={styles.footer}>
           <div className={styles.statusBadges}>
             <div className={`${styles.badge} ${protocolStatus.options ? styles.connected : styles.disconnected}`}>
