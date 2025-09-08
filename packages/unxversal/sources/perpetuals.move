@@ -109,6 +109,21 @@ module unxversal::perpetuals {
         ctx: &mut TxContext,
     ) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        // Defaults: tiered IM thresholds and bps
+        let mut tier_thresholds: vector<u64> = vector::empty<u64>();
+        vector::push_back(&mut tier_thresholds, 5_000_000_000_000);
+        vector::push_back(&mut tier_thresholds, 25_000_000_000_000);
+        vector::push_back(&mut tier_thresholds, 100_000_000_000_000);
+        vector::push_back(&mut tier_thresholds, 250_000_000_000_000);
+        vector::push_back(&mut tier_thresholds, 1_000_000_000_000_000);
+
+        let mut tier_bps: vector<u64> = vector::empty<u64>();
+        vector::push_back(&mut tier_bps, 800);
+        vector::push_back(&mut tier_bps, 1000);
+        vector::push_back(&mut tier_bps, 1500);
+        vector::push_back(&mut tier_bps, 2000);
+        vector::push_back(&mut tier_bps, 3000);
+
         let m = PerpMarket<Collat> {
             id: object::new(ctx),
             params: PerpParams { symbol, contract_size, funding_interval_ms },
@@ -123,9 +138,9 @@ module unxversal::perpetuals {
             keeper_incentive_bps,
             account_max_notional_1e6: 0,
             market_max_notional_1e6: 0,
-            account_share_of_oi_bps: 0,
-            tier_thresholds_notional_1e6: vector::empty<u64>(),
-            tier_im_bps: vector::empty<u64>(),
+            account_share_of_oi_bps: 300,
+            tier_thresholds_notional_1e6: tier_thresholds,
+            tier_im_bps: tier_bps,
             total_long_qty: 0,
             total_short_qty: 0,
             book: ubk::empty(tick_size, lot_size, min_size, ctx),

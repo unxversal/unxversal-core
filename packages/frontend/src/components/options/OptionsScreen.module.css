@@ -278,7 +278,7 @@
 }
 
 .priceText {
-  color: #000000;
+  color: #10b981;
   padding: 6px 8px;
   display: flex;
   align-items: center;
@@ -287,11 +287,11 @@
 .plusDivider {
   width: 1px;
   height: 20px;
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(16, 185, 129, 0.3);
 }
 
 .plusIcon {
-  color: #000000;
+  color: #10b981;
   padding: 6px 8px;
   display: flex;
   align-items: center;
@@ -327,13 +327,19 @@
 }
 
 .priceIndicatorLabel {
-  background: #10b981;
-  color: #ffffff;
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
   padding: 4px 12px;
   border-radius: 12px;
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.priceIndicatorLabel:hover {
+  background: rgba(16, 185, 129, 0.3);
 }
 
 /* Sticky price indicator */
@@ -343,7 +349,11 @@
   left: 50%;
   transform: translateX(-50%);
   z-index: 20;
-  pointer-events: none;
+  pointer-events: auto;
+}
+
+.stickyPriceIndicator .priceIndicatorLabel {
+  pointer-events: auto;
 }
 
 /* Modal styles */

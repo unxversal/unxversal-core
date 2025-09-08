@@ -22,6 +22,32 @@ export function OptionsChain({
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const priceIndicatorRef = useRef<HTMLTableRowElement>(null);
 
+  const scrollToPrice = () => {
+    const priceRow = priceIndicatorRef.current;
+    const container = tableContainerRef.current;
+    
+    if (priceRow && container) {
+      // First try scrollIntoView
+      priceRow.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'center' 
+      });
+      
+      // Fallback: manual scroll calculation
+      setTimeout(() => {
+        const containerRect = container.getBoundingClientRect();
+        const priceRowRect = priceRow.getBoundingClientRect();
+        const scrollTop = container.scrollTop;
+        const targetScroll = scrollTop + (priceRowRect.top - containerRect.top) - (containerRect.height / 2) + (priceRowRect.height / 2);
+        
+        container.scrollTo({
+          top: targetScroll,
+          behavior: 'smooth'
+        });
+      }, 100);
+    }
+  };
+
   useEffect(() => {
     let mounted = true;
     const load = async () => {
@@ -157,15 +183,31 @@ export function OptionsChain({
                       <div 
                         className={styles.pricePlusBadge}
                         style={{
-                          backgroundColor: (r.priceChange24h || 0) >= 0 ? '#10b981' : '#ef4444'
+                          backgroundColor: (r.priceChange24h || 0) >= 0 ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'
                         }}
                         onClick={() => onOptionSelect?.(r.strike, callPut !== 'put', callPut === 'put' ? r.putAsk : r.callAsk)}
                       >
-                        <span className={styles.priceText}>
+                        <span 
+                          className={styles.priceText}
+                          style={{
+                            color: (r.priceChange24h || 0) >= 0 ? '#10b981' : '#ef4444'
+                          }}
+                        >
                           ${(callPut === 'put' ? r.putAsk : r.callAsk).toFixed(2)}
                         </span>
-                        <div className={styles.plusDivider}></div>
-                        <Plus size={14} className={styles.plusIcon} />
+                        <div 
+                          className={styles.plusDivider}
+                          style={{
+                            background: (r.priceChange24h || 0) >= 0 ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'
+                          }}
+                        ></div>
+                        <Plus 
+                          size={14} 
+                          className={styles.plusIcon}
+                          style={{
+                            color: (r.priceChange24h || 0) >= 0 ? '#10b981' : '#ef4444'
+                          }}
+                        />
                       </div>
                     </td>
                     <td></td>
@@ -175,7 +217,15 @@ export function OptionsChain({
                       <td colSpan={7} style={{ padding: '8px 0', position: 'relative' }}>
                         <div className={styles.priceIndicator}>
                           <div className={styles.priceIndicatorLine}></div>
-                          <div className={styles.priceIndicatorLabel}>
+                          <div 
+                            className={styles.priceIndicatorLabel}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              console.log('Main price indicator clicked');
+                              scrollToPrice();
+                            }}
+                          >
                             {baseSymbol} price: ${spotPrice.toFixed(2)}
                           </div>
                           <div className={styles.priceIndicatorLine}></div>
@@ -190,14 +240,23 @@ export function OptionsChain({
         </table>
       </div>
       
-      {/* Sticky price indicator when scrolled out of view - positioned relative to the main container */}
-      {showStickyPrice && spotPrice && (
-        <div className={styles.stickyPriceIndicator}>
-          <div className={styles.priceIndicatorLabel}>
-            {baseSymbol} price: ${spotPrice.toFixed(2)}
+        {/* Sticky price indicator when scrolled out of view - positioned relative to the main container */}
+        {showStickyPrice && spotPrice && (
+          <div className={styles.stickyPriceIndicator}>
+            <div 
+              className={styles.priceIndicatorLabel}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('Sticky price clicked, scrolling to main price indicator');
+                scrollToPrice();
+              }}
+              style={{ cursor: 'pointer' }}
+            >
+              {baseSymbol} price: ${spotPrice.toFixed(2)}
+            </div>
           </div>
-        </div>
-      )}
+        )}
     </div>
   );
 }
