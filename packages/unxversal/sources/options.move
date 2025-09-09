@@ -32,7 +32,7 @@ module unxversal::options {
     use unxversal::staking::{Self as staking, StakingPool};
     use unxversal::unxv::UNXV;
     use unxversal::oracle::{Self as uoracle, OracleRegistry};
-    use switchboard::aggregator::Aggregator;
+    use pyth::price_info::PriceInfoObject;
     use unxversal::rewards as rewards;
 
     // Errors
@@ -349,7 +349,7 @@ module unxversal::options {
         mut pos: OptionPosition<Base, Quote>,
         amount: u64,
         reg: &OracleRegistry,
-        agg: &Aggregator,
+        price_info_object: &PriceInfoObject,
         mut pay_quote: Option<Coin<Quote>>, // required for calls
         mut pay_base: Option<Coin<Base>>,   // required for puts
         clock: &Clock,
@@ -359,7 +359,7 @@ module unxversal::options {
         assert!(amount > 0 && amount <= pos.amount, E_ZERO);
         let ser = table::borrow_mut(&mut market.series, pos.key);
         assert!(clock.timestamp_ms() <= ser.series.expiry_ms, E_PAST_EXPIRY_EXERCISE);
-        let spot_1e6 = uoracle::get_price_for_symbol(reg, clock, &ser.series.symbol, agg);
+        let spot_1e6 = uoracle::get_price_for_symbol(reg, clock, &ser.series.symbol, price_info_object);
         let strike = ser.series.strike_1e6;
         event::emit(Exercised { key: pos.key, exerciser: ctx.sender(), amount, spot_1e6 });
         if (ser.series.is_call) {
@@ -442,18 +442,18 @@ module unxversal::options {
 
     // === Keeper utilities: pre-expiry sampling and snap ===
     /// Record a pre-expiry price sample for a series (LVP + TWAP buffers)
-    public fun update_series_index_price<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, key: u128, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, _ctx: &mut TxContext) {
+    public fun update_series_index_price<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, key: u128, reg: &OracleRegistry, price_info_object: &PriceInfoObject, clock: &Clock, _ctx: &mut TxContext) {
         assert!(table::contains(&market.series, key), E_INVALID_SERIES);
         let ser = table::borrow_mut(&mut market.series, key);
         let now = clock.timestamp_ms();
         if (now > ser.series.expiry_ms) return;
-        let px = uoracle::get_price_for_symbol(reg, clock, &ser.series.symbol, agg);
+        let px = uoracle::get_price_for_symbol(reg, clock, &ser.series.symbol, price_info_object);
         ser.lvp_price_1e6 = px; ser.lvp_ts_ms = now;
         twap_append(&mut ser.twap_ts_ms, &mut ser.twap_px_1e6, now, px, ser.series.expiry_ms);
     }
 
     /// Snap canonical settlement price once after expiry (LVP preferred, else TWAP, else live)
-    public fun snap_series_settlement<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, key: u128, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock, ctx: &mut TxContext) {
+    public fun snap_series_settlement<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, key: u128, reg: &OracleRegistry, price_info_object: &PriceInfoObject, clock: &Clock, ctx: &mut TxContext) {
         assert!(table::contains(&market.series, key), E_INVALID_SERIES);
         let ser = table::borrow_mut(&mut market.series, key);
         let now = clock.timestamp_ms();
@@ -463,7 +463,7 @@ module unxversal::options {
             ser.lvp_price_1e6
         } else {
             let tw = compute_twap_in_window(&ser.twap_ts_ms, &ser.twap_px_1e6, ser.series.expiry_ms, TWAP_WINDOW_MS);
-            if (tw > 0) { tw } else { uoracle::get_price_for_symbol(reg, clock, &ser.series.symbol, agg) }
+            if (tw > 0) { tw } else { uoracle::get_price_for_symbol(reg, clock, &ser.series.symbol, price_info_object) }
         };
         ser.settlement_price_1e6 = px;
         ser.settled = true;
@@ -489,7 +489,7 @@ module unxversal::options {
     }
 
     /// Settle a long position after expiry at frozen price (physical settlement using provided coins)
-    public fun settle_position_after_expiry<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, mut pos: OptionPosition<Base, Quote>, amount: u64, reg: &OracleRegistry, agg: &Aggregator, mut pay_quote: Option<Coin<Quote>>, mut pay_base: Option<Coin<Base>>, clock: &Clock, ctx: &mut TxContext): (Option<Coin<Base>>, Option<Coin<Quote>>) {
+    public fun settle_position_after_expiry<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, mut pos: OptionPosition<Base, Quote>, amount: u64, reg: &OracleRegistry, price_info_object: &PriceInfoObject, mut pay_quote: Option<Coin<Quote>>, mut pay_base: Option<Coin<Base>>, clock: &Clock, ctx: &mut TxContext): (Option<Coin<Base>>, Option<Coin<Quote>>) {
         assert!(table::contains(&market.series, pos.key), E_INVALID_SERIES);
         assert!(amount > 0 && amount <= pos.amount, E_ZERO);
         let ser = table::borrow_mut(&mut market.series, pos.key);

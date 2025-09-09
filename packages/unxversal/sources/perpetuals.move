@@ -22,7 +22,7 @@ module unxversal::perpetuals {
     use unxversal::oracle::{Self as uoracle, OracleRegistry};
     use unxversal::book::{Self as ubk, Book};
     use unxversal::rewards as rewards;
-    use switchboard::aggregator::Aggregator;
+    use pyth::price_info::PriceInfoObject;
 
     // Errors
     const E_NOT_ADMIN: u64 = 1;
@@ -224,12 +224,12 @@ module unxversal::perpetuals {
         market: &mut PerpMarket<Collat>,
         amount: u64,
         reg: &OracleRegistry,
-        agg: &Aggregator,
+        price_info_object: &PriceInfoObject,
         clock: &Clock,
         ctx: &mut TxContext,
     ): Coin<Collat> {
         assert!(amount > 0, E_ZERO);
-        let px = current_price_1e6(&market.params, reg, agg, clock);
+        let px = current_price_1e6(&market.params, reg, price_info_object, clock);
         let mut acc = load_or_new_account<Collat>(market, ctx.sender());
         let (_paid1, _cred1) = settle_funding_user_internal<Collat>(market, &mut acc, clock, ctx);
         let eq = equity_collat(&acc, px, market.params.contract_size);
@@ -249,7 +249,7 @@ module unxversal::perpetuals {
     public fun open_long<Collat>(
         market: &mut PerpMarket<Collat>,
         reg: &OracleRegistry,
-        agg: &Aggregator,
+        price_info_object: &PriceInfoObject,
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
@@ -259,14 +259,14 @@ module unxversal::perpetuals {
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        taker_trade_internal<Collat>(market, true, qty, ((1u128 << 63) - 1) as u64, reg, agg, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
+        taker_trade_internal<Collat>(market, true, qty, ((1u128 << 63) - 1) as u64, reg, price_info_object, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
     public fun open_short<Collat>(
         market: &mut PerpMarket<Collat>,
         reg: &OracleRegistry,
-        agg: &Aggregator,
+        price_info_object: &PriceInfoObject,
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
@@ -276,14 +276,14 @@ module unxversal::perpetuals {
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        taker_trade_internal<Collat>(market, false, qty, 1, reg, agg, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
+        taker_trade_internal<Collat>(market, false, qty, 1, reg, price_info_object, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
     public fun close_long<Collat>(
         market: &mut PerpMarket<Collat>,
         reg: &OracleRegistry,
-        agg: &Aggregator,
+        price_info_object: &PriceInfoObject,
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
@@ -293,14 +293,14 @@ module unxversal::perpetuals {
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        taker_trade_internal<Collat>(market, false, qty, 1, reg, agg, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
+        taker_trade_internal<Collat>(market, false, qty, 1, reg, price_info_object, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
     public fun close_short<Collat>(
         market: &mut PerpMarket<Collat>,
         reg: &OracleRegistry,
-        agg: &Aggregator,
+        price_info_object: &PriceInfoObject,
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
@@ -310,7 +310,7 @@ module unxversal::perpetuals {
         ctx: &mut TxContext,
         qty: u64,
     ) {
-        taker_trade_internal<Collat>(market, true, qty, ((1u128 << 63) - 1) as u64, reg, agg, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
+        taker_trade_internal<Collat>(market, true, qty, ((1u128 << 63) - 1) as u64, reg, price_info_object, cfg, vault, staking_pool, rewards_obj, &mut maybe_unxv, clock, ctx);
         option::destroy_none(maybe_unxv);
     }
 
@@ -320,7 +320,7 @@ module unxversal::perpetuals {
         qty: u64,
         limit_price_1e6: u64,
         reg: &OracleRegistry,
-        agg: &Aggregator,
+        price_info_object: &PriceInfoObject,
         cfg: &FeeConfig,
         vault: &mut FeeVault,
         staking_pool: &mut StakingPool,
@@ -336,7 +336,7 @@ module unxversal::perpetuals {
         let mut acc = load_or_new_account<Collat>(market, ctx.sender());
         let (_paid2, _cred2) = settle_funding_user_internal<Collat>(market, &mut acc, clock, ctx);
         let mut total_notional_1e6: u128 = 0u128;
-        let index_px = current_price_1e6(&market.params, reg, agg, clock);
+        let index_px = current_price_1e6(&market.params, reg, price_info_object, clock);
         let fills_len = ubk::fillplan_num_fills(&plan);
         let mut i = 0u64;
         while (i < fills_len) {
@@ -387,7 +387,7 @@ module unxversal::perpetuals {
         };
 
         // Enforce notional caps and share-of-OI caps after applying all fills
-        let px_index = current_price_1e6(&market.params, reg, agg, clock);
+        let px_index = current_price_1e6(&market.params, reg, price_info_object, clock);
         let gross_acc_post: u64 = acc.long_qty + acc.short_qty;
         let gross_mkt_post: u64 = market.total_long_qty + market.total_short_qty;
         let per_unit_1e6: u128 = ((px_index as u128) * (market.params.contract_size as u128)) / 1_000_000u128;
@@ -418,7 +418,7 @@ module unxversal::perpetuals {
             event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_1e6: total_notional_1e6, fee_paid: fee_amt, paid_in_unxv: false, timestamp_ms: clock.timestamp_ms() });
         };
 
-        let px_mark = current_price_1e6(&market.params, reg, agg, clock);
+        let px_mark = current_price_1e6(&market.params, reg, price_info_object, clock);
         let eq = equity_collat(&acc, px_mark, market.params.contract_size);
         let req_im = required_margin_effective<Collat>(market, &acc, px_mark);
         let free = if (eq > acc.locked_im) { eq - acc.locked_im } else { 0 };
@@ -482,7 +482,7 @@ module unxversal::perpetuals {
         market: &mut PerpMarket<Collat>,
         victim: address,
         reg: &OracleRegistry,
-        agg: &Aggregator,
+        price_info_object: &PriceInfoObject,
         vault: &mut FeeVault,
         rewards_obj: &mut rewards::Rewards,
         clock: &Clock,
@@ -490,7 +490,7 @@ module unxversal::perpetuals {
         qty: u64,
     ) {
         assert!(table::contains(&market.accounts, victim), E_NO_ACCOUNT);
-        let px = current_price_1e6(&market.params, reg, agg, clock);
+        let px = current_price_1e6(&market.params, reg, price_info_object, clock);
         let mut acc = table::remove(&mut market.accounts, victim);
         // settle funding first for fairness
         let (_paid, _credited) = settle_funding_user_internal<Collat>(market, &mut acc, clock, ctx);
@@ -530,7 +530,7 @@ module unxversal::perpetuals {
     }
 
     // === Views & helpers ===
-    fun current_price_1e6(params: &PerpParams, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock): u64 { uoracle::get_price_for_symbol(reg, clock, &params.symbol, agg) }
+    fun current_price_1e6(params: &PerpParams, reg: &OracleRegistry, price_info_object: &PriceInfoObject, clock: &Clock): u64 { uoracle::get_price_for_symbol(reg, clock, &params.symbol, price_info_object) }
 
     const U64_MAX_LITERAL: u64 = 18_446_744_073_709_551_615;
     fun equity_collat<Collat>(acc: &PerpAccount<Collat>, px_1e6: u64, cs: u64): u64 {

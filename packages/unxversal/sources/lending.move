@@ -25,7 +25,7 @@ module unxversal::lending {
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::fees::{Self as fees};
     use unxversal::oracle::{Self as uoracle, OracleRegistry};
-    use switchboard::aggregator::Aggregator;
+    use pyth::price_info::PriceInfoObject;
     
     /// Errors
     const E_NOT_ADMIN: u64 = 1;
@@ -389,7 +389,7 @@ module unxversal::lending {
         market: &mut LendingMarket<Collat, Debt>,
         amount: u64,
         reg: &OracleRegistry,
-        agg: &Aggregator,
+        price_info_object: &PriceInfoObject,
         clock: &Clock,
         ctx: &mut TxContext,
     ): Coin<Collat> {
@@ -398,7 +398,7 @@ module unxversal::lending {
         let cur = collat_of_get(&market.collateral_of, who);
         assert!(cur >= amount, E_INSUFFICIENT_LIQUIDITY);
         accrue_market<Collat, Debt>(market, clock);
-        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, agg);
+        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, price_info_object);
         let new_coll: u64 = cur - amount;
         let coll_usd_after_1e6: u128 = (new_coll as u128) * (px_1e6 as u128);
         let max_debt_after_1e6: u128 = (coll_usd_after_1e6 * (market.collateral_factor_bps as u128)) / (fees::bps_denom() as u128);
@@ -416,14 +416,14 @@ module unxversal::lending {
         market: &mut LendingMarket<Collat, Debt>,
         amount: u64,
         reg: &OracleRegistry,
-        agg: &Aggregator,
+        price_info_object: &PriceInfoObject,
         clock: &Clock,
         ctx: &mut TxContext,
     ): Coin<Debt> {
         accrue_market<Collat, Debt>(market, clock);
         assert!(amount > 0, E_ZERO_AMOUNT);
         assert!(balance::value(&market.debt_liquidity) >= amount, E_INSUFFICIENT_LIQUIDITY);
-        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, agg);
+        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, price_info_object);
         let coll_units = collat_of_get(&market.collateral_of, ctx.sender());
         let coll_usd_1e6: u128 = (coll_units as u128) * (px_1e6 as u128);
         let max_debt_1e6: u128 = (coll_usd_1e6 * (market.collateral_factor_bps as u128)) / (fees::bps_denom() as u128);
@@ -473,12 +473,12 @@ module unxversal::lending {
         borrower: address,
         repay_amount: Coin<Debt>,
         reg: &OracleRegistry,
-        agg: &Aggregator,
+        price_info_object: &PriceInfoObject,
         clock: &Clock,
         ctx: &mut TxContext,
     ): Coin<Debt> {
         accrue_market<Collat, Debt>(market, clock);
-        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, agg);
+        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, price_info_object);
         let coll = collat_of_get(&market.collateral_of, borrower) as u128;
         let coll_usd_1e6: u128 = coll * (px_1e6 as u128);
         let liq_max_debt_1e6: u128 = (coll_usd_1e6 * (market.liquidation_threshold_bps as u128)) / (fees::bps_denom() as u128);
@@ -538,8 +538,8 @@ module unxversal::lending {
     }
 
     // ===== Views =====
-    public fun max_borrowable_debt<Collat, Debt>(market: &LendingMarket<Collat, Debt>, who: address, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock): u64 {
-        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, agg);
+    public fun max_borrowable_debt<Collat, Debt>(market: &LendingMarket<Collat, Debt>, who: address, reg: &OracleRegistry, price_info_object: &PriceInfoObject, clock: &Clock): u64 {
+        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, price_info_object);
         let coll = collat_of_get(&market.collateral_of, who) as u128;
         let coll_usd_1e6: u128 = coll * (px_1e6 as u128);
         let cap_1e6: u128 = (coll_usd_1e6 * (market.collateral_factor_bps as u128)) / (fees::bps_denom() as u128);
@@ -547,8 +547,8 @@ module unxversal::lending {
         if (cap_1e6 <= owed_1e6) { 0 } else { (cap_1e6 - owed_1e6) as u64 }
     }
 
-    public fun is_healthy_market<Collat, Debt>(market: &LendingMarket<Collat, Debt>, who: address, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock): bool {
-        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, agg);
+    public fun is_healthy_market<Collat, Debt>(market: &LendingMarket<Collat, Debt>, who: address, reg: &OracleRegistry, price_info_object: &PriceInfoObject, clock: &Clock): bool {
+        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, price_info_object);
         let coll = collat_of_get(&market.collateral_of, who) as u128;
         let coll_usd_1e6: u128 = coll * (px_1e6 as u128);
         let max_1e6: u128 = (coll_usd_1e6 * (market.collateral_factor_bps as u128)) / (fees::bps_denom() as u128);
