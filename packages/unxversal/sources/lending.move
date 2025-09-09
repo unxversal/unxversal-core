@@ -19,8 +19,9 @@ module unxversal::lending {
         table::{Self as table, Table},
         clock::Clock,
     };
+    
     use std::type_name::{Self as type_name};
-    use std::string::{Self as string, String};
+    use std::string::String;
     // no option alias needed
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::fees::{Self as fees};
@@ -36,6 +37,7 @@ module unxversal::lending {
     const E_NO_SHARES: u64 = 6;
     const E_INSUFFICIENT_SHARES: u64 = 7;
     const E_FLASH_UNDERPAY: u64 = 8;
+    const E_INSUFFICIENT_RESERVES: u64 = 9;
 
     /// 1e18 scalar for indices
     const WAD: u128 = 1_000_000_000_000_000_000;
@@ -68,7 +70,7 @@ module unxversal::lending {
         reserve_factor_bps: u64,
         /// Collateral factor (bps) applied to depositor value for borrow limits
         collateral_factor_bps: u64,
-        /// Liquidation collateral ratio (bps). Must be lower than collateral_factor_bps.
+        /// Liquidation threshold (bps). Must be greater than or equal to collateral_factor_bps.
         liquidation_collateral_bps: u64,
         /// Liquidation bonus (bps) given to liquidator on seized shares
         liquidation_bonus_bps: u64,
@@ -100,6 +102,7 @@ module unxversal::lending {
     public struct FlashFeeUpdated has copy, drop { flash_fee_bps: u64, timestamp_ms: u64 }
     public struct FlashLoan has copy, drop { who: address, amount: u64, fee: u64, timestamp_ms: u64 }
     public struct FlashRepaid has copy, drop { who: address, principal: u64, fee: u64, timestamp_ms: u64 }
+    public struct ReservesSwept has copy, drop { asset: type_name::TypeName, amount: u64, vault_id: ID, timestamp_ms: u64 }
 
     /// Non-storable, non-droppable capability enforcing same-transaction flash repay
     public struct FlashLoanCap<phantom T> { principal: u64, fee: u64 }
@@ -118,7 +121,7 @@ module unxversal::lending {
         ctx: &mut TxContext
     ) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        assert!(liquidation_collateral_bps < collateral_factor_bps, E_NOT_ADMIN);
+        assert!(liquidation_collateral_bps >= collateral_factor_bps, E_NOT_ADMIN);
         assert!(kink_util_bps > 0 && kink_util_bps < fees::bps_denom(), E_NOT_ADMIN);
         let irm = InterestRateModel { base_rate_bps, multiplier_bps, jump_multiplier_bps, kink_util_bps };
         let pool = LendingPool<T> {
@@ -146,7 +149,8 @@ module unxversal::lending {
     public fun set_params<T>(reg_admin: &AdminRegistry, pool: &mut LendingPool<T>, reserve_factor_bps: u64, collateral_factor_bps: u64, liquidation_bonus_bps: u64, clock: &Clock, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         assert!(reserve_factor_bps <= fees::bps_denom(), E_NOT_ADMIN);
-        assert!(collateral_factor_bps > pool.liquidation_collateral_bps, E_HEALTH_VIOLATION);
+        // Liquidation threshold must remain >= LTV (collateral factor)
+        assert!(collateral_factor_bps <= pool.liquidation_collateral_bps, E_HEALTH_VIOLATION);
         assert!(collateral_factor_bps < fees::bps_denom(), E_HEALTH_VIOLATION);
         pool.reserve_factor_bps = reserve_factor_bps;
         pool.collateral_factor_bps = collateral_factor_bps;
@@ -169,11 +173,40 @@ module unxversal::lending {
         pool.irm = InterestRateModel { base_rate_bps, multiplier_bps, jump_multiplier_bps, kink_util_bps };
     }
 
+    /// Admin: raise or lower liquidation threshold; must stay >= collateral_factor_bps
+    public fun set_liquidation_threshold<T>(reg_admin: &AdminRegistry, pool: &mut LendingPool<T>, new_liq_threshold_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(new_liq_threshold_bps >= pool.collateral_factor_bps, E_HEALTH_VIOLATION);
+        assert!(new_liq_threshold_bps < fees::bps_denom(), E_HEALTH_VIOLATION);
+        pool.liquidation_collateral_bps = new_liq_threshold_bps;
+    }
+
     /// Admin: set flash loan fee (bps)
     public fun set_flash_fee<T>(reg_admin: &AdminRegistry, pool: &mut LendingPool<T>, flash_fee_bps: u64, clock: &Clock, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         pool.flash_fee_bps = flash_fee_bps;
         event::emit(FlashFeeUpdated { flash_fee_bps, timestamp_ms: sui::clock::timestamp_ms(clock) });
+    }
+
+    /// Admin: sweep a portion of accrued reserves into the global FeeVault.
+    /// Reserves are held as Balance<T> inside the pool and are not supplier funds.
+    /// This moves `amount` from pool.reserves to `fees::FeeVault` as Coin<T>.
+    public fun sweep_reserves_to_fee_vault<T>(
+        reg_admin: &AdminRegistry,
+        pool: &mut LendingPool<T>,
+        vault: &mut fees::FeeVault,
+        amount: u64,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        let avail = balance::value(&pool.reserves);
+        assert!(avail >= amount, E_INSUFFICIENT_RESERVES);
+        let part = balance::split(&mut pool.reserves, amount);
+        let coin_out = coin::from_balance(part, ctx);
+        fees::accrue_generic<T>(vault, coin_out, clock, ctx);
+        event::emit(ReservesSwept { asset: type_name::get<T>(), amount, vault_id: object::id(vault), timestamp_ms: sui::clock::timestamp_ms(clock) });
     }
 
     /// Public: deposit liquidity and receive shares (acts as collateral)
@@ -526,8 +559,8 @@ module unxversal::lending {
         let cap = fees::lending_collateral_bonus_bps_max(cfg);
         let add = if (bonus > cap) { cap } else { bonus };
         let mut eff = base_cf_bps + add;
-        // never let minimum CR drop below liquidation CR
-        if (eff <= liq_cf_bps) { eff = liq_cf_bps + 1; };
+        // Cap effective CF at liquidation threshold (borrowers should not be liquidatable at max LTV)
+        if (eff > liq_cf_bps) { eff = liq_cf_bps; };
         if (eff > fees::bps_denom() - 100) { fees::bps_denom() - 100 } else { eff }
     }
 

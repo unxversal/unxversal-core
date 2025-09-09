@@ -127,7 +127,7 @@ module unxversal::staking {
             b"https://unxversal.com/branding/unxv-staking.png".to_string(),
             b"https://unxversal.com/branding/unxv-staking-thumb.png".to_string(),
             b"https://unxversal.com".to_string(),
-            b"Unxversal".to_string(),
+            b"Unxversal Protocol".to_string(),
         ];
         let mut display = display::new_with_fields<StakingPool>(&publisher, keys, values, ctx);
         display.update_version();

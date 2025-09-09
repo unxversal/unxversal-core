@@ -46,6 +46,7 @@ export type DeployConfig = {
    * Initialize lending pools (isolated, per asset)
    */
   lending?: Array<{
+    name?: string;
     poolId?: string;
     asset: TypeTag;
     baseRateBps: number;
@@ -173,26 +174,64 @@ export const deployConfig: DeployConfig = {
   lending: [
     // Example defaults; replace pkgId at runtime via resolveTypeTag
     {
-      asset: 'SUI',
+      asset: '0x2::sui::SUI',
       baseRateBps: 0,
       multiplierBps: 700,
       jumpMultiplierBps: 3000,
       kinkUtilBps: 8000,
-      reserveFactorBps: 1000,
-      collateralFactorBps: 8000,
-      liquidationCollateralBps: 7000,
-      liquidationBonusBps: 800,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 8500,
+      liquidationCollateralBps: 9200,
+      liquidationBonusBps: 4000,
+    },
+    // Stablecoins
+    {
+      name: 'Native USDC', // native sui usdc
+      asset: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+      baseRateBps: 50,
+      multiplierBps: 800,
+      jumpMultiplierBps: 3500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 8500,
+      liquidationCollateralBps: 9200,
+      liquidationBonusBps: 4000,
     },
     {
-      asset: '::unxv::UNXV',
-      baseRateBps: 0,
-      multiplierBps: 600,
-      jumpMultiplierBps: 2500,
+      name: 'Wrapped USDC',
+      asset: '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 800,
+      jumpMultiplierBps: 3500,
       kinkUtilBps: 8000,
-      reserveFactorBps: 1000,
-      collateralFactorBps: 7500,
-      liquidationCollateralBps: 7000,
-      liquidationBonusBps: 800,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 8500,
+      liquidationCollateralBps: 9200,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'Wrapped USDT',
+      asset: '0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 800,
+      jumpMultiplierBps: 3500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 8500,
+      liquidationCollateralBps: 9200,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'Solana USDC',
+      asset: '0xb231fcda8bbddb31f2ef02e6161444aec64a514e2c89279584ac9806ce9cf037::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 800,
+      jumpMultiplierBps: 3500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 8500,
+      liquidationCollateralBps: 9200,
+      liquidationBonusBps: 4000,
     },
   ],
   options: [],
