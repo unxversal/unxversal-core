@@ -880,7 +880,7 @@ module unxversal::dex {
         staking_pool: &mut StakingPool,
         // For prefer_deep_backend=true
         unxv_deep_pool: &mut Pool<UNXV, DEEP>,
-        mut maybe_unxv: Option<Coin<UNXV>>,
+        maybe_unxv: Option<Coin<UNXV>>,
         min_quote_out: u64,
         notional_usd_1e6: u128,
         rew: &mut Rewards,
@@ -928,7 +928,7 @@ module unxversal::dex {
         staking_pool: &mut StakingPool,
         // For prefer_deep_backend=true
         deep_unxv_pool: &mut Pool<DEEP, UNXV>,
-        mut maybe_unxv: Option<Coin<UNXV>>,
+        maybe_unxv: Option<Coin<UNXV>>,
         min_base_out: u64,
         notional_usd_1e6: u128,
         rew: &mut Rewards,
