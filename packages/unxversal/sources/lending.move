@@ -156,286 +156,41 @@ module unxversal::lending {
     // legacy single-asset flows removed
 
     /// Deposit with rewards: computes USD internally via oracle and records lend-quality if util>kink.
-    public fun deposit_with_rewards<T>(pool: &mut LendingPool<T>, amount: Coin<T>, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, _rewards_obj: &mut (), clock: &Clock, ctx: &mut TxContext) {
-        let util_before = utilization_bps<T>(pool);
-        // read price in USD 1e6
-        let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
-        let amt_units = coin::value(&amount);
-        let usd_1e6: u128 = (amt_units as u128) * (px_1e6 as u128);
-        if (util_before > pool.irm.kink_util_bps && usd_1e6 > 0u128) { let _ = util_before; };
-        deposit<T>(pool, amount, clock, ctx);
-    }
+    
 
     // NOTE: Rewards for deposits should be computed using on-chain oracle pricing inside this module.
     // Intentionally no "deposit_with_rewards" that accepts caller-provided USD to avoid spoofing.
 
-    /// Public: withdraw liquidity by specifying share amount
-    /* legacy single-asset */
-    public fun withdraw<T>(pool: &mut LendingPool<T>, shares: u128, clock: &Clock, ctx: &mut TxContext): Coin<T> {
-        accrue<T>(pool, clock);
-        assert!(shares > 0, E_NO_SHARES);
-        let user = ctx.sender();
-        // check user's shares
-        let user_shares = get_shares(&pool.supplier_shares, user);
-        assert!(user_shares >= shares, E_INSUFFICIENT_SHARES);
-        // compute amount = shares / total_shares * liquidity
-        let liq = balance::value(&pool.liquidity);
-        let amt: u64 = ((shares as u128) * (liq as u128) / (pool.total_supply_shares as u128)) as u64;
-        assert!(amt > 0, E_ZERO_AMOUNT);
-        // Health check simulation after withdrawal
-        if (current_borrow_balance<T>(pool, user) > 0) {
-            let new_user_shares = user_shares - shares;
-            let new_total_shares = pool.total_supply_shares - shares;
-            let new_val: u64 = if (new_total_shares == 0) { 0 } else { (((balance::value(&pool.liquidity) as u128) * (new_user_shares as u128) / (new_total_shares as u128)) as u64) };
-            let maxb: u64 = (((new_val as u128) * (pool.collateral_factor_bps as u128) / (fees::bps_denom() as u128)) as u64);
-            assert!((current_borrow_balance<T>(pool, user) as u128) <= (maxb as u128), E_HEALTH_VIOLATION);
-        };
-        // update shares and supply
-        set_shares(&mut pool.supplier_shares, user, user_shares - shares);
-        pool.total_supply_shares = pool.total_supply_shares - shares;
-        // ensure liquidity availability (cannot withdraw reserves)
-        assert!(balance::value(&pool.liquidity) >= amt, E_INSUFFICIENT_LIQUIDITY);
-        let bal_part = balance::split(&mut pool.liquidity, amt);
-        let c = coin::from_balance(bal_part, ctx);
-        event::emit(Withdraw { who: user, amount: amt, shares, timestamp_ms: sui::clock::timestamp_ms(clock) });
-        c
-    }
+    
 
-    /// Public: borrow asset from pool (uses caller's deposit as collateral)
-    public fun borrow<T>(pool: &mut LendingPool<T>, amount: u64, clock: &Clock, ctx: &mut TxContext): Coin<T> {
-        accrue<T>(pool, clock);
-        assert!(amount > 0, E_ZERO_AMOUNT);
-        // check liquidity
-        assert!(balance::value(&pool.liquidity) >= amount, E_INSUFFICIENT_LIQUIDITY);
-        // health check based on collateral factor
-        let max_borrow = max_borrowable_for<T>(pool, ctx.sender());
-        assert!((current_borrow_balance<T>(pool, ctx.sender()) as u128) + (amount as u128) <= max_borrow as u128, E_HEALTH_VIOLATION);
-        // update borrow position
-        let mut pos = get_borrow_position(&pool.borrows, ctx.sender());
-        pos.principal = pos.principal + (amount as u128);
-        pos.interest_index_snap = pool.borrow_index;
-        let new_principal = pos.principal;
-        set_borrow_position(&mut pool.borrows, ctx.sender(), pos);
-        pool.total_borrows_principal = pool.total_borrows_principal + (amount as u128);
-        // transfer funds
-        let bal_part = balance::split(&mut pool.liquidity, amount);
-        let c = coin::from_balance(bal_part, ctx);
-        event::emit(Borrow { who: ctx.sender(), amount, new_principal, timestamp_ms: sui::clock::timestamp_ms(clock) });
-        c
-    }
+    
 
-    /// Borrow with rewards: computes USD via oracle at borrow time and records borrow usage proxy.
-    public fun borrow_with_rewards<T>(pool: &mut LendingPool<T>, amount: u64, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, _rewards_obj: &mut (), clock: &Clock, ctx: &mut TxContext): Coin<T> {
-        let _util = utilization_bps<T>(pool);
-        let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
-        let usd_1e6: u128 = (amount as u128) * (px_1e6 as u128);
-        if (usd_1e6 > 0u128) { let _ = 0; };
-        borrow<T>(pool, amount, clock, ctx)
-    }
+    
 
     // NOTE: Rewards for borrow should be computed on-chain from oracle price within this module.
     // Intentionally no "borrow_with_rewards" that accepts caller-provided USD to avoid spoofing.
 
-    /// Borrow with one-time fee and staking-tier collateral bonus
-    public fun borrow_with_fee<T>(
-        pool: &mut LendingPool<T>,
-        amount: u64,
-        _staking_pool: &(),
-        cfg: &fees::FeeConfig,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ): Coin<T> {
-        accrue<T>(pool, clock);
-        assert!(amount > 0, E_ZERO_AMOUNT);
-        // effective collateral factor with staking bonus, but never below liquidation CR
-        let eff_cf = effective_collateral_factor_bps(pool.collateral_factor_bps, pool.liquidation_collateral_bps, _staking_pool, ctx.sender(), cfg);
-        // health check with effective CF
-        let max_borrow = max_borrowable_with_cf<T>(pool, ctx.sender(), eff_cf);
-        assert!((current_borrow_balance<T>(pool, ctx.sender()) as u128) + (amount as u128) <= max_borrow as u128, E_HEALTH_VIOLATION);
-        // apply origination fee
-        let fee_bps = fees::lending_borrow_fee_bps(cfg);
-        let fee_amt: u64 = ((amount as u128) * (fee_bps as u128) / (fees::bps_denom() as u128)) as u64;
-        assert!(balance::value(&pool.liquidity) >= amount, E_INSUFFICIENT_LIQUIDITY);
-        // Split amount from liquidity
-        let part_bal = balance::split(&mut pool.liquidity, amount);
-        let mut c = coin::from_balance(part_bal, ctx);
-        if (fee_amt > 0) {
-            let fee_coin = coin::split(&mut c, fee_amt, ctx);
-            // For simplicity, accrue to reserves (or we could send to fees vault via an adapter)
-            pool.reserves.join(coin::into_balance(fee_coin));
-        };
-        // record principal
-        let mut pos = get_borrow_position(&pool.borrows, ctx.sender());
-        pos.principal = pos.principal + (amount as u128);
-        pos.interest_index_snap = pool.borrow_index;
-        set_borrow_position(&mut pool.borrows, ctx.sender(), pos);
-        pool.total_borrows_principal = pool.total_borrows_principal + (amount as u128);
-        c
-    }
+    
 
-    /// Public: repay debt (anyone can repay on behalf of borrower)
-    public fun repay<T>(pool: &mut LendingPool<T>, mut pay: Coin<T>, borrower: address, clock: &Clock, ctx: &mut TxContext): Coin<T> {
-        accrue<T>(pool, clock);
-        let amt = coin::value(&pay);
-        assert!(amt > 0, E_ZERO_AMOUNT);
-        let mut pos = get_borrow_position(&pool.borrows, borrower);
-        assert!(pos.principal > 0, E_NO_BORROW);
-        let owed = current_borrow_balance_inner(pool.borrow_index, &pos);
-        let pay_amt = if ((amt as u128) >= owed) { owed as u64 } else { amt };
-        // Determine interest portion and reserve cut
-        let interest_remaining: u64 = if (owed > pos.principal) { (owed - pos.principal) as u64 } else { 0 };
-        let interest_applied: u64 = if (pay_amt > interest_remaining) { interest_remaining } else { pay_amt };
-        let reserve_cut: u64 = ((interest_applied as u128) * (pool.reserve_factor_bps as u128) / (fees::bps_denom() as u128)) as u64;
-        // Split desired payment out of pay
-        let mut to_use = coin::split(&mut pay, pay_amt, ctx);
-        // Split reserve from to_use
-        let reserve_coin = coin::split(&mut to_use, reserve_cut, ctx);
-        pool.reserves.join(coin::into_balance(reserve_coin));
-        // Remainder of to_use to liquidity
-        pool.liquidity.join(coin::into_balance(to_use));
-        // Return leftover coin (consume 'pay')
-        let leftover = pay;
-        // reduce principal and update snapshot
-        let remaining: u128 = owed - (pay_amt as u128);
-        // convert remaining to new principal using current index
-        pos.principal = (remaining as u128) * WAD / pool.borrow_index;
-        pos.interest_index_snap = pool.borrow_index;
-        let new_principal = pos.principal;
-        set_borrow_position(&mut pool.borrows, borrower, pos);
-        // update totals
-        let principal_reduction: u128 = if ((pay_amt as u128) > (interest_applied as u128)) { (pay_amt as u128) - (interest_applied as u128) } else { 0 };
-        if (pool.total_borrows_principal >= principal_reduction) { pool.total_borrows_principal = pool.total_borrows_principal - principal_reduction; } else { pool.total_borrows_principal = 0; };
-        event::emit(Repay { who: ctx.sender(), amount: pay_amt, remaining_principal: new_principal, timestamp_ms: sui::clock::timestamp_ms(clock) });
-        leftover
-    }
+    
 
-    /// Repay with rewards: compute interest portion and convert to USD via oracle
-    public fun repay_with_rewards<T>(pool: &mut LendingPool<T>, mut pay: Coin<T>, borrower: address, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, _rewards_obj: &mut (), clock: &Clock, ctx: &mut TxContext): Coin<T> {
-        accrue<T>(pool, clock);
-        let amt = coin::value(&pay);
-        assert!(amt > 0, E_ZERO_AMOUNT);
-        let pos0 = get_borrow_position(&pool.borrows, borrower);
-        assert!(pos0.principal > 0, E_NO_BORROW);
-        let owed = current_borrow_balance_inner(pool.borrow_index, &pos0);
-        let pay_amt = if ((amt as u128) >= owed) { owed as u64 } else { amt };
-        let interest_remaining: u64 = if (owed > pos0.principal) { (owed - pos0.principal) as u64 } else { 0 };
-        let interest_applied: u64 = if (pay_amt > interest_remaining) { interest_remaining } else { pay_amt };
-        let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
-        let interest_usd_1e6: u128 = (interest_applied as u128) * (px_1e6 as u128);
-        if (interest_usd_1e6 > 0u128) { let _ = 0; };
-        repay<T>(pool, pay, borrower, clock, ctx)
-    }
+    
 
     // NOTE: Rewards for repay interest should be computed via oracle; avoid trusting caller-provided USD.
 
-    /// Keeper: liquidate an undercollateralized borrower by repaying up to `repay_amount` and seizing shares with a bonus
-    public fun liquidate<T>(pool: &mut LendingPool<T>, borrower: address, repay_amount: Coin<T>, clock: &Clock, ctx: &mut TxContext): Coin<T> {
-        accrue<T>(pool, clock);
-        let health_ok = is_healthy_for<T>(pool, borrower);
-        assert!(!health_ok, E_HEALTH_VIOLATION);
-        let mut pos = get_borrow_position(&pool.borrows, borrower);
-        let owed = current_borrow_balance_inner(pool.borrow_index, &pos) as u64;
-        let to_repay = if (coin::value(&repay_amount) < owed) { coin::value(&repay_amount) } else { owed };
-        // Take repayment and split reserves
-        let mut repay = repay_amount;
-        let mut to_use = coin::split(&mut repay, to_repay, ctx);
-        let interest_remaining: u64 = if ((owed as u128) > pos.principal) { ((owed as u128) - pos.principal) as u64 } else { 0 };
-        let interest_applied: u64 = if (to_repay > interest_remaining) { interest_remaining } else { to_repay };
-        let reserve_cut: u64 = ((interest_applied as u128) * (pool.reserve_factor_bps as u128) / (fees::bps_denom() as u128)) as u64;
-        let reserve_coin = coin::split(&mut to_use, reserve_cut, ctx);
-        pool.reserves.join(coin::into_balance(reserve_coin));
-        pool.liquidity.join(coin::into_balance(to_use));
-        // new debt
-        let remaining_u128 = (owed as u128) - (to_repay as u128);
-        pos.principal = remaining_u128 * WAD / pool.borrow_index;
-        pos.interest_index_snap = pool.borrow_index;
-        set_borrow_position(&mut pool.borrows, borrower, pos);
-        // seize shares (including liquidation bonus)
-        let seize_value = (to_repay as u128) * (pool.total_supply_shares as u128) / (balance::value(&pool.liquidity) as u128);
-        let bonus = (seize_value * (pool.liquidation_bonus_bps as u128)) / (fees::bps_denom() as u128);
-        let seize_shares = seize_value + bonus;
-        // move shares from borrower to liquidator up to borrower's shares
-        let borrower_sh = get_shares(&pool.supplier_shares, borrower);
-        let actual_seize = if (borrower_sh >= seize_shares) { seize_shares } else { borrower_sh };
-        set_shares(&mut pool.supplier_shares, borrower, borrower_sh - actual_seize);
-        add_shares(&mut pool.supplier_shares, ctx.sender(), actual_seize);
-        event::emit(Liquidated { borrower, liquidator: ctx.sender(), repay_amount: to_repay, shares_seized: actual_seize, bonus_bps: pool.liquidation_bonus_bps, timestamp_ms: sui::clock::timestamp_ms(clock) });
-        // return leftover of repay coin
-        repay
-    }
+    
 
-    /// Liquidate with rewards: compute repay notional in USD via oracle and credit liquidator
-    public fun liquidate_with_rewards<T>(pool: &mut LendingPool<T>, borrower: address, repay_amount: Coin<T>, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, _rewards_obj: &mut (), clock: &Clock, ctx: &mut TxContext): Coin<T> {
-        let amt = coin::value(&repay_amount);
-        let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
-        let usd_1e6: u128 = (amt as u128) * (px_1e6 as u128);
-        let out = liquidate<T>(pool, borrower, repay_amount, clock, ctx);
-        if (usd_1e6 > 0u128) { let _ = 0; };
-        out
-    }
+    
 
     // NOTE: Rewards for liquidation should be computed from actual repay notional using oracle in-module.
 
-    /// Flash loan: borrow `amount` with immediate same-transaction repayment requirement.
-    /// Returns the borrowed coin and a capability that must be consumed by `flash_repay` in the same transaction.
-    public fun flash_loan<T>(pool: &mut LendingPool<T>, amount: u64, clock: &Clock, ctx: &mut TxContext): (Coin<T>, FlashLoanCap<T>) {
-        accrue<T>(pool, clock);
-        assert!(amount > 0, E_ZERO_AMOUNT);
-        assert!(balance::value(&pool.liquidity) >= amount, E_INSUFFICIENT_LIQUIDITY);
-        let fee: u64 = ((amount as u128) * (pool.flash_fee_bps as u128) / (fees::bps_denom() as u128)) as u64;
-        let part = balance::split(&mut pool.liquidity, amount);
-        let loan = coin::from_balance(part, ctx);
-        event::emit(FlashLoan { who: ctx.sender(), amount, fee, timestamp_ms: sui::clock::timestamp_ms(clock) });
-        (loan, FlashLoanCap<T> { principal: amount, fee })
-    }
+    
 
-    /// Repay a flash loan. Requires the capability returned by `flash_loan`.
-    /// Returns any leftover of the provided repay coin.
-    public fun flash_repay<T>(pool: &mut LendingPool<T>, mut repay: Coin<T>, cap: FlashLoanCap<T>, clock: &Clock, ctx: &mut TxContext): Coin<T> {
-        let FlashLoanCap { principal, fee } = cap;
-        let due: u64 = principal + fee;
-        let have = coin::value(&repay);
-        assert!(have >= due, E_FLASH_UNDERPAY);
-        // Take exactly what is due
-        let mut to_use = coin::split(&mut repay, due, ctx);
-        if (fee > 0) {
-            let fee_coin = coin::split(&mut to_use, fee, ctx);
-            pool.reserves.join(coin::into_balance(fee_coin));
-        };
-        // Return principal to liquidity
-        pool.liquidity.join(coin::into_balance(to_use));
-        event::emit(FlashRepaid { who: ctx.sender(), principal, fee, timestamp_ms: sui::clock::timestamp_ms(clock) });
-        // Return leftover
-        repay
-    }
+    
 
-    /// Accrue interest based on elapsed time and utilization. Updates borrow_index and moves reserve share.
-    public fun accrue<T>(pool: &mut LendingPool<T>, clock: &Clock) {
-        let now = sui::clock::timestamp_ms(clock);
-        let dt = if (now > pool.last_accrued_ms) { now - pool.last_accrued_ms } else { 0 };
-        if (dt == 0) return;
-        let util_bps = utilization_bps<T>(pool);
-        // compute borrow rate per year in bps using kinked model
-        let rate_bps = borrow_rate_bps(util_bps, &pool.irm);
-        // simple interest: interest_factor = rate_bps * dt / YEAR_MS
-        let interest_factor_num: u128 = (rate_bps as u128) * (dt as u128) * (WAD as u128);
-        let interest_factor_den: u128 = (fees::bps_denom() as u128) * (YEAR_MS as u128);
-        let delta_index: u128 = interest_factor_num / interest_factor_den; // WAD-scaled delta
-        let new_index: u128 = pool.borrow_index + delta_index;
-        // We only update indices; reserves are realized upon repayment
-        event::emit(Accrued { interest_index: new_index, dt_ms: dt, new_reserves: 0, timestamp_ms: now });
-        pool.borrow_index = new_index;
-        pool.last_accrued_ms = now;
-    }
+    
 
-    /// View: current utilization in bps
-    public fun utilization_bps<T>(pool: &LendingPool<T>): u64 {
-        let borrows = pool.total_borrows_principal as u64;
-        let cash = balance::value(&pool.liquidity);
-        if (borrows == 0) return 0;
-        let denom = cash + borrows;
-        ((borrows as u128) * (fees::bps_denom() as u128) / (denom as u128)) as u64
-    }
+    
 
     /// View: compute borrow rate bps given utilization
     fun borrow_rate_bps(util_bps: u64, irm: &InterestRateModel): u64 {
@@ -451,54 +206,17 @@ module unxversal::lending {
         }
     }
 
-    /// View: exchange rate in WAD (1e18) of liquidity per share
-    public fun exchange_rate_wad<T>(pool: &LendingPool<T>): u128 {
-        let liq = balance::value(&pool.liquidity) as u128;
-        if (pool.total_supply_shares == 0 || liq == 0) return WAD;
-        (liq * WAD) / pool.total_supply_shares
-    }
+    
 
-    /// View: compute user's maximum borrowable amount (in asset units) based on collateral factor and current shares
-    public fun max_borrowable_for<T>(pool: &LendingPool<T>, who: address): u64 {
-        let shares = get_shares(&pool.supplier_shares, who);
-        if (pool.total_supply_shares == 0 || shares == 0) return 0;
-        let liq = balance::value(&pool.liquidity) as u128;
-        let val: u128 = liq * (shares as u128) / (pool.total_supply_shares as u128);
-        ((val * (pool.collateral_factor_bps as u128) / (fees::bps_denom() as u128)) as u64)
-    }
+    
 
-    fun max_borrowable_with_cf<T>(pool: &LendingPool<T>, who: address, eff_cf_bps: u64): u64 {
-        let shares = get_shares(&pool.supplier_shares, who);
-        if (pool.total_supply_shares == 0 || shares == 0) return 0;
-        let liq = balance::value(&pool.liquidity) as u128;
-        let val: u128 = liq * (shares as u128) / (pool.total_supply_shares as u128);
-        ((val * (eff_cf_bps as u128) / (fees::bps_denom() as u128)) as u64)
-    }
+    
 
-    /// View: true if borrower meets collateral requirement
-    public fun is_healthy_for<T>(pool: &LendingPool<T>, who: address): bool {
-        let maxb = max_borrowable_for<T>(pool, who) as u128;
-        let owed = current_borrow_balance<T>(pool, who) as u128;
-        maxb >= owed
-    }
+    
 
-    public fun effective_collateral_factor_bps(base_cf_bps: u64, liq_cf_bps: u64, _staking_pool: &(), user: address, cfg: &fees::FeeConfig): u64 {
-        let bonus = fees::staking_discount_bps(_staking_pool, user, cfg);
-        let cap = fees::lending_collateral_bonus_bps_max(cfg);
-        let add = if (bonus > cap) { cap } else { bonus };
-        let mut eff = base_cf_bps + add;
-        // Cap effective CF at liquidation threshold (borrowers should not be liquidatable at max LTV)
-        if (eff > liq_cf_bps) { eff = liq_cf_bps; };
-        if (eff > fees::bps_denom() - 100) { fees::bps_denom() - 100 } else { eff }
-    }
+    
 
-    /// View: current borrow balance including interest
-    public fun current_borrow_balance<T>(pool: &LendingPool<T>, who: address): u64 {
-        let pos = get_borrow_position(&pool.borrows, who);
-        if (pos.principal == 0) return 0;
-        let val = current_borrow_balance_inner(pool.borrow_index, &pos);
-        val as u64
-    }
+    
 
     fun current_borrow_balance_inner(cur_index: u128, pos: &BorrowPosition): u128 {
         (pos.principal * cur_index) / WAD
