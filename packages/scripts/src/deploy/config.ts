@@ -1,6 +1,212 @@
 import type { NetworkName } from '../config.js';
+import { buildAllOptionSeriesForFeeds, type Series, type Policy } from '../utils/series.js';
 
-export type TypeTag = string;
+// Address like 0x + hex (we keep it loose for sanity)
+export type SuiAddress = `0x${string}`;
+
+// Basic (no strict check on identifiers or generics)
+export type SuiTypeTag =
+  `${SuiAddress}::${string}::${string}` |               // e.g. 0x2::sui::SUI
+  `${SuiAddress}::${string}::${string}<${string}>`;     // e.g. 0x2::coin::Coin<0x2::sui::SUI>
+
+/**
+ * List of supported derivative symbols for which options series and policies are generated.
+ * These should match the keys in the POLICIES object in utils/series.ts.
+ */
+const DERIVATIVE_SYMBOLS: string[] = [
+  'BTC/USDC',
+  'ETH/USDC',
+  'SOL/USDC',
+  'WBNB/USDC',
+  'SUI/USDC',
+  'MATIC/USDC',
+  'APT/USDC',
+  'CELO/USDC',
+  'GLMR/USDC',
+  'DEEP/USDC',
+  'IKA/USDC',
+  'NS/USDC',
+  'SEND/USDC',
+  'WAL/USDC',
+];
+
+const POLICIES: Record<string, Policy> = {
+  // Majors
+  'BTC/USDC':  { bandLow: 0.5, bandHigh: 2.0, stepAbs: 500, cadence: 'weekly', years: 2 },
+  'ETH/USDC':  { bandLow: 0.5, bandHigh: 2.0, stepAbs: 25,  cadence: 'weekly', years: 2 },
+
+  // L1s / high caps
+  'SOL/USDC':  { bandLow: 0.5, bandHigh: 2.0, stepAbs: 0.5, cadence: 'weekly', years: 2 },
+  'WBNB/USDC': { bandLow: 0.6, bandHigh: 1.8, stepAbs: 1,   cadence: 'weekly', years: 2 },
+  'SUI/USDC':  { bandLow: 0.5, bandHigh: 2.0, stepAbs: 0.01, cadence: 'weekly', years: 2 },
+  'MATIC/USDC':{ bandLow: 0.5, bandHigh: 2.0, stepAbs: 0.02, cadence: 'weekly', years: 2 },
+  'APT/USDC':  { bandLow: 0.5, bandHigh: 2.0, stepAbs: 0.05, cadence: 'weekly', years: 2 },
+  'CELO/USDC': { bandLow: 0.5, bandHigh: 2.0, stepAbs: 0.02, cadence: 'weekly', years: 2 },
+  'GLMR/USDC': { bandLow: 0.5, bandHigh: 2.0, stepAbs: 0.02, cadence: 'weekly', years: 2 },
+
+  // Long tail / ecosystem
+  'DEEP/USDC': { bandLow: 0.4, bandHigh: 2.5, stepPct: 0.02, cadence: 'weekly', years: 2 },
+  'IKA/USDC':  { bandLow: 0.4, bandHigh: 2.5, stepPct: 0.02, cadence: 'weekly', years: 2 },
+  'NS/USDC':   { bandLow: 0.4, bandHigh: 2.5, stepPct: 0.02, cadence: 'weekly', years: 2 },
+  'SEND/USDC': { bandLow: 0.4, bandHigh: 2.5, stepPct: 0.02, cadence: 'weekly', years: 2 },
+  'WAL/USDC':  { bandLow: 0.4, bandHigh: 2.5, stepPct: 0.02, cadence: 'weekly', years: 2 },
+
+};
+
+/**
+ * Mapping of derivative symbols to their base and quote type tags.
+ * Used for options, futures, and other derivative markets.
+ */
+const DERIVATIVE_TYPE_TAGS: Record<string, {
+  base: SuiTypeTag;
+  quote: SuiTypeTag;
+  tickSize: number;   // Minimum price increment (USD 1e6 scale)
+  lotSize: number;    // Contract size in base asset units (integer in baseDecimals)
+  minSize: number;    // Minimum order size (usually = lotSize)
+  baseDecimals: number;
+  quoteDecimals: number;
+}> = {
+  // -----------------
+  // Majors
+  // -----------------
+  'BTC/USDC': {
+    base: '0xaafb102dd0902f5055cadecd687fb5b71ca82ef0e0285d90afde828ec58ca96b::btc::BTC',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,             // $0.01
+    lotSize: 10_000_000,            // 0.1 BTC (~$10k notional)
+    minSize: 10_000_000,
+    baseDecimals: 8,
+    quoteDecimals: 6,
+  },
+  'ETH/USDC': {
+    base: '0xd0e89b2af5e4910726fbcd8b8dd37bb79b29e5f83f7491bca830e94f7f226d29::eth::ETH',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,             // $0.01
+    lotSize: 200_000_000,          // 2 ETH (~$10k notional)
+    minSize: 200_000_000,
+    baseDecimals: 8,
+    quoteDecimals: 6,
+  },
+
+  // -----------------
+  // L1s / High Caps
+  // -----------------
+  'SOL/USDC': {
+    base: '0xb7844e289a8410e50fb3ca48d69eb9cf29e27d223ef90353fe1bd8e27ff8f3f8::coin::COIN',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,             // $0.01
+    lotSize: 4_000_000_000,        // 4 SOL (~$10k notional)
+    minSize: 4_000_000_000,
+    baseDecimals: 8,
+    quoteDecimals: 6,
+  },
+    'WBNB/USDC': {
+    base: '0xb848cce11ef3a8f62eccea6eb5b35a12c4c2b1ee1af7755d02d7bd6218e8226f::coin::COIN',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,
+    lotSize: 1_000_000_000,        // 10 BNB (~$10k notional)
+    minSize: 1_000_000_000,
+    baseDecimals: 8,
+    quoteDecimals: 6,
+  },
+  'SUI/USDC': {
+    base: '0x2::sui::SUI',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,
+    lotSize: 2_000_000_000_000,       // 2,000 SUI (~$10k notional)
+    minSize: 2_000_000_000_000,
+    baseDecimals: 9,
+    quoteDecimals: 6,
+  },
+    'MATIC/USDC': {
+    base: '0xdbe380b13a6d0f5cdedd58de8f04625263f113b3f9db32b3e1983f49e2841676::coin::COIN',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,
+    lotSize: 3_000_000_000_000,    // 30,000 MATIC (~$10k notional)
+    minSize: 3_000_000_000_000,
+    baseDecimals: 8,
+    quoteDecimals: 6,
+  },
+  'APT/USDC': {
+    base: '0x3a5143bb1196e3bcdfab6203d1683ae29edd26294fc8bfeafe4aaa9d2704df37::coin::COIN',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,
+    lotSize: 2_000_000_000_000,    // 2,000 APT (~$10k notional)
+    minSize: 2_000_000_000_000,
+    baseDecimals: 8,
+    quoteDecimals: 6,
+  },
+  'CELO/USDC': {
+    base: '0xa198f3be41cda8c07b3bf3fee02263526e535d682499806979a111e88a5a8d0f::coin::COIN',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,
+    lotSize: 3_000_000_000_000,    // 30,000 CELO (~$10k notional)
+    minSize: 3_000_000_000_000,
+    baseDecimals: 8,
+    quoteDecimals: 6,
+  },
+  'GLMR/USDC': {
+    base: '0x66f87084e49c38f76502d17f87d17f943f183bb94117561eb573e075fdc5ff75::coin::COIN',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,
+    lotSize: 14_000_000_000_000,   // 140,000 GLMR (~$10k notional)
+    minSize: 14_000_000_000_000,
+    baseDecimals: 8,
+    quoteDecimals: 6,
+  },
+
+  // -----------------
+  // Long-Tail / Ecosystem
+  // -----------------
+  'DEEP/USDC': {
+    base: '0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,
+    lotSize: 10_000_000_000,       // 10,000 DEEP (~$10k notional)
+    minSize: 10_000_000_000,
+    baseDecimals: 6,
+    quoteDecimals: 6,
+  },
+    'IKA/USDC': {
+    base: '0x7262fb2f7a3a14c888c438a3cd9b912469a58cf60f367352c46584262e8299aa::ika::IKA',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,
+    lotSize: 20_000_000_000_000,  // 20,000 IKA (~$10k notional)
+    minSize: 20_000_000_000_000,
+    baseDecimals: 9,
+    quoteDecimals: 6,
+  },
+  'NS/USDC': {
+    base: '0x5145494a5f5100e645e4b0aa950fa6b68f614e8c59e17bc5ded3495123a79178::ns::NS',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,
+    lotSize: 10_000_000_000,       // 1,000 NS (~$10k notional)
+    minSize: 10_000_000_000,
+    baseDecimals: 6,
+    quoteDecimals: 6,
+  },
+  'SEND/USDC': {
+    base: '0x4e9d6f1c3d3f6b8e2c1c3f4e5d6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f::send::SEND',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,
+    lotSize: 10_000_000_000,       // 10,000 SEND (~$10k notional)
+    minSize: 10_000_000_000,
+    baseDecimals: 6,
+    quoteDecimals: 6,
+  },
+    'WAL/USDC': {
+    base: '0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL',
+    quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+    tickSize: 10_000,
+    lotSize: 10_000_000_000_000,   // 10,000 WAL (~$10k notional)
+    minSize: 10_000_000_000_000,
+    baseDecimals: 9,
+    quoteDecimals: 6,
+  },
+};
+
+
+const optionsSeries: Record<string, Series[]> = await buildAllOptionSeriesForFeeds(DERIVATIVE_SYMBOLS, POLICIES)
 
 export type DeployConfig = {
   network: NetworkName;
@@ -47,8 +253,8 @@ export type DeployConfig = {
    */
   lendingMarkets?: Array<{
     marketId?: string;
-    collat: TypeTag;
-    debt: TypeTag;
+    collat: SuiTypeTag;
+    debt: SuiTypeTag;
     symbol: string;
     baseRateBps: number;
     multiplierBps: number;
@@ -61,16 +267,18 @@ export type DeployConfig = {
   }>;
   options?: Array<{
     marketId?: string;
-    base: TypeTag;
-    quote: TypeTag;
+    base: SuiTypeTag;
+    quote: SuiTypeTag;
     tickSize: number;
     lotSize: number;
     minSize: number;
+    baseDecimals: number;
+    quoteDecimals: number;
     series: Array<{ expiryMs: number; strike1e6: number; isCall: boolean; symbol: string }>;
   }>;
   futures?: Array<{
     marketId?: string;
-    collat: TypeTag;
+    collat: SuiTypeTag;
     symbol: string;
     contractSize: number;
     initialMarginBps: number;
@@ -87,7 +295,7 @@ export type DeployConfig = {
   }>;
   gasFutures?: Array<{
     marketId?: string;
-    collat: TypeTag;
+    collat: SuiTypeTag;
     expiryMs: number;
     contractSize: number;
     initialMarginBps: number;
@@ -103,7 +311,7 @@ export type DeployConfig = {
   }>;
   perpetuals?: Array<{
     marketId?: string;
-    collat: TypeTag;
+    collat: SuiTypeTag;
     symbol: string;
     contractSize: number;
     fundingIntervalMs: number;
@@ -120,8 +328,8 @@ export type DeployConfig = {
   }>;
   dexPools?: Array<{
     registryId: string;
-    base: TypeTag;
-    quote: TypeTag;
+    base: SuiTypeTag;
+    quote: SuiTypeTag;
     feeConfigId: string;
     feeVaultId: string;
     stakingPoolId: string;
@@ -129,7 +337,7 @@ export type DeployConfig = {
     tickSize: number; lotSize: number; minSize: number;
   }>;
   vaults?: Array<{
-    asset: TypeTag;
+    asset: SuiTypeTag;
     caps?: { maxOrderSizeBase?: number; maxInventoryTiltBps?: number; minDistanceBps?: number; paused?: boolean };
   }>;
 };
@@ -422,7 +630,23 @@ export const deployConfig: DeployConfig = {
       liquidationBonusBps: 4000,
     },
   ],
-  options: [],
+  options: Object.entries(optionsSeries).map(([symbol, series]) => {
+    const config = DERIVATIVE_TYPE_TAGS[symbol];
+    if (!config) {
+      throw new Error(`No type configuration found for symbol: ${symbol}`);
+    }
+
+    return {
+      base: config.base,
+      quote: config.quote,
+      tickSize: config.tickSize,
+      lotSize: config.lotSize,
+      minSize: config.minSize,
+      baseDecimals: config.baseDecimals,
+      quoteDecimals: config.quoteDecimals,
+      series,
+    };
+  }),
   futures: [],
   gasFutures: [],
   perpetuals: [],

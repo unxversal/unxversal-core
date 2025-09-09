@@ -41,9 +41,15 @@ type DeploymentSummary = {
 };
 
 function kpFromEnv(): Ed25519Keypair {
+  const mnemonic = process.env.UNXV_ADMIN_MNEMONIC || process.env.UNXV_ADMIN_SEED_PHRASE || '';
+  if (mnemonic) {
+    return Ed25519Keypair.deriveKeypair(mnemonic);
+  }
   const b64 = process.env.UNXV_ADMIN_SEED_B64 || '';
-  if (!b64) throw new Error('UNXV_ADMIN_SEED_B64 is required');
-  return Ed25519Keypair.fromSecretKey(Buffer.from(b64, 'base64'));
+  if (b64) {
+    return Ed25519Keypair.fromSecretKey(Buffer.from(b64, 'base64'));
+  }
+  throw new Error('Set UNXV_ADMIN_MNEMONIC (preferred) or UNXV_ADMIN_SEED_B64');
 }
 
 async function execTx(client: SuiClient, tx: Transaction, keypair: Ed25519Keypair, label: string) {
@@ -506,7 +512,7 @@ async function writeDeploymentMarkdown(summary: DeploymentSummary) {
   if (typeof summary.oracleMaxAgeSec === 'number') lines.push(`- **Max Age (sec)**: ${summary.oracleMaxAgeSec}`);
   if (summary.oracleFeeds?.length) {
     lines.push('- **Feeds**:');
-    for (const f of summary.oracleFeeds) lines.push(`  - **${f.symbol}**: \`${f.aggregatorId}\``);
+    for (const f of summary.oracleFeeds) lines.push(`  - **${f.symbol}**: \`${f.priceId}\``);
   }
   lines.push('');
   if (summary.options.length) {

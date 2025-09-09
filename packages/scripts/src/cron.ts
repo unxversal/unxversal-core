@@ -23,9 +23,15 @@ const WORMHOLE_STATE_ID = config.pyth.wormholeStateId;
 const CRON_SLEEP_MS = config.cron.sleepMs;
 const LENDING_CFG = config.lending;
 
-// Keypair for admin/keeper
-const ADMIN_SEED_B64 = process.env.UNXV_ADMIN_SEED_B64 || '';
-const keypair = ADMIN_SEED_B64 ? Ed25519Keypair.fromSecretKey(Buffer.from(ADMIN_SEED_B64, 'base64')) : Ed25519Keypair.generate();
+// Keypair for admin/keeper (prefer mnemonic)
+const ADMIN_MNEMONIC = process.env.UNXV_ADMIN_MNEMONIC || process.env.UNXV_ADMIN_SEED_PHRASE || '';
+let keypair: Ed25519Keypair;
+if (ADMIN_MNEMONIC) {
+  keypair = Ed25519Keypair.deriveKeypair(ADMIN_MNEMONIC);
+} else {
+  const ADMIN_SEED_B64 = process.env.UNXV_ADMIN_SEED_B64 || '';
+  keypair = ADMIN_SEED_B64 ? Ed25519Keypair.fromSecretKey(Buffer.from(ADMIN_SEED_B64, 'base64')) : Ed25519Keypair.generate();
+}
 
 const client = new SuiClient({ url: getFullnodeUrl(NETWORK) });
 
