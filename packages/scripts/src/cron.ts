@@ -185,24 +185,25 @@ async function applyPerpFunding(): Promise<void> {
  * Lending: sweep reserves from pools into the FeeVault per config.
  */
 async function sweepLendingReserves(): Promise<void> {
-  if (!LENDING_CFG || !LENDING_CFG.pools?.length) return;
+  if (!LENDING_CFG || !LENDING_CFG.markets?.length) return;
   const feeVaultId = LENDING_CFG.feeVaultId;
   if (!feeVaultId) return;
-  for (const p of LENDING_CFG.pools) {
-    const amount = (p.sweepAmount ?? LENDING_CFG.defaultSweepAmount ?? 0);
+  for (const m of LENDING_CFG.markets) {
+    const amount = (m.sweepAmount ?? LENDING_CFG.defaultSweepAmount ?? 0);
     if (!amount || amount <= 0) continue;
     try {
       const tx = new Transaction();
       tx.moveCall({
-        target: `${config.pkgId}::lending::sweep_reserves_to_fee_vault`,
-        typeArguments: [p.asset.startsWith('0x') || p.asset.startsWith('::') ? (p.asset.startsWith('::') ? `${config.pkgId}${p.asset}` : p.asset) : (p.asset === 'SUI' ? '0x2::sui::SUI' : `${config.pkgId}::${p.asset}`)],
-        arguments: [tx.object(ADMIN_REGISTRY_ID), tx.object(p.poolId), tx.object(feeVaultId), tx.pure.u64(amount), tx.object('0x6')],
-      });
+        target: `${config.pkgId}::lending::sweep_debt_reserves_to_fee_vault`,
+        typeArguments: [m.collat.startsWith('0x') || m.collat.startsWith('::') ? (m.collat.startsWith('::') ? `${config.pkgId}${m.collat}` : m.collat) : `${config.pkgId}::${m.collat}`,
+                       m.debt.startsWith('0x') || m.debt.startsWith('::') ? (m.debt.startsWith('::') ? `${config.pkgId}${m.debt}` : m.debt) : `${config.pkgId}::${m.debt}`],
+        arguments: [tx.object(ADMIN_REGISTRY_ID), tx.object(m.marketId), tx.object(feeVaultId), tx.pure.u64(amount), tx.object('0x6')],
+      } as any);
       const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
       await client.waitForTransaction({ digest: res.digest });
-      logger.info(`Lending reserves swept pool=${p.poolId} amount=${amount}`);
+      logger.info(`Lending reserves swept market=${m.marketId} amount=${amount}`);
     } catch (e) {
-      logger.error(`Lending sweep failed pool=${p.poolId}: ${(e as Error).message}`);
+      logger.error(`Lending sweep failed market=${m.marketId}: ${(e as Error).message}`);
     }
   }
 }

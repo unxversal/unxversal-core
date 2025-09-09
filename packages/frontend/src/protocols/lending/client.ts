@@ -4,91 +4,52 @@ export class LendingClient {
   private pkg: string;
   constructor(pkg: string) { this.pkg = pkg; }
 
-  // deposit<T>(pool: &mut LendingPool<T>, amount: Coin<T>, clock: &Clock, ctx: &mut TxContext)
-  deposit(args: { poolId: string; amountCoinId: string }) {
+  // Dual-asset debt supplier: supply USDU-like Debt into market liquidity
+  supplyDebt(args: { marketId: string; amountCoinId: string }) {
     const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.pkg}::lending::deposit`,
-      arguments: [tx.object(args.poolId), tx.object(args.amountCoinId), tx.object('0x6')],
-    });
+    tx.moveCall({ target: `${this.pkg}::lending::supply_debt`, arguments: [tx.object(args.marketId), tx.object(args.amountCoinId), tx.object('0x6')] });
     return tx;
   }
 
-  // deposit_with_rewards<T>(pool, amount, symbol, reg, agg, rewards_obj, clock, ctx)
-  depositWithRewards(args: { poolId: string; amountCoinId: string; symbol: string; oracleRegistryId: string; aggregatorId: string; rewardsId: string }) {
+  // Withdraw Debt by burning supplier shares
+  withdrawDebt(args: { marketId: string; shares: bigint }) {
     const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.pkg}::lending::deposit_with_rewards`,
-      arguments: [tx.object(args.poolId), tx.object(args.amountCoinId), tx.pure.string(args.symbol), tx.object(args.oracleRegistryId), tx.object(args.aggregatorId), tx.object(args.rewardsId), tx.object('0x6')],
-    });
+    tx.moveCall({ target: `${this.pkg}::lending::withdraw_debt`, arguments: [tx.object(args.marketId), tx.pure.u128(args.shares), tx.object('0x6')] });
     return tx;
   }
 
-  // withdraw<T>(pool: &mut LendingPool<T>, shares: u128, clock: &Clock, ctx: &mut TxContext): Coin<T>
-  withdraw(args: { poolId: string; shares: bigint }) {
+  // Deposit collateral (Collat) to enable borrowing
+  depositCollateral(args: { marketId: string; collatCoinId: string }) {
     const tx = new Transaction();
-    tx.moveCall({ target: `${this.pkg}::lending::withdraw`, arguments: [tx.object(args.poolId), tx.pure.u128(args.shares), tx.object('0x6')] });
+    tx.moveCall({ target: `${this.pkg}::lending::deposit_collateral2`, arguments: [tx.object(args.marketId), tx.object(args.collatCoinId)] });
     return tx;
   }
 
-  // borrow<T>(pool: &mut LendingPool<T>, amount: u64, clock: &Clock, ctx: &mut TxContext): Coin<T>
-  borrow(args: { poolId: string; amount: bigint }) {
+  // Withdraw collateral with oracle health check
+  withdrawCollateral(args: { marketId: string; amount: bigint; oracleRegistryId: string; aggregatorId: string }) {
     const tx = new Transaction();
-    tx.moveCall({ target: `${this.pkg}::lending::borrow`, arguments: [tx.object(args.poolId), tx.pure.u64(args.amount), tx.object('0x6')] });
+    tx.moveCall({ target: `${this.pkg}::lending::withdraw_collateral2`, arguments: [tx.object(args.marketId), tx.pure.u64(args.amount), tx.object(args.oracleRegistryId), tx.object(args.aggregatorId), tx.object('0x6')] });
     return tx;
   }
 
-  // borrow_with_rewards<T>(pool, amount, symbol, reg, agg, rewards_obj, clock, ctx)
-  borrowWithRewards(args: { poolId: string; amount: bigint; symbol: string; oracleRegistryId: string; aggregatorId: string; rewardsId: string }) {
+  // Borrow Debt against posted collateral
+  borrowDebt(args: { marketId: string; amount: bigint; oracleRegistryId: string; aggregatorId: string }) {
     const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.pkg}::lending::borrow_with_rewards`,
-      arguments: [tx.object(args.poolId), tx.pure.u64(args.amount), tx.pure.string(args.symbol), tx.object(args.oracleRegistryId), tx.object(args.aggregatorId), tx.object(args.rewardsId), tx.object('0x6')],
-    });
+    tx.moveCall({ target: `${this.pkg}::lending::borrow_debt`, arguments: [tx.object(args.marketId), tx.pure.u64(args.amount), tx.object(args.oracleRegistryId), tx.object(args.aggregatorId), tx.object('0x6')] });
     return tx;
   }
 
-  // borrow_with_fee<T>(pool, amount, staking_pool, cfg, clock, ctx)
-  borrowWithFee(args: { poolId: string; amount: bigint; stakingPoolId: string; feeConfigId: string }) {
+  // Repay Debt for self or on behalf of borrower
+  repayDebt(args: { marketId: string; payCoinId: string; borrower: string }) {
     const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.pkg}::lending::borrow_with_fee`,
-      arguments: [tx.object(args.poolId), tx.pure.u64(args.amount), tx.object(args.stakingPoolId), tx.object(args.feeConfigId), tx.object('0x6')],
-    });
+    tx.moveCall({ target: `${this.pkg}::lending::repay_debt`, arguments: [tx.object(args.marketId), tx.object(args.payCoinId), tx.pure.address(args.borrower), tx.object('0x6')] });
     return tx;
   }
 
-  // repay<T>(pool: &mut LendingPool<T>, pay: Coin<T>, borrower: address, clock: &Clock, ctx: &mut TxContext): Coin<T>
-  repay(args: { poolId: string; payCoinId: string; borrower: string }) {
+  // Liquidate unhealthy borrower: repay Debt and seize Collat with bonus
+  liquidate(args: { marketId: string; borrower: string; repayCoinId: string; oracleRegistryId: string; aggregatorId: string }) {
     const tx = new Transaction();
-    tx.moveCall({ target: `${this.pkg}::lending::repay`, arguments: [tx.object(args.poolId), tx.object(args.payCoinId), tx.pure.address(args.borrower), tx.object('0x6')] });
-    return tx;
-  }
-
-  // repay_with_rewards<T>(pool, pay, borrower, symbol, reg, agg, rewards_obj, clock, ctx)
-  repayWithRewards(args: { poolId: string; payCoinId: string; borrower: string; symbol: string; oracleRegistryId: string; aggregatorId: string; rewardsId: string }) {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.pkg}::lending::repay_with_rewards`,
-      arguments: [tx.object(args.poolId), tx.object(args.payCoinId), tx.pure.address(args.borrower), tx.pure.string(args.symbol), tx.object(args.oracleRegistryId), tx.object(args.aggregatorId), tx.object(args.rewardsId), tx.object('0x6')],
-    });
-    return tx;
-  }
-
-  // liquidate<T>(pool: &mut LendingPool<T>, borrower: address, repay_amount: Coin<T>, clock: &Clock, ctx: &mut TxContext): Coin<T>
-  liquidate(args: { poolId: string; borrower: string; repayCoinId: string }) {
-    const tx = new Transaction();
-    tx.moveCall({ target: `${this.pkg}::lending::liquidate`, arguments: [tx.object(args.poolId), tx.pure.address(args.borrower), tx.object(args.repayCoinId), tx.object('0x6')] });
-    return tx;
-  }
-
-  // liquidate_with_rewards<T>(pool, borrower, repay, symbol, reg, agg, rewards_obj, clock, ctx)
-  liquidateWithRewards(args: { poolId: string; borrower: string; repayCoinId: string; symbol: string; oracleRegistryId: string; aggregatorId: string; rewardsId: string }) {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.pkg}::lending::liquidate_with_rewards`,
-      arguments: [tx.object(args.poolId), tx.pure.address(args.borrower), tx.object(args.repayCoinId), tx.pure.string(args.symbol), tx.object(args.oracleRegistryId), tx.object(args.aggregatorId), tx.object(args.rewardsId), tx.object('0x6')],
-    });
+    tx.moveCall({ target: `${this.pkg}::lending::liquidate2`, arguments: [tx.object(args.marketId), tx.pure.address(args.borrower), tx.object(args.repayCoinId), tx.object(args.oracleRegistryId), tx.object(args.aggregatorId), tx.object('0x6')] });
     return tx;
   }
 }

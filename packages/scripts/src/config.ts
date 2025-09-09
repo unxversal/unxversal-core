@@ -35,12 +35,13 @@ export type AppConfig = {
     markets: string[];                  // Gas futures market ids
   };
   lending?: {
-    feeVaultId: string;                 // unxversal::fees::FeeVault id (where reserves are swept)
-    defaultSweepAmount?: number;        // default u64 amount to sweep per pool if pool.sweepAmount absent
-    pools: Array<{
-      poolId: string;                   // unxversal::lending::LendingPool<T> id
-      asset: TypeTag;                   // type tag for T (e.g., 'SUI' or '::unxv::UNXV')
-      sweepAmount?: number;             // optional override per-pool amount (u64 units of T)
+    feeVaultId: string;                 // unxversal::fees::FeeVault id
+    defaultSweepAmount?: number;        // default u64 amount to sweep per market reserves
+    markets: Array<{
+      marketId: string;                 // unxversal::lending::LendingMarket<Collat,Debt> id
+      collat: TypeTag;                  // Collateral type tag
+      debt: TypeTag;                    // Debt type tag
+      sweepAmount?: number;             // optional override per-market amount (u64 units of Debt)
     }>;
   };
   cron: {
@@ -77,7 +78,7 @@ export const config: AppConfig = {
   lending: {
     feeVaultId: '',
     defaultSweepAmount: 0,
-    pools: [],
+    markets: [],
   },
   cron: {
     sleepMs: 20_000,

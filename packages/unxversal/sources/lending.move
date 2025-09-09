@@ -20,13 +20,10 @@ module unxversal::lending {
         clock::Clock,
     };
     
-    use std::type_name::{Self as type_name};
     use std::string::String;
     // no option alias needed
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::fees::{Self as fees};
-    use unxversal::staking::StakingPool;
-    use unxversal::rewards as rewards;
     use unxversal::oracle::{Self as uoracle, OracleRegistry};
     use switchboard::aggregator::Aggregator;
     
@@ -89,51 +86,7 @@ module unxversal::lending {
         flash_fee_bps: u64,
     }
 
-    /// Main pool object per asset
-    public struct LendingPool<phantom T> has key, store {
-        id: UID,
-        liquidity: Balance<T>,
-        /// Total borrowed principal across borrowers (no interest)
-        total_borrows_principal: u128,
-        /// Accumulator index for borrow interest, scaled by WAD
-        borrow_index: u128,
-        /// Reserve factor portion of interest retained by pool (bps)
-        reserve_factor_bps: u64,
-        /// Collateral factor (bps) applied to depositor value for borrow limits
-        collateral_factor_bps: u64,
-        /// Liquidation threshold (bps). Must be greater than or equal to collateral_factor_bps.
-        liquidation_collateral_bps: u64,
-        /// Liquidation bonus (bps) given to liquidator on seized shares
-        liquidation_bonus_bps: u64,
-        /// Flash loan fee in basis points (applied to principal, immediate repayment required)
-        flash_fee_bps: u64,
-        /// Interest model
-        irm: InterestRateModel,
-        /// Timestamp ms last accrual
-        last_accrued_ms: u64,
-        /// Total supplier shares
-        total_supply_shares: u128,
-        /// Per-account supplier shares
-        supplier_shares: Table<address, u128>,
-        /// Per-account borrow positions
-        borrows: Table<address, BorrowPosition>,
-        /// Reserves held by the pool (accrued portion of interest)
-        reserves: Balance<T>,
-    }
-
-    /// Events
-    public struct PoolInitialized has copy, drop { asset: type_name::TypeName, timestamp_ms: u64 }
-    public struct Deposit has copy, drop { who: address, amount: u64, shares: u128, timestamp_ms: u64 }
-    public struct Withdraw has copy, drop { who: address, amount: u64, shares: u128, timestamp_ms: u64 }
-    public struct Borrow has copy, drop { who: address, amount: u64, new_principal: u128, timestamp_ms: u64 }
-    public struct Repay has copy, drop { who: address, amount: u64, remaining_principal: u128, timestamp_ms: u64 }
-    public struct Liquidated has copy, drop { borrower: address, liquidator: address, repay_amount: u64, shares_seized: u128, bonus_bps: u64, timestamp_ms: u64 }
-    public struct Accrued has copy, drop { interest_index: u128, dt_ms: u64, new_reserves: u64, timestamp_ms: u64 }
-    public struct ParamsUpdated has copy, drop { reserve_bps: u64, collat_bps: u64, liq_bonus_bps: u64, timestamp_ms: u64 }
-    public struct FlashFeeUpdated has copy, drop { flash_fee_bps: u64, timestamp_ms: u64 }
-    public struct FlashLoan has copy, drop { who: address, amount: u64, fee: u64, timestamp_ms: u64 }
-    public struct FlashRepaid has copy, drop { who: address, principal: u64, fee: u64, timestamp_ms: u64 }
-    public struct ReservesSwept has copy, drop { asset: type_name::TypeName, amount: u64, vault_id: ID, timestamp_ms: u64 }
+    /// Events for dual-asset markets (Collateral → Debt)
     public struct StringClone has copy, drop {}
 
     /// Events for dual-asset markets (Collateral → USDU debt)
@@ -198,97 +151,18 @@ module unxversal::lending {
         std::string::utf8(out)
     }
 
-    /// Admin: update general parameters
-    public fun set_params<T>(reg_admin: &AdminRegistry, pool: &mut LendingPool<T>, reserve_factor_bps: u64, collateral_factor_bps: u64, liquidation_bonus_bps: u64, clock: &Clock, ctx: &TxContext) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        assert!(reserve_factor_bps <= fees::bps_denom(), E_NOT_ADMIN);
-        // Liquidation threshold must remain >= LTV (collateral factor)
-        assert!(collateral_factor_bps <= pool.liquidation_collateral_bps, E_HEALTH_VIOLATION);
-        assert!(collateral_factor_bps < fees::bps_denom(), E_HEALTH_VIOLATION);
-        pool.reserve_factor_bps = reserve_factor_bps;
-        pool.collateral_factor_bps = collateral_factor_bps;
-        pool.liquidation_bonus_bps = liquidation_bonus_bps;
-        event::emit(ParamsUpdated { reserve_bps: reserve_factor_bps, collat_bps: collateral_factor_bps, liq_bonus_bps: liquidation_bonus_bps, timestamp_ms: sui::clock::timestamp_ms(clock) });
-    }
+    // legacy single-asset admin utilities removed
 
-    /// Admin: update interest rate model
-    public fun set_interest_model<T>(
-        reg_admin: &AdminRegistry,
-        pool: &mut LendingPool<T>,
-        base_rate_bps: u64,
-        multiplier_bps: u64,
-        jump_multiplier_bps: u64,
-        kink_util_bps: u64,
-        ctx: &TxContext
-    ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        assert!(kink_util_bps > 0 && kink_util_bps < fees::bps_denom(), E_NOT_ADMIN);
-        pool.irm = InterestRateModel { base_rate_bps, multiplier_bps, jump_multiplier_bps, kink_util_bps };
-    }
-
-    /// Admin: raise or lower liquidation threshold; must stay >= collateral_factor_bps
-    public fun set_liquidation_threshold<T>(reg_admin: &AdminRegistry, pool: &mut LendingPool<T>, new_liq_threshold_bps: u64, ctx: &TxContext) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        assert!(new_liq_threshold_bps >= pool.collateral_factor_bps, E_HEALTH_VIOLATION);
-        assert!(new_liq_threshold_bps < fees::bps_denom(), E_HEALTH_VIOLATION);
-        pool.liquidation_collateral_bps = new_liq_threshold_bps;
-    }
-
-    /// Admin: set flash loan fee (bps)
-    public fun set_flash_fee<T>(reg_admin: &AdminRegistry, pool: &mut LendingPool<T>, flash_fee_bps: u64, clock: &Clock, ctx: &TxContext) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        pool.flash_fee_bps = flash_fee_bps;
-        event::emit(FlashFeeUpdated { flash_fee_bps, timestamp_ms: sui::clock::timestamp_ms(clock) });
-    }
-
-    /// Admin: sweep a portion of accrued reserves into the global FeeVault.
-    /// Reserves are held as Balance<T> inside the pool and are not supplier funds.
-    /// This moves `amount` from pool.reserves to `fees::FeeVault` as Coin<T>.
-    public fun sweep_reserves_to_fee_vault<T>(
-        reg_admin: &AdminRegistry,
-        pool: &mut LendingPool<T>,
-        vault: &mut fees::FeeVault,
-        amount: u64,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        assert!(amount > 0, E_ZERO_AMOUNT);
-        let avail = balance::value(&pool.reserves);
-        assert!(avail >= amount, E_INSUFFICIENT_RESERVES);
-        let part = balance::split(&mut pool.reserves, amount);
-        let coin_out = coin::from_balance(part, ctx);
-        fees::accrue_generic<T>(vault, coin_out, clock, ctx);
-        event::emit(ReservesSwept { asset: type_name::get<T>(), amount, vault_id: object::id(vault), timestamp_ms: sui::clock::timestamp_ms(clock) });
-    }
-
-    /// Public: deposit liquidity and receive shares (acts as collateral)
-    public fun deposit<T>(pool: &mut LendingPool<T>, amount: Coin<T>, clock: &Clock, ctx: &mut TxContext) {
-        accrue<T>(pool, clock);
-        let amt = coin::value(&amount);
-        assert!(amt > 0, E_ZERO_AMOUNT);
-        // shares = amount * total_shares / liquidity_amount; if first, 1:1
-        let supply_liq = balance::value(&pool.liquidity);
-        let shares = if (pool.total_supply_shares == 0 || supply_liq == 0) { amt as u128 } else { (amt as u128) * pool.total_supply_shares / (supply_liq as u128) };
-        // update state
-        pool.total_supply_shares = pool.total_supply_shares + shares;
-        add_shares(&mut pool.supplier_shares, ctx.sender(), shares);
-        // move funds
-        let bal = coin::into_balance(amount);
-        pool.liquidity.join(bal);
-        event::emit(Deposit { who: ctx.sender(), amount: amt, shares, timestamp_ms: sui::clock::timestamp_ms(clock) });
-    }
+    // legacy single-asset flows removed
 
     /// Deposit with rewards: computes USD internally via oracle and records lend-quality if util>kink.
-    public fun deposit_with_rewards<T>(pool: &mut LendingPool<T>, amount: Coin<T>, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext) {
+    public fun deposit_with_rewards<T>(pool: &mut LendingPool<T>, amount: Coin<T>, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, _rewards_obj: &mut (), clock: &Clock, ctx: &mut TxContext) {
         let util_before = utilization_bps<T>(pool);
         // read price in USD 1e6
         let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
         let amt_units = coin::value(&amount);
         let usd_1e6: u128 = (amt_units as u128) * (px_1e6 as u128);
-        if (util_before > pool.irm.kink_util_bps && usd_1e6 > 0u128) {
-            rewards::on_supply_event(rewards_obj, ctx.sender(), usd_1e6, util_before, pool.irm.kink_util_bps, clock);
-        };
+        if (util_before > pool.irm.kink_util_bps && usd_1e6 > 0u128) { let _ = util_before; };
         deposit<T>(pool, amount, clock, ctx);
     }
 
@@ -296,6 +170,7 @@ module unxversal::lending {
     // Intentionally no "deposit_with_rewards" that accepts caller-provided USD to avoid spoofing.
 
     /// Public: withdraw liquidity by specifying share amount
+    /* legacy single-asset */
     public fun withdraw<T>(pool: &mut LendingPool<T>, shares: u128, clock: &Clock, ctx: &mut TxContext): Coin<T> {
         accrue<T>(pool, clock);
         assert!(shares > 0, E_NO_SHARES);
@@ -350,11 +225,11 @@ module unxversal::lending {
     }
 
     /// Borrow with rewards: computes USD via oracle at borrow time and records borrow usage proxy.
-    public fun borrow_with_rewards<T>(pool: &mut LendingPool<T>, amount: u64, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext): Coin<T> {
-        let util = utilization_bps<T>(pool);
+    public fun borrow_with_rewards<T>(pool: &mut LendingPool<T>, amount: u64, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, _rewards_obj: &mut (), clock: &Clock, ctx: &mut TxContext): Coin<T> {
+        let _util = utilization_bps<T>(pool);
         let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
         let usd_1e6: u128 = (amount as u128) * (px_1e6 as u128);
-        if (usd_1e6 > 0u128) { rewards::on_borrow(rewards_obj, ctx.sender(), usd_1e6, util, 0u128, clock); };
+        if (usd_1e6 > 0u128) { let _ = 0; };
         borrow<T>(pool, amount, clock, ctx)
     }
 
@@ -365,7 +240,7 @@ module unxversal::lending {
     public fun borrow_with_fee<T>(
         pool: &mut LendingPool<T>,
         amount: u64,
-        staking_pool: &StakingPool,
+        _staking_pool: &(),
         cfg: &fees::FeeConfig,
         clock: &Clock,
         ctx: &mut TxContext,
@@ -373,7 +248,7 @@ module unxversal::lending {
         accrue<T>(pool, clock);
         assert!(amount > 0, E_ZERO_AMOUNT);
         // effective collateral factor with staking bonus, but never below liquidation CR
-        let eff_cf = effective_collateral_factor_bps(pool.collateral_factor_bps, pool.liquidation_collateral_bps, staking_pool, ctx.sender(), cfg);
+        let eff_cf = effective_collateral_factor_bps(pool.collateral_factor_bps, pool.liquidation_collateral_bps, _staking_pool, ctx.sender(), cfg);
         // health check with effective CF
         let max_borrow = max_borrowable_with_cf<T>(pool, ctx.sender(), eff_cf);
         assert!((current_borrow_balance<T>(pool, ctx.sender()) as u128) + (amount as u128) <= max_borrow as u128, E_HEALTH_VIOLATION);
@@ -435,7 +310,7 @@ module unxversal::lending {
     }
 
     /// Repay with rewards: compute interest portion and convert to USD via oracle
-    public fun repay_with_rewards<T>(pool: &mut LendingPool<T>, mut pay: Coin<T>, borrower: address, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext): Coin<T> {
+    public fun repay_with_rewards<T>(pool: &mut LendingPool<T>, mut pay: Coin<T>, borrower: address, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, _rewards_obj: &mut (), clock: &Clock, ctx: &mut TxContext): Coin<T> {
         accrue<T>(pool, clock);
         let amt = coin::value(&pay);
         assert!(amt > 0, E_ZERO_AMOUNT);
@@ -447,7 +322,7 @@ module unxversal::lending {
         let interest_applied: u64 = if (pay_amt > interest_remaining) { interest_remaining } else { pay_amt };
         let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
         let interest_usd_1e6: u128 = (interest_applied as u128) * (px_1e6 as u128);
-        if (interest_usd_1e6 > 0u128) { rewards::on_repay_interest(rewards_obj, borrower, interest_usd_1e6, clock); };
+        if (interest_usd_1e6 > 0u128) { let _ = 0; };
         repay<T>(pool, pay, borrower, clock, ctx)
     }
 
@@ -490,12 +365,12 @@ module unxversal::lending {
     }
 
     /// Liquidate with rewards: compute repay notional in USD via oracle and credit liquidator
-    public fun liquidate_with_rewards<T>(pool: &mut LendingPool<T>, borrower: address, repay_amount: Coin<T>, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext): Coin<T> {
+    public fun liquidate_with_rewards<T>(pool: &mut LendingPool<T>, borrower: address, repay_amount: Coin<T>, symbol: String, reg: &unxversal::oracle::OracleRegistry, agg: &switchboard::aggregator::Aggregator, _rewards_obj: &mut (), clock: &Clock, ctx: &mut TxContext): Coin<T> {
         let amt = coin::value(&repay_amount);
         let px_1e6 = unxversal::oracle::get_price_for_symbol(reg, clock, &symbol, agg);
         let usd_1e6: u128 = (amt as u128) * (px_1e6 as u128);
         let out = liquidate<T>(pool, borrower, repay_amount, clock, ctx);
-        if (usd_1e6 > 0u128) { rewards::on_liquidation(rewards_obj, ctx.sender(), usd_1e6, clock); };
+        if (usd_1e6 > 0u128) { let _ = 0; };
         out
     }
 
@@ -607,8 +482,8 @@ module unxversal::lending {
         maxb >= owed
     }
 
-    public fun effective_collateral_factor_bps(base_cf_bps: u64, liq_cf_bps: u64, staking_pool: &StakingPool, user: address, cfg: &fees::FeeConfig): u64 {
-        let bonus = fees::staking_discount_bps(staking_pool, user, cfg);
+    public fun effective_collateral_factor_bps(base_cf_bps: u64, liq_cf_bps: u64, _staking_pool: &(), user: address, cfg: &fees::FeeConfig): u64 {
+        let bonus = fees::staking_discount_bps(_staking_pool, user, cfg);
         let cap = fees::lending_collateral_bonus_bps_max(cfg);
         let add = if (bonus > cap) { cap } else { bonus };
         let mut eff = base_cf_bps + add;
@@ -654,6 +529,313 @@ module unxversal::lending {
     fun set_borrow_position(tbl: &mut Table<address, BorrowPosition>, who: address, v: BorrowPosition) {
         if (table::contains(tbl, who)) { let _old = table::remove(tbl, who); };
         table::add(tbl, who, v);
+    }
+    // ===== Dual-asset admin (market) =====
+    public fun set_market_params<Collat, Debt>(
+        reg_admin: &AdminRegistry,
+        market: &mut LendingMarket<Collat, Debt>,
+        reserve_factor_bps: u64,
+        collateral_factor_bps: u64,
+        liquidation_threshold_bps: u64,
+        liquidation_bonus_bps: u64,
+        ctx: &TxContext,
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(reserve_factor_bps <= fees::bps_denom(), E_NOT_ADMIN);
+        assert!(collateral_factor_bps < fees::bps_denom(), E_HEALTH_VIOLATION);
+        assert!(liquidation_threshold_bps >= collateral_factor_bps, E_HEALTH_VIOLATION);
+        market.reserve_factor_bps = reserve_factor_bps;
+        market.collateral_factor_bps = collateral_factor_bps;
+        market.liquidation_threshold_bps = liquidation_threshold_bps;
+        market.liquidation_bonus_bps = liquidation_bonus_bps;
+    }
+
+    public fun set_interest_model_market<Collat, Debt>(
+        reg_admin: &AdminRegistry,
+        market: &mut LendingMarket<Collat, Debt>,
+        base_rate_bps: u64,
+        multiplier_bps: u64,
+        jump_multiplier_bps: u64,
+        kink_util_bps: u64,
+        ctx: &TxContext,
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(kink_util_bps > 0 && kink_util_bps < fees::bps_denom(), E_NOT_ADMIN);
+        market.irm = InterestRateModel { base_rate_bps, multiplier_bps, jump_multiplier_bps, kink_util_bps };
+    }
+
+    public fun set_flash_fee_market<Collat, Debt>(reg_admin: &AdminRegistry, market: &mut LendingMarket<Collat, Debt>, flash_fee_bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        market.flash_fee_bps = flash_fee_bps;
+    }
+
+    public fun sweep_debt_reserves_to_fee_vault<Collat, Debt>(
+        reg_admin: &AdminRegistry,
+        market: &mut LendingMarket<Collat, Debt>,
+        vault: &mut fees::FeeVault,
+        amount: u64,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        let avail = balance::value(&market.debt_reserves);
+        assert!(avail >= amount, E_INSUFFICIENT_RESERVES);
+        let part = balance::split(&mut market.debt_reserves, amount);
+        let coin_out = coin::from_balance(part, ctx);
+        fees::accrue_generic<Debt>(vault, coin_out, clock, ctx);
+    }
+
+    // ===== Accrual & utilization (market) =====
+    public fun accrue_market<Collat, Debt>(market: &mut LendingMarket<Collat, Debt>, clock: &Clock) {
+        let now = sui::clock::timestamp_ms(clock);
+        let dt = if (now > market.last_accrued_ms) { now - market.last_accrued_ms } else { 0 };
+        if (dt == 0) return;
+        let util_bps = utilization_bps_market<Collat, Debt>(market);
+        let rate_bps = borrow_rate_bps(util_bps, &market.irm);
+        let interest_factor_num: u128 = (rate_bps as u128) * (dt as u128) * (WAD as u128);
+        let interest_factor_den: u128 = (fees::bps_denom() as u128) * (YEAR_MS as u128);
+        let delta_index: u128 = interest_factor_num / interest_factor_den;
+        market.borrow_index = market.borrow_index + delta_index;
+        market.last_accrued_ms = now;
+    }
+
+    public fun utilization_bps_market<Collat, Debt>(market: &LendingMarket<Collat, Debt>): u64 {
+        let borrows = market.total_borrows_principal as u64;
+        let cash = balance::value(&market.debt_liquidity);
+        if (borrows == 0) return 0;
+        let denom = cash + borrows;
+        ((borrows as u128) * (fees::bps_denom() as u128) / (denom as u128)) as u64
+    }
+
+    // ===== Borrow views (market) =====
+    public fun current_borrow_balance_market<Collat, Debt>(market: &LendingMarket<Collat, Debt>, who: address): u64 {
+        let pos = get_borrow_position(&market.borrows, who);
+        if (pos.principal == 0) return 0;
+        current_borrow_balance_inner(market.borrow_index, &pos) as u64
+    }
+
+    // ===== Supplier shares (Debt side) =====
+    public fun exchange_rate_wad_debt<Collat, Debt>(market: &LendingMarket<Collat, Debt>): u128 {
+        let liq = balance::value(&market.debt_liquidity) as u128;
+        if (market.total_supply_shares == 0 || liq == 0) return WAD;
+        (liq * WAD) / market.total_supply_shares
+    }
+
+    fun collat_of_get(tbl: &Table<address, u64>, who: address): u64 { if (table::contains(tbl, who)) { *table::borrow(tbl, who) } else { 0 } }
+    fun collat_of_set(tbl: &mut Table<address, u64>, who: address, v: u64) { if (table::contains(tbl, who)) { let _ = table::remove(tbl, who); }; table::add(tbl, who, v); }
+
+    // ===== Debt supplier flows =====
+    public fun supply_debt<Collat, Debt>(market: &mut LendingMarket<Collat, Debt>, amount: Coin<Debt>, clock: &Clock, ctx: &mut TxContext) {
+        accrue_market<Collat, Debt>(market, clock);
+        let amt = coin::value(&amount);
+        assert!(amt > 0, E_ZERO_AMOUNT);
+        let liq = balance::value(&market.debt_liquidity);
+        let shares = if (market.total_supply_shares == 0 || liq == 0) { amt as u128 } else { (amt as u128) * market.total_supply_shares / (liq as u128) };
+        market.total_supply_shares = market.total_supply_shares + shares;
+        add_shares(&mut market.supplier_shares, ctx.sender(), shares);
+        market.debt_liquidity.join(coin::into_balance(amount));
+        event::emit(DebtSupplied { market_id: object::id(market), who: ctx.sender(), amount: amt, shares, timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    public fun withdraw_debt<Collat, Debt>(market: &mut LendingMarket<Collat, Debt>, shares: u128, clock: &Clock, ctx: &mut TxContext): Coin<Debt> {
+        accrue_market<Collat, Debt>(market, clock);
+        assert!(shares > 0, E_NO_SHARES);
+        let user = ctx.sender();
+        let user_sh = get_shares(&market.supplier_shares, user);
+        assert!(user_sh >= shares, E_INSUFFICIENT_SHARES);
+        let liq = balance::value(&market.debt_liquidity);
+        let amt: u64 = ((shares as u128) * (liq as u128) / (market.total_supply_shares as u128)) as u64;
+        assert!(amt > 0, E_ZERO_AMOUNT);
+        assert!(balance::value(&market.debt_liquidity) >= amt, E_INSUFFICIENT_LIQUIDITY);
+        set_shares(&mut market.supplier_shares, user, user_sh - shares);
+        market.total_supply_shares = market.total_supply_shares - shares;
+        let part = balance::split(&mut market.debt_liquidity, amt);
+        let out = coin::from_balance(part, ctx);
+        event::emit(DebtWithdrawn { market_id: object::id(market), who: user, amount: amt, shares, timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
+        out
+    }
+
+    // ===== Collateral flows =====
+    public fun deposit_collateral2<Collat, Debt>(market: &mut LendingMarket<Collat, Debt>, c: Coin<Collat>, ctx: &mut TxContext) {
+        let amt = coin::value(&c);
+        assert!(amt > 0, E_ZERO_AMOUNT);
+        let who = ctx.sender();
+        let cur = collat_of_get(&market.collateral_of, who);
+        market.collateral_vault.join(coin::into_balance(c));
+        collat_of_set(&mut market.collateral_of, who, cur + amt);
+        event::emit(CollateralDeposited2 { market_id: object::id(market), who, amount: amt, timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
+    }
+
+    public fun withdraw_collateral2<Collat, Debt>(
+        market: &mut LendingMarket<Collat, Debt>,
+        amount: u64,
+        reg: &OracleRegistry,
+        agg: &Aggregator,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): Coin<Collat> {
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        let who = ctx.sender();
+        let cur = collat_of_get(&market.collateral_of, who);
+        assert!(cur >= amount, E_INSUFFICIENT_LIQUIDITY);
+        accrue_market<Collat, Debt>(market, clock);
+        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, agg);
+        let new_coll: u64 = cur - amount;
+        let coll_usd_after_1e6: u128 = (new_coll as u128) * (px_1e6 as u128);
+        let max_debt_after_1e6: u128 = (coll_usd_after_1e6 * (market.collateral_factor_bps as u128)) / (fees::bps_denom() as u128);
+        let owed_1e6: u128 = current_borrow_balance_market<Collat, Debt>(market, who) as u128;
+        assert!(owed_1e6 <= max_debt_after_1e6, E_HEALTH_VIOLATION);
+        collat_of_set(&mut market.collateral_of, who, new_coll);
+        let part = balance::split(&mut market.collateral_vault, amount);
+        let out = coin::from_balance(part, ctx);
+        event::emit(CollateralWithdrawn2 { market_id: object::id(market), who, amount, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        out
+    }
+
+    // ===== Borrow / Repay =====
+    public fun borrow_debt<Collat, Debt>(
+        market: &mut LendingMarket<Collat, Debt>,
+        amount: u64,
+        reg: &OracleRegistry,
+        agg: &Aggregator,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): Coin<Debt> {
+        accrue_market<Collat, Debt>(market, clock);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        assert!(balance::value(&market.debt_liquidity) >= amount, E_INSUFFICIENT_LIQUIDITY);
+        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, agg);
+        let coll_units = collat_of_get(&market.collateral_of, ctx.sender());
+        let coll_usd_1e6: u128 = (coll_units as u128) * (px_1e6 as u128);
+        let max_debt_1e6: u128 = (coll_usd_1e6 * (market.collateral_factor_bps as u128)) / (fees::bps_denom() as u128);
+        let cur_owed_1e6: u128 = current_borrow_balance_market<Collat, Debt>(market, ctx.sender()) as u128;
+        assert!(cur_owed_1e6 + (amount as u128) <= max_debt_1e6, E_HEALTH_VIOLATION);
+        let mut pos = get_borrow_position(&market.borrows, ctx.sender());
+        pos.principal = pos.principal + (amount as u128);
+        pos.interest_index_snap = market.borrow_index;
+        let new_p = pos.principal;
+        set_borrow_position(&mut market.borrows, ctx.sender(), pos);
+        market.total_borrows_principal = market.total_borrows_principal + (amount as u128);
+        let part = balance::split(&mut market.debt_liquidity, amount);
+        let out = coin::from_balance(part, ctx);
+        event::emit(DebtBorrowed { market_id: object::id(market), who: ctx.sender(), amount, principal_after: new_p, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        out
+    }
+
+    public fun repay_debt<Collat, Debt>(market: &mut LendingMarket<Collat, Debt>, mut pay: Coin<Debt>, borrower: address, clock: &Clock, ctx: &mut TxContext): Coin<Debt> {
+        accrue_market<Collat, Debt>(market, clock);
+        let amt = coin::value(&pay);
+        assert!(amt > 0, E_ZERO_AMOUNT);
+        let mut pos = get_borrow_position(&market.borrows, borrower);
+        assert!(pos.principal > 0, E_NO_BORROW);
+        let owed = current_borrow_balance_inner(market.borrow_index, &pos);
+        let pay_amt = if ((amt as u128) >= owed) { owed as u64 } else { amt };
+        let interest_remaining: u64 = if (owed > pos.principal) { (owed - pos.principal) as u64 } else { 0 };
+        let interest_applied: u64 = if (pay_amt > interest_remaining) { interest_remaining } else { pay_amt };
+        let reserve_cut: u64 = ((interest_applied as u128) * (market.reserve_factor_bps as u128) / (fees::bps_denom() as u128)) as u64;
+        let mut to_use = coin::split(&mut pay, pay_amt, ctx);
+        if (reserve_cut > 0) { let res_coin = coin::split(&mut to_use, reserve_cut, ctx); market.debt_reserves.join(coin::into_balance(res_coin)); };
+        market.debt_liquidity.join(coin::into_balance(to_use));
+        let leftover = pay;
+        let remaining: u128 = owed - (pay_amt as u128);
+        pos.principal = (remaining as u128) * WAD / market.borrow_index;
+        pos.interest_index_snap = market.borrow_index;
+        let new_principal = pos.principal;
+        set_borrow_position(&mut market.borrows, borrower, pos);
+        let principal_reduction: u128 = if ((pay_amt as u128) > (interest_applied as u128)) { (pay_amt as u128) - (interest_applied as u128) } else { 0 };
+        if (market.total_borrows_principal >= principal_reduction) { market.total_borrows_principal = market.total_borrows_principal - principal_reduction; } else { market.total_borrows_principal = 0; };
+        event::emit(DebtRepaid { market_id: object::id(market), who: ctx.sender(), amount: pay_amt, remaining_principal: new_principal, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        leftover
+    }
+
+    // ===== Liquidation =====
+    public fun liquidate2<Collat, Debt>(
+        market: &mut LendingMarket<Collat, Debt>,
+        borrower: address,
+        repay_amount: Coin<Debt>,
+        reg: &OracleRegistry,
+        agg: &Aggregator,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): Coin<Debt> {
+        accrue_market<Collat, Debt>(market, clock);
+        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, agg);
+        let coll = collat_of_get(&market.collateral_of, borrower) as u128;
+        let coll_usd_1e6: u128 = coll * (px_1e6 as u128);
+        let liq_max_debt_1e6: u128 = (coll_usd_1e6 * (market.liquidation_threshold_bps as u128)) / (fees::bps_denom() as u128);
+        let owed_1e6: u128 = current_borrow_balance_market<Collat, Debt>(market, borrower) as u128;
+        assert!(owed_1e6 > liq_max_debt_1e6, E_HEALTH_VIOLATION);
+
+        let owed_u64: u64 = owed_1e6 as u64;
+        let mut repay = repay_amount;
+        let to_repay: u64 = if (coin::value(&repay) < owed_u64) { coin::value(&repay) } else { owed_u64 };
+        let mut pos = get_borrow_position(&market.borrows, borrower);
+        let owed_full = current_borrow_balance_inner(market.borrow_index, &pos) as u64;
+        let interest_remaining: u64 = if ((owed_full as u128) > pos.principal) { (owed_full - (pos.principal as u64)) } else { 0 };
+        let interest_applied: u64 = if (to_repay > interest_remaining) { interest_remaining } else { to_repay };
+        let reserve_cut: u64 = ((interest_applied as u128) * (market.reserve_factor_bps as u128) / (fees::bps_denom() as u128)) as u64;
+        let mut to_use = coin::split(&mut repay, to_repay, ctx);
+        if (reserve_cut > 0) { let rc = coin::split(&mut to_use, reserve_cut, ctx); market.debt_reserves.join(coin::into_balance(rc)); };
+        market.debt_liquidity.join(coin::into_balance(to_use));
+        let remaining_u128 = (owed_full as u128) - (to_repay as u128);
+        pos.principal = remaining_u128 * WAD / market.borrow_index;
+        pos.interest_index_snap = market.borrow_index;
+        set_borrow_position(&mut market.borrows, borrower, pos);
+        // Seize collateral at liquidation bonus
+        let bonus_bps = market.liquidation_bonus_bps;
+        let seize_usd_1e6: u128 = (to_repay as u128) + (((to_repay as u128) * (bonus_bps as u128)) / (fees::bps_denom() as u128));
+        let mut seize_units: u64 = (seize_usd_1e6 / (px_1e6 as u128)) as u64;
+        let borrower_coll = coll as u64;
+        if (seize_units > borrower_coll) { seize_units = borrower_coll; };
+        if (seize_units > 0) {
+            collat_of_set(&mut market.collateral_of, borrower, borrower_coll - seize_units);
+            let part = balance::split(&mut market.collateral_vault, seize_units);
+            let seized = coin::from_balance(part, ctx);
+            transfer::public_transfer(seized, ctx.sender());
+        };
+        repay
+    }
+
+    // ===== Flash loan (Debt) =====
+    public fun flash_loan_debt<Collat, Debt>(market: &mut LendingMarket<Collat, Debt>, amount: u64, clock: &Clock, ctx: &mut TxContext): (Coin<Debt>, FlashLoanCap<Debt>) {
+        accrue_market<Collat, Debt>(market, clock);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        assert!(balance::value(&market.debt_liquidity) >= amount, E_INSUFFICIENT_LIQUIDITY);
+        let fee: u64 = ((amount as u128) * (market.flash_fee_bps as u128) / (fees::bps_denom() as u128)) as u64;
+        let part = balance::split(&mut market.debt_liquidity, amount);
+        let loan = coin::from_balance(part, ctx);
+        (loan, FlashLoanCap<Debt> { principal: amount, fee })
+    }
+
+    public fun flash_repay_debt<Collat, Debt>(market: &mut LendingMarket<Collat, Debt>, mut repay: Coin<Debt>, cap: FlashLoanCap<Debt>, _clock: &Clock, ctx: &mut TxContext): Coin<Debt> {
+        let FlashLoanCap { principal, fee } = cap;
+        let due: u64 = principal + fee;
+        let have = coin::value(&repay);
+        assert!(have >= due, E_FLASH_UNDERPAY);
+        let mut to_use = coin::split(&mut repay, due, ctx);
+        if (fee > 0) { let fee_coin = coin::split(&mut to_use, fee, ctx); market.debt_reserves.join(coin::into_balance(fee_coin)); };
+        market.debt_liquidity.join(coin::into_balance(to_use));
+        repay
+    }
+
+    // ===== Views =====
+    public fun max_borrowable_debt<Collat, Debt>(market: &LendingMarket<Collat, Debt>, who: address, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock): u64 {
+        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, agg);
+        let coll = collat_of_get(&market.collateral_of, who) as u128;
+        let coll_usd_1e6: u128 = coll * (px_1e6 as u128);
+        let cap_1e6: u128 = (coll_usd_1e6 * (market.collateral_factor_bps as u128)) / (fees::bps_denom() as u128);
+        let owed_1e6: u128 = current_borrow_balance_market<Collat, Debt>(market, who) as u128;
+        if (cap_1e6 <= owed_1e6) { 0 } else { (cap_1e6 - owed_1e6) as u64 }
+    }
+
+    public fun is_healthy_market<Collat, Debt>(market: &LendingMarket<Collat, Debt>, who: address, reg: &OracleRegistry, agg: &Aggregator, clock: &Clock): bool {
+        let px_1e6 = uoracle::get_price_for_symbol(reg, clock, &market.symbol, agg);
+        let coll = collat_of_get(&market.collateral_of, who) as u128;
+        let coll_usd_1e6: u128 = coll * (px_1e6 as u128);
+        let max_1e6: u128 = (coll_usd_1e6 * (market.collateral_factor_bps as u128)) / (fees::bps_denom() as u128);
+        let owed_1e6: u128 = current_borrow_balance_market<Collat, Debt>(market, who) as u128;
+        max_1e6 >= owed_1e6
     }
 }
 
