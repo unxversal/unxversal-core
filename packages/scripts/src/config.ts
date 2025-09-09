@@ -14,8 +14,9 @@ export type AppConfig = {
   pkgId: string;                        // Unxversal package id (0x...)
   adminRegistryId: string;              // unxversal::admin::AdminRegistry id
   oracleRegistryId: string;             // unxversal::oracle::OracleRegistry id
-  switchboard: {
-    aggregatorIds: string[];            // Switchboard Aggregator object IDs to update each cycle
+  pyth: {
+    stateId: string;                    // Pyth state object id
+    wormholeStateId: string;            // Wormhole state object id (for Pyth)
   };
   options: {
     markets: string[];                  // Options market object ids
@@ -24,12 +25,13 @@ export type AppConfig = {
   };
   perps: {
     markets: string[];                  // Perp market object ids
+    priceIdByMarket: Record<string, string>; // marketId -> Pyth price feed id (0x...)
     fundingDelta1e6?: number;           // optional funding delta per contract in 1e6 scale
     longsPay?: boolean;                 // whether longs pay shorts; default true
   };
   futures: {
     markets: string[];                  // Linear futures market ids
-    aggregatorByMarket: Record<string, string>; // marketId -> aggregatorId
+    priceIdByMarket: Record<string, string>; // marketId -> Pyth price feed id (0x...)
   };
   gasFutures: {
     markets: string[];                  // Gas futures market ids
@@ -55,8 +57,9 @@ export const config: AppConfig = {
   pkgId: '',
   adminRegistryId: '',
   oracleRegistryId: '',
-  switchboard: {
-    aggregatorIds: [],
+  pyth: {
+    stateId: '0x243759059f4c3111179da5878c12f68d612c21a8d54d85edc86164bb18be1c7c',
+    wormholeStateId: '0x31358d198147da50db32eda2562951d53973a0c0ad5ed738e9b17d88b213d790',
   },
   options: {
     markets: [],
@@ -65,12 +68,13 @@ export const config: AppConfig = {
   },
   perps: {
     markets: [],
+    priceIdByMarket: {},
     fundingDelta1e6: undefined,
     longsPay: true,
   },
   futures: {
     markets: [],
-    aggregatorByMarket: {},
+    priceIdByMarket: {},
   },
   gasFutures: {
     markets: [],

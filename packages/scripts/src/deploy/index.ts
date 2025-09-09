@@ -97,8 +97,8 @@ async function setOracleParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
   if (cfg.oracleFeeds && cfg.oracleFeeds.length && cfg.oracleRegistryId) {
     for (const f of cfg.oracleFeeds) {
       const tx = new Transaction();
-      tx.moveCall({ target: `${cfg.pkgId}::oracle::set_feed`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.string(f.symbol), tx.object(f.aggregatorId), tx.object('0x6')] });
-      await execTx(client, tx, keypair, `oracle.set_feed ${f.symbol}`);
+      tx.moveCall({ target: `${cfg.pkgId}::oracle::set_feed_from_bytes`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.string(f.symbol), tx.pure.vector('u8', Array.from(Buffer.from(f.priceId.replace(/^0x/, ''), 'hex'))), tx.object('0x6')] as any });
+      await execTx(client, tx, keypair, `oracle.set_feed_from_bytes ${f.symbol}`);
     }
   }
 }

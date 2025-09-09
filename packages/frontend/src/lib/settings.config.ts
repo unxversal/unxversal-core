@@ -237,14 +237,6 @@ export const defaultSettings: AppSettings = {
       iconUrl: 'https://strapi-dev.scand.app/uploads/bnb_bnb_logo_b38d2154bb.png'
     },
     {
-      symbol: 'WFTM',
-      name: 'Wrapped Fantom',
-      typeTag: '0x6081300950a4f1e2081580e919c210436a1bed49080502834950d31ee55a2396::coin::COIN',
-      address: '0x6081300950a4f1e2081580e919c210436a1bed49080502834950d31ee55a2396', 
-      decimals: 8,
-      iconUrl: 'https://strapi-dev.scand.app/uploads/WFTM_Logo_b1dfb8380a.jpeg'
-    },
-    {
       symbol: 'WGLMR',
       name: 'Wrapped Moonbeam',
       typeTag: '0x66f87084e49c38f76502d17f87d17f943f183bb94117561eb573e075fdc5ff75::coin::COIN',

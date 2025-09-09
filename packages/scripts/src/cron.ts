@@ -4,7 +4,7 @@ import { config } from './config.js';
 import { getFullnodeUrl, SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { Aggregator, SwitchboardClient } from '@switchboard-xyz/sui-sdk';
+import { SuiPythClient, SuiPriceServiceConnection } from '@pythnetwork/pyth-sui-js';
 
 /**
  * Env/config
@@ -18,7 +18,8 @@ const FUTURES_MARKET_IDS = config.futures.markets;
 const GAS_FUTURES_MARKET_IDS = config.gasFutures.markets;
 const OPTIONS_MARKET_IDS = config.options.markets;
 const OPTIONS_SWEEP_MAX = config.options.sweepMax;
-const SWITCHBOARD_AGGREGATOR_IDS = config.switchboard.aggregatorIds;
+const PYTH_STATE_ID = config.pyth.stateId;
+const WORMHOLE_STATE_ID = config.pyth.wormholeStateId;
 const CRON_SLEEP_MS = config.cron.sleepMs;
 const LENDING_CFG = config.lending;
 
@@ -28,35 +29,13 @@ const keypair = ADMIN_SEED_B64 ? Ed25519Keypair.fromSecretKey(Buffer.from(ADMIN_
 
 const client = new SuiClient({ url: getFullnodeUrl(NETWORK) });
 
-/**
- * Switchboard: update all configured aggregators.
- * Per docs: aggregator.fetchUpdateTx(tx) should be first in the PTB.
- */
-async function updateSwitchboardFeeds(): Promise<void> {
-  if (!SWITCHBOARD_AGGREGATOR_IDS.length) return;
-  const sb = new SwitchboardClient(client);
-  const tx = new Transaction();
-  const updated: string[] = [];
-
-  for (const aggId of SWITCHBOARD_AGGREGATOR_IDS) {
-    try {
-      const aggregator = new Aggregator(sb, aggId);
-      await aggregator.fetchUpdateTx(tx);
-      updated.push(aggId);
-    } catch (e) {
-      logger.error(`Switchboard update build failed for ${aggId}: ${(e as Error).message}`);
-    }
-  }
-
-  if (!updated.length) return;
-
-  try {
-    const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
-    await client.waitForTransaction({ digest: res.digest });
-    logger.info(`Switchboard batch updated count=${updated.length}`);
-  } catch (e) {
-    logger.error(`Switchboard batch update failed: ${(e as Error).message}`);
-  }
+async function updatePythFeedsOnTx(tx: Transaction, priceIds: string[]): Promise<string[]> {
+  if (!priceIds.length) return [];
+  const hermesUrl = config.network === 'mainnet' ? 'https://hermes.pyth.network' : 'https://hermes-beta.pyth.network';
+  const connection = new SuiPriceServiceConnection(hermesUrl, { priceFeedRequestConfig: { binary: true } });
+  const updateData = await connection.getPriceFeedsUpdateData(priceIds);
+  const pythClient = new SuiPythClient(client, PYTH_STATE_ID, WORMHOLE_STATE_ID);
+  return await pythClient.updatePriceFeeds(tx, updateData, priceIds);
 }
 
 /**
@@ -64,35 +43,34 @@ async function updateSwitchboardFeeds(): Promise<void> {
  * This helps the live price be fresh without requiring a trade.
  */
 async function refreshIndexPrices(): Promise<void> {
-  const tx = new Transaction();
-  // Update futures markets
+  // Update futures markets: one tx per market with inline Pyth update
   for (const m of FUTURES_MARKET_IDS) {
     try {
+      const priceId = config.futures.priceIdByMarket[m];
+      if (!priceId) { continue; }
+      const tx = new Transaction();
+      const [priceInfoObjectId] = await updatePythFeedsOnTx(tx, [priceId]);
       tx.moveCall({
         target: `${config.pkgId}::futures::update_index_price`,
-        arguments: [tx.object(m), tx.object(ORACLE_REGISTRY_ID), tx.pure.id('0x0'), tx.object('0x6')],
+        arguments: [tx.object(m), tx.object(ORACLE_REGISTRY_ID), tx.object(priceInfoObjectId), tx.object('0x6')],
       });
+      const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
+      await client.waitForTransaction({ digest: res.digest });
     } catch (e) {
       // ignore build issues per market; continue batching others
     }
   }
-  // Update gas futures
+  // Update gas futures (no Pyth dependency)
   for (const m of GAS_FUTURES_MARKET_IDS) {
     try {
+      const tx = new Transaction();
       tx.moveCall({
         target: `${config.pkgId}::gas_futures::update_index_price`,
         arguments: [tx.object(m), tx.object('0x6')],
       });
+      const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
+      await client.waitForTransaction({ digest: res.digest });
     } catch (e) {}
-  }
-  // If nothing added, skip send
-  if ((tx as any).blockData?.commands?.length === 0) return;
-  try {
-    const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
-    await client.waitForTransaction({ digest: res.digest });
-    logger.info(`Refreshed index prices for futures=${FUTURES_MARKET_IDS.length} gas=${GAS_FUTURES_MARKET_IDS.length}`);
-  } catch (e) {
-    logger.error(`refreshIndexPrices failed: ${(e as Error).message}`);
   }
 }
 
@@ -103,10 +81,13 @@ async function snapSettlements(): Promise<void> {
   // Futures snap
   for (const m of FUTURES_MARKET_IDS) {
     try {
+      const priceId = config.futures.priceIdByMarket[m];
+      if (!priceId) { continue; }
       const tx = new Transaction();
+      const [priceInfoObjectId] = await updatePythFeedsOnTx(tx, [priceId]);
       tx.moveCall({
         target: `${config.pkgId}::futures::snap_settlement_price`,
-        arguments: [tx.object(m), tx.object(ORACLE_REGISTRY_ID), tx.pure.id('0x0'), tx.object('0x6')],
+        arguments: [tx.object(m), tx.object(ORACLE_REGISTRY_ID), tx.object(priceInfoObjectId), tx.object('0x6')],
       });
       const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
       await client.waitForTransaction({ digest: res.digest });
@@ -250,7 +231,7 @@ async function runCron(): Promise<void> {
   logger.info(`Cron started on ${NETWORK}`);
   for (;;) {
     await Promise.allSettled([
-      (async () => { await updateSwitchboardFeeds(); })(),
+      (async () => { /* pyth updates done inline per-market */ })(),
       (async () => { await sweepExpiredOptions(); })(),
       (async () => { await applyPerpFunding(); })(),
       (async () => { await refreshIndexPrices(); })(),
