@@ -13,6 +13,10 @@ local = "../../switchboard/on_demand"
 [dependencies.deepbook]
 local = "../../deepbookv3packages/deepbook"
 
+[dependencies.Pyth]
+local = "../../pyth/contracts"
+rev = "sui-contract-testnet"
+
 [addresses]
 unxversal = "0x0"
 # DeepBook mainnet addresses for integration
