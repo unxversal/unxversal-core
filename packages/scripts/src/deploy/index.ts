@@ -31,6 +31,9 @@ type DeploymentSummary = {
   tradeFees?: DeployConfig['tradeFees'];
   oracleMaxAgeSec?: number;
   oracleFeeds?: NonNullable<DeployConfig['oracleFeeds']>;
+  // Newly observed package ids and object types from created objects during this run
+  createdPackageIds: string[];
+  createdObjectTypes: string[];
   lending: Array<{ marketId: string; collat: string; debt: string; symbol: string }>;
   options: DeployedOptions[];
   futures: DeployedFutures[];
@@ -83,11 +86,28 @@ function resolveTypeTag(tag: string, pkgId: string): string {
   return `${pkgId}::${tag}`;
 }
 
-async function ensureOracleRegistry(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair): Promise<string> {
+function accumulateFromRes(res: any, summary: DeploymentSummary) {
+  const changes: any[] = res?.objectChanges || [];
+  const pkgSet = new Set(summary.createdPackageIds);
+  const typeSet = new Set(summary.createdObjectTypes);
+  for (const oc of changes) {
+    if (oc?.type === 'created' && typeof oc.objectType === 'string') {
+      typeSet.add(oc.objectType as string);
+      const typeStr: string = oc.objectType as string;
+      const pkg = typeStr.split('::')[0];
+      if (pkg && pkg.startsWith('0x')) pkgSet.add(pkg);
+    }
+  }
+  summary.createdPackageIds = Array.from(pkgSet);
+  summary.createdObjectTypes = Array.from(typeSet);
+}
+
+async function ensureOracleRegistry(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary): Promise<string> {
   if (cfg.oracleRegistryId) return cfg.oracleRegistryId;
   const tx = new Transaction();
   tx.moveCall({ target: `${cfg.pkgId}::oracle::init_registry`, arguments: [tx.object(cfg.adminRegistryId), tx.object('0x6')] });
   const res = await execTx(client, tx, keypair, 'oracle.init_registry');
+  accumulateFromRes(res, summary);
   const id = extractCreatedId(res, `${cfg.pkgId}::oracle::OracleRegistry`)
     || extractCreatedId(res, `${cfg.pkgId}::oracle::OracleRegistry`)
     || '';
@@ -211,6 +231,7 @@ async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25
       const tx = new Transaction();
       tx.moveCall({ target: `${cfg.pkgId}::options::init_market`, arguments: [tx.object(cfg.adminRegistryId)] });
       const res = await execTx(client, tx, keypair, 'options.init_market');
+      accumulateFromRes(res, summary);
       marketId = extractCreatedId(res, `${cfg.pkgId}::options::OptionsMarket<`) || marketId;
       if (marketId) logger.info(`options.market created id=${marketId}`);
     }
@@ -232,7 +253,8 @@ async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25
             tx.pure.u64(m.minSize),
           ],
         });
-        await execTx(client, tx, keypair, `options.create_series ${s.symbol}`);
+        const res = await execTx(client, tx, keypair, `options.create_series ${s.symbol}`);
+        accumulateFromRes(res, summary);
       }
     }
     if (marketId) {
@@ -251,16 +273,20 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
         typeArguments: [f.collat],
         arguments: [
           tx.object(cfg.adminRegistryId),
-          tx.pure.u64(0),
+          tx.pure.u64((f as any).expiryMs ?? 0),
           tx.pure.string(f.symbol),
           tx.pure.u64(f.contractSize),
           tx.pure.u64(f.initialMarginBps),
           tx.pure.u64(f.maintenanceMarginBps),
           tx.pure.u64(f.liquidationFeeBps),
           tx.pure.u64((f as any).keeperIncentiveBps ?? 0),
+          tx.pure.u64((f as any).tickSize ?? 0),
+          tx.pure.u64((f as any).lotSize ?? 0),
+          tx.pure.u64((f as any).minSize ?? 0),
         ],
       });
       const res = await execTx(client, tx, keypair, `futures.init_market ${f.symbol}`);
+      accumulateFromRes(res, summary);
       const id = extractCreatedId(res, `${cfg.pkgId}::futures::FuturesMarket<`);
       if (id) logger.info(`futures.market created id=${id}`);
       if (id) summary.futures.push({ marketId: id, collat: f.collat, symbol: f.symbol, contractSize: f.contractSize, initialMarginBps: f.initialMarginBps, maintenanceMarginBps: f.maintenanceMarginBps, liquidationFeeBps: f.liquidationFeeBps, keeperIncentiveBps: (f as any).keeperIncentiveBps ?? 0 });
@@ -274,6 +300,33 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
 
       // Apply new risk controls
       if (f.marketId) {
+        // Optional admin knobs post-init
+        if (typeof (f as any).closeOnly === 'boolean') {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::futures::set_close_only`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.bool((f as any).closeOnly)] });
+          await execTx(client, tx, keypair, `futures.set_close_only ${f.symbol}`);
+        }
+        if (typeof (f as any).maxDeviationBps === 'number') {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::futures::set_price_deviation_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).maxDeviationBps)] });
+          await execTx(client, tx, keypair, `futures.set_price_deviation_bps ${f.symbol}`);
+        }
+        if (typeof (f as any).pnlFeeShareBps === 'number') {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::futures::set_pnl_fee_share_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).pnlFeeShareBps)] });
+          await execTx(client, tx, keypair, `futures.set_pnl_fee_share_bps ${f.symbol}`);
+        }
+        if (typeof (f as any).liqTargetBufferBps === 'number') {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::futures::set_liq_target_buffer_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).liqTargetBufferBps)] });
+          await execTx(client, tx, keypair, `futures.set_liq_target_buffer_bps ${f.symbol}`);
+        }
+        if ((f as any).imbalanceParams) {
+          const p = (f as any).imbalanceParams as { surchargeMaxBps: number; thresholdBps: number };
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::futures::set_imbalance_params`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64(p.surchargeMaxBps), tx.pure.u64(p.thresholdBps)] });
+          await execTx(client, tx, keypair, `futures.set_imbalance_params ${f.symbol}`);
+        }
         if ((f as any).accountMaxNotional1e6 || (f as any).marketMaxNotional1e6) {
           const tx = new Transaction();
           tx.moveCall({ target: `${cfg.pkgId}::futures::set_notional_caps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u128(BigInt((f as any).accountMaxNotional1e6 || '0')), tx.pure.u128(BigInt((f as any).marketMaxNotional1e6 || '0'))] as any });
@@ -315,6 +368,7 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
         ],
       });
       const res = await execTx(client, tx, keypair, 'gas_futures.init_market');
+      accumulateFromRes(res, summary);
       const id = extractCreatedId(res, `${cfg.pkgId}::gas_futures::GasMarket<`);
       if (id) logger.info(`gas_futures.market created id=${id}`);
       if (id) summary.gasFutures.push({ marketId: id, collat: g.collat, expiryMs: g.expiryMs, contractSize: g.contractSize, initialMarginBps: g.initialMarginBps, maintenanceMarginBps: g.maintenanceMarginBps, liquidationFeeBps: g.liquidationFeeBps, keeperIncentiveBps: (g as any).keeperIncentiveBps ?? 0 });
@@ -370,6 +424,7 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
         ],
       });
       const res = await execTx(client, tx, keypair, `perpetuals.init_market ${p.symbol}`);
+      accumulateFromRes(res, summary);
       const id = extractCreatedId(res, `${cfg.pkgId}::perpetuals::PerpMarket<`);
       if (id) logger.info(`perpetuals.market created id=${id}`);
       if (id) summary.perpetuals.push({ marketId: id, collat: p.collat, symbol: p.symbol, contractSize: p.contractSize, fundingIntervalMs: p.fundingIntervalMs, initialMarginBps: p.initialMarginBps, maintenanceMarginBps: p.maintenanceMarginBps, liquidationFeeBps: p.liquidationFeeBps, keeperIncentiveBps: (p as any).keeperIncentiveBps ?? 0 });
@@ -426,6 +481,7 @@ async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25
         ],
       });
       const res = await execTx(client, tx, keypair, `lending.init_market ${m.collat}`);
+      accumulateFromRes(res, summary);
       const id = extractCreatedId(res, `${cfg.pkgId}::lending::LendingMarket<`);
       if (id) {
         logger.info(`lending.market created id=${id}`);
@@ -455,6 +511,7 @@ async function deployDexPools(client: SuiClient, cfg: DeployConfig, keypair: Ed2
       ],
     });
     const res = await execTx(client, tx, keypair, 'dex.create_permissionless_pool');
+    accumulateFromRes(res, summary);
     const poolId = extractCreatedId(res, 'deepbook::pool::Pool<') || '';
     if (poolId) {
       summary.dexPools.push({ poolId, base: d.base, quote: d.quote, tickSize: d.tickSize, lotSize: d.lotSize, minSize: d.minSize, registryId: d.registryId, feeConfigId: d.feeConfigId, feeVaultId: d.feeVaultId, stakingPoolId: d.stakingPoolId });
@@ -462,11 +519,12 @@ async function deployDexPools(client: SuiClient, cfg: DeployConfig, keypair: Ed2
   }
 }
 
-async function createVault<T extends string>(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, assetType: string): Promise<string> {
+async function createVault<T extends string>(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, assetType: string, summary: DeploymentSummary): Promise<string> {
   const tx = new Transaction();
   // NOTE: Replace generic with actual type param via typeArguments if your Move function is generic
   tx.moveCall({ target: `${cfg.pkgId}::vaults::create_vault`, typeArguments: [assetType], arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.object(cfg.feeVaultId), tx.pure.bool(false), tx.object('0x6'), tx.object('0x6')] });
   const res = await execTx(client, tx, keypair, 'vaults.create_vault');
+  accumulateFromRes(res, summary);
   const id = extractCreatedId(res, `${cfg.pkgId}::vaults::Vault<`) || '';
   return id;
 }
@@ -550,6 +608,12 @@ async function writeDeploymentMarkdown(summary: DeploymentSummary) {
     for (const v of summary.vaults) lines.push(`- vault=<${v.id}> asset=<${v.asset}>`);
     lines.push('');
   }
+  if (summary.createdPackageIds.length) {
+    lines.push('## Packages observed during deployment');
+    const uniquePkgs = Array.from(new Set(summary.createdPackageIds));
+    for (const p of uniquePkgs) lines.push(`- packageId: \`${p}\``);
+    lines.push('');
+  }
   lines.push('## Raw summary');
   lines.push('```json');
   lines.push(JSON.stringify(summary, null, 2));
@@ -562,15 +626,6 @@ async function writeDeploymentMarkdown(summary: DeploymentSummary) {
 export async function main(): Promise<void> {
   const keypair = kpFromEnv();
   const client = new SuiClient({ url: getFullnodeUrl(deployConfig.network) });
-
-  const ensuredOracleId = await ensureOracleRegistry(client, deployConfig, keypair);
-  if (ensuredOracleId && !deployConfig.oracleRegistryId) {
-    deployConfig.oracleRegistryId = ensuredOracleId;
-  }
-  await addAdditionalAdmins(client, deployConfig, keypair);
-  await setOracleParams(client, deployConfig, keypair);
-  await updateFeeParams(client, deployConfig, keypair);
-  await applyUsduFaucetSettings(client, deployConfig, keypair);
 
   const summary: DeploymentSummary = {
     network: deployConfig.network,
@@ -590,6 +645,8 @@ export async function main(): Promise<void> {
     tradeFees: deployConfig.tradeFees,
     oracleMaxAgeSec: deployConfig.oracleMaxAgeSec,
     oracleFeeds: deployConfig.oracleFeeds || [],
+    createdPackageIds: [],
+    createdObjectTypes: [],
     lending: [],
     options: [],
     futures: [],
@@ -598,6 +655,15 @@ export async function main(): Promise<void> {
     dexPools: [],
     vaults: [],
   };
+
+  const ensuredOracleId = await ensureOracleRegistry(client, deployConfig, keypair, summary);
+  if (ensuredOracleId && !deployConfig.oracleRegistryId) {
+    deployConfig.oracleRegistryId = ensuredOracleId;
+  }
+  await addAdditionalAdmins(client, deployConfig, keypair);
+  await setOracleParams(client, deployConfig, keypair);
+  await updateFeeParams(client, deployConfig, keypair);
+  await applyUsduFaucetSettings(client, deployConfig, keypair);
 
   await deployLending(client, deployConfig, keypair, summary);
   await deployOptions(client, deployConfig, keypair, summary);
@@ -609,7 +675,7 @@ export async function main(): Promise<void> {
   // Create vaults (optional)
   if (deployConfig.vaults?.length) {
     for (const v of deployConfig.vaults) {
-      const id = await createVault(client, deployConfig, keypair, v.asset);
+      const id = await createVault(client, deployConfig, keypair, v.asset, summary);
       if (id) {
         summary.vaults.push({ id, asset: v.asset });
         if (v.caps) await setVaultCaps(client, deployConfig, keypair, id, v.caps);

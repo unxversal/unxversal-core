@@ -1,6 +1,8 @@
 // Utility to generate options series specs for deploy config
 // Produces entries compatible with DeployConfig.options[*].series
 
+import type { SuiTypeTag } from './config.js';
+
 export type Interval = 'daily' | 'weekly' | 'biweekly' | 'monthly';
 
 export type SeriesItem = {
@@ -212,6 +214,144 @@ function daysInMonthUTC(year: number, monthZeroBased: number): number {
 //   weeklyOn: 5,            // Friday
 //   expiryHourUTC: 0,       // 00:00 UTC
 //   excludeWeekdays: [],
+// });
+
+// ===== Futures helpers =====
+
+export type FuturesMarketSpec = {
+  symbol: string;
+  collat: SuiTypeTag;       // Sui type tag for Collat
+  contractSize: number;     // quote units per contract (price scale 1e6)
+  initialMarginBps: number;
+  maintenanceMarginBps: number;
+  liquidationFeeBps: number;
+  keeperIncentiveBps?: number;
+  // orderbook
+  tickSize: number;
+  lotSize: number;
+  minSize: number;
+  // optional admin knobs
+  closeOnly?: boolean;
+  maxDeviationBps?: number;
+  pnlFeeShareBps?: number;
+  liqTargetBufferBps?: number;
+  imbalanceParams?: { surchargeMaxBps: number; thresholdBps: number };
+  // risk controls
+  accountMaxNotional1e6?: string;
+  marketMaxNotional1e6?: string;
+  accountShareOfOiBps?: number;
+  tierThresholds1e6?: number[];
+  tierImBps?: number[];
+};
+
+export type GenerateFuturesParams = {
+  baseSymbol: string;       // e.g. 'SUI/USDC'
+  collat: SuiTypeTag;       // Sui type for Collat
+  contractSize: number;
+  initialMarginBps: number;
+  maintenanceMarginBps: number;
+  liquidationFeeBps: number;
+  keeperIncentiveBps?: number;
+  tickSize: number;
+  lotSize: number;
+  minSize: number;
+  // schedule
+  years: number;
+  interval: Interval;       // weekly/biweekly/monthly typical
+  expiryHourUTC?: number;   // default 0
+  weeklyOn?: number;        // 0..6
+  monthlyOnDay?: number;    // 1..31
+  startMs?: number;         // default now
+  // optional admin knobs
+  closeOnly?: boolean;
+  maxDeviationBps?: number;
+  pnlFeeShareBps?: number;
+  liqTargetBufferBps?: number;
+  imbalanceParams?: { surchargeMaxBps: number; thresholdBps: number };
+  // risk controls
+  accountMaxNotional1e6?: string;
+  marketMaxNotional1e6?: string;
+  accountShareOfOiBps?: number;
+  tierThresholds1e6?: number[];
+  tierImBps?: number[];
+  // max number of markets (safety cap)
+  maxMarkets?: number;
+};
+
+export function generateFuturesMarkets(params: GenerateFuturesParams): Array<FuturesMarketSpec & { expiryMs: number }>{
+  const {
+    baseSymbol,
+    collat,
+    contractSize,
+    initialMarginBps,
+    maintenanceMarginBps,
+    liquidationFeeBps,
+    keeperIncentiveBps,
+    tickSize,
+    lotSize,
+    minSize,
+    years,
+    interval,
+    expiryHourUTC = 0,
+    weeklyOn,
+    monthlyOnDay,
+    startMs = Date.now(),
+    closeOnly,
+    maxDeviationBps,
+    pnlFeeShareBps,
+    liqTargetBufferBps,
+    imbalanceParams,
+    accountMaxNotional1e6,
+    marketMaxNotional1e6,
+    accountShareOfOiBps,
+    tierThresholds1e6,
+    tierImBps,
+    maxMarkets,
+  } = params;
+
+  const expiries = buildExpirySchedule({
+    startMs,
+    years,
+    interval,
+    expiryHourUTC,
+    weeklyOn,
+    monthlyOnDay,
+    excludeWeekdays: [],
+    maxSeries: maxMarkets,
+  });
+
+  return expiries.map((expiryMs) => ({
+    symbol: baseSymbol,
+    collat,
+    contractSize,
+    initialMarginBps,
+    maintenanceMarginBps,
+    liquidationFeeBps,
+    keeperIncentiveBps,
+    tickSize,
+    lotSize,
+    minSize,
+    closeOnly,
+    maxDeviationBps,
+    pnlFeeShareBps,
+    liqTargetBufferBps,
+    imbalanceParams,
+    accountMaxNotional1e6,
+    marketMaxNotional1e6,
+    accountShareOfOiBps,
+    tierThresholds1e6,
+    tierImBps,
+    expiryMs,
+  }));
+}
+
+// Example:
+// const futs = generateFuturesMarkets({
+//   baseSymbol: 'SUI/USDC', collat: '0x2::sui::SUI',
+//   contractSize: 2_000_000_000_000, initialMarginBps: 500, maintenanceMarginBps: 300, liquidationFeeBps: 50,
+//   tickSize: 10_000, lotSize: 2_000_000_000_000, minSize: 2_000_000_000_000,
+//   years: 1, interval: 'monthly', monthlyOnDay: 1, expiryHourUTC: 0,
+//   maxMarkets: 6,
 // });
 
 

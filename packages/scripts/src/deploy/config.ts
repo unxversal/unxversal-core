@@ -1,4 +1,6 @@
 import type { NetworkName } from '../config.js';
+import type { FuturesMarketSpec, Interval } from './series.js';
+import {generateFuturesMarkets} from './series.js';
 import { buildAllOptionSeriesForFeeds, type Series, type Policy } from '../utils/series.js';
 
 // Address like 0x + hex (we keep it loose for sanity)
@@ -205,8 +207,129 @@ const DERIVATIVE_TYPE_TAGS: Record<string, {
   },
 };
 
-
 const optionsSeries: Record<string, Series[]> = await buildAllOptionSeriesForFeeds(DERIVATIVE_SYMBOLS, POLICIES)
+
+
+type Tier = 'A'|'B'|'C'|'D';
+
+const FUTURES_TIERS: Record<string, Tier> = {
+  'BTC/USDC': 'A',
+  'ETH/USDC': 'A',
+  'SOL/USDC': 'A',
+  'WBNB/USDC': 'A',
+  'SUI/USDC': 'A',
+  'MATIC/USDC': 'A',
+  'APT/USDC': 'B',
+  'CELO/USDC': 'C',
+  'GLMR/USDC': 'C',
+  'DEEP/USDC': 'C',
+  'IKA/USDC': 'C',
+  'NS/USDC': 'C',
+  'SEND/USDC': 'C',
+  'WAL/USDC': 'C',
+};
+
+const TIER_PARAMS: Record<Tier, Pick<FuturesMarketSpec,
+  'initialMarginBps' | 'maintenanceMarginBps' | 'liquidationFeeBps' | 'keeperIncentiveBps' |
+  'accountMaxNotional1e6' | 'marketMaxNotional1e6' | 'accountShareOfOiBps'
+>> = {
+  A: {
+    initialMarginBps: 500,                // Initial margin requirement in basis points (5%)
+    maintenanceMarginBps: 300,            // Maintenance margin requirement in basis points (3%)
+    liquidationFeeBps: 50,                // Liquidation fee in basis points (0.5%)
+    keeperIncentiveBps: 5000,             // Keeper incentive in basis points (50%)
+    accountMaxNotional1e6: '50_000_000_000_000',   // Max notional per account (1e6 scale, e.g. $50M)
+    marketMaxNotional1e6: '5_000_000_000_000_000',   // Max notional per market (1e6 scale, e.g. $5B)
+    accountShareOfOiBps: 500              // Max % of open interest per account in basis points (5%)
+  },
+  B: {
+    initialMarginBps: 600,                // Initial margin requirement in basis points (6%)
+    maintenanceMarginBps: 400,            // Maintenance margin requirement in basis points (4%)
+    liquidationFeeBps: 50,                // Liquidation fee in basis points (0.5%)
+    keeperIncentiveBps: 5000,             // Keeper incentive in basis points (10%)
+    accountMaxNotional1e6: '20_000_000_000_000',   // Max notional per account (1e6 scale, e.g. $20M)
+    marketMaxNotional1e6: '1_000_000_000_000_000',   // Max notional per market (1e6 scale, e.g. $1000M)
+    accountShareOfOiBps: 600              // Max % of open interest per account in basis points (6%)
+  },
+  C: {
+    initialMarginBps: 800,                // Initial margin requirement in basis points (8%)
+    maintenanceMarginBps: 500,            // Maintenance margin requirement in basis points (5%)
+    liquidationFeeBps: 100,                // Liquidation fee in basis points (0.75%)
+    keeperIncentiveBps: 5000,             // Keeper incentive in basis points (10%)
+    accountMaxNotional1e6: '5_000_000_000_000',    // Max notional per account (1e6 scale, e.g. $5M)
+    marketMaxNotional1e6: '500_000_000_000_000',    // Max notional per market (1e6 scale, e.g. $500M)
+    accountShareOfOiBps: 800              // Max % of open interest per account in basis points (8%)
+  },
+  D: {
+    initialMarginBps: 1200,               // Initial margin requirement in basis points (12%)
+    maintenanceMarginBps: 800,            // Maintenance margin requirement in basis points (8%)
+    liquidationFeeBps: 100,               // Liquidation fee in basis points (1%)
+    keeperIncentiveBps: 5000,             // Keeper incentive in basis points (10%)
+    accountMaxNotional1e6: '1_000_000_000_000',    // Max notional per account (1e6 scale, e.g. $1M)
+    marketMaxNotional1e6: '10_000_000_000_000',    // Max notional per market (1e6 scale, e.g. $10M)
+    accountShareOfOiBps: 1000             // Max % of open interest per account in basis points (10%)
+  },
+};
+
+// Helper to assemble per-symbol futures markets using your schedule builder.
+function buildFuturesForSymbol(symbol: string, years: number, interval: Interval, opts?: {
+  weeklyOn?: number; monthlyOnDay?: number; maxMarkets?: number; expiryHourUTC?: number;
+}) {
+  const cfg = DERIVATIVE_TYPE_TAGS[symbol];
+  if (!cfg) throw new Error(`Missing DERIVATIVE_TYPE_TAGS for ${symbol}`);
+
+  const tier = FUTURES_TIERS[symbol];
+  const risk = TIER_PARAMS[tier];
+
+  return generateFuturesMarkets({
+    baseSymbol: symbol,
+    collat: cfg.quote,                   // quote coin as collateral (USDC)
+    contractSize: cfg.lotSize,          // 1 contract = 1 lot of base
+    initialMarginBps: risk.initialMarginBps,
+    maintenanceMarginBps: risk.maintenanceMarginBps,
+    liquidationFeeBps: risk.liquidationFeeBps,
+    keeperIncentiveBps: risk.keeperIncentiveBps,
+    tickSize: cfg.tickSize,
+    lotSize: cfg.lotSize,
+    minSize: cfg.minSize,
+    years,
+    interval,
+    expiryHourUTC: opts?.expiryHourUTC ?? 0,
+    weeklyOn: opts?.weeklyOn,
+    monthlyOnDay: opts?.monthlyOnDay,
+    maxMarkets: opts?.maxMarkets,
+    // Risk caps — leave tiered IM to Move defaults; these are coarse caps:
+    accountMaxNotional1e6: risk.accountMaxNotional1e6,
+    marketMaxNotional1e6: risk.marketMaxNotional1e6,
+    accountShareOfOiBps: risk.accountShareOfOiBps,
+    // Optional: keep these undefined unless you want to override on-chain defaults
+    // tierThresholds1e6: [...],
+    // tierImBps: [...],
+  });
+}
+
+// Build sets:
+// - BTC/ETH: weekly Fridays for ~6 months (max 26)
+// - Others: monthly on day 1 for ~12 months
+
+const fut_biweekly = [
+  'BTC/USDC',
+  'ETH/USDC',
+  'SUI/USDC',
+  'MATIC/USDC',
+  'SOL/USDC',
+].flatMap(sym => buildFuturesForSymbol(sym, 1, 'biweekly',   { weeklyOn: 5, maxMarkets: 26, expiryHourUTC: 0 }));
+
+const fut_monthly = [
+  'APT/USDC',
+  'CELO/USDC',
+  'GLMR/USDC',
+  'DEEP/USDC',
+  'IKA/USDC',
+  'NS/USDC',
+  'SEND/USDC',
+  'WAL/USDC',
+].flatMap(sym => buildFuturesForSymbol(sym, 1, 'monthly', { monthlyOnDay: 1, maxMarkets: 12, expiryHourUTC: 0 }));
 
 export type DeployConfig = {
   network: NetworkName;
@@ -280,11 +403,16 @@ export type DeployConfig = {
     marketId?: string;
     collat: SuiTypeTag;
     symbol: string;
+    expiryMs: number;
     contractSize: number;
     initialMarginBps: number;
     maintenanceMarginBps: number;
     liquidationFeeBps: number;
     keeperIncentiveBps?: number;
+    // Orderbook params (required by on-chain init)
+    tickSize: number;
+    lotSize: number;
+    minSize: number;
     // New risk controls
     accountMaxNotional1e6?: string; // use string to avoid JS precision issues
     marketMaxNotional1e6?: string;
@@ -292,6 +420,12 @@ export type DeployConfig = {
     // Tiered IM
     tierThresholds1e6?: number[];
     tierImBps?: number[];
+    // Optional admin knobs
+    closeOnly?: boolean;
+    maxDeviationBps?: number;
+    pnlFeeShareBps?: number;
+    liqTargetBufferBps?: number;
+    imbalanceParams?: { surchargeMaxBps: number; thresholdBps: number };
   }>;
   gasFutures?: Array<{
     marketId?: string;
@@ -377,7 +511,7 @@ export const deployConfig: DeployConfig = {
     { symbol: 'USDT/USDC', priceId: '0x2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b' },
     { symbol: 'WBNB/USDC', priceId: '0x2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f' },
   ],
-  oracleMaxAgeSec: 30,
+  oracleMaxAgeSec: 5,
   usdu: undefined,
   lendingMarkets: [
     // Blue-chip assets
@@ -647,7 +781,10 @@ export const deployConfig: DeployConfig = {
       series,
     };
   }),
-  futures: [],
+  futures: [
+    ...fut_biweekly,
+    ...fut_monthly,
+  ],
   gasFutures: [],
   perpetuals: [],
   dexPools: [],

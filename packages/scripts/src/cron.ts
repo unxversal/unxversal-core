@@ -88,7 +88,9 @@ async function snapSettlements(): Promise<void> {
   for (const m of FUTURES_MARKET_IDS) {
     try {
       const priceId = config.futures.priceIdByMarket[m];
+      const expiryMs = config.futures.expiryMsByMarket?.[m] ?? 0;
       if (!priceId) { continue; }
+      if (!expiryMs || expiryMs <= 0) { continue; }
       const tx = new Transaction();
       const [priceInfoObjectId] = await updatePythFeedsOnTx(tx, [priceId]);
       tx.moveCall({

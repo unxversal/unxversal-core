@@ -32,6 +32,7 @@ export type AppConfig = {
   futures: {
     markets: string[];                  // Linear futures market ids
     priceIdByMarket: Record<string, string>; // marketId -> Pyth price feed id (0x...)
+    expiryMsByMarket?: Record<string, number>; // marketId -> expiry ms (0 = perpetual)
   };
   gasFutures: {
     markets: string[];                  // Gas futures market ids
@@ -75,6 +76,7 @@ export const config: AppConfig = {
   futures: {
     markets: [],
     priceIdByMarket: {},
+    expiryMsByMarket: {},
   },
   gasFutures: {
     markets: [],
@@ -85,6 +87,6 @@ export const config: AppConfig = {
     markets: [],
   },
   cron: {
-    sleepMs: 20_000,
+    sleepMs: 1_000,
   },
 };
