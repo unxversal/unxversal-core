@@ -43,19 +43,20 @@ export type DeployConfig = {
   oracleMaxAgeSec?: number;
   usdu?: { perAddressLimit?: number; paused?: boolean };
   /**
-   * Initialize lending pools (isolated, per asset)
+   * Initialize dual-asset lending markets (Collateral → Debt)
    */
-  lending?: Array<{
-    name?: string;
-    poolId?: string;
-    asset: TypeTag;
+  lendingMarkets?: Array<{
+    marketId?: string;
+    collat: TypeTag;
+    debt: TypeTag;
+    symbol: string;
     baseRateBps: number;
     multiplierBps: number;
     jumpMultiplierBps: number;
     kinkUtilBps: number;
     reserveFactorBps: number;
     collateralFactorBps: number;
-    liquidationCollateralBps: number;
+    liquidationThresholdBps: number;
     liquidationBonusBps: number;
   }>;
   options?: Array<{
@@ -171,17 +172,177 @@ export const deployConfig: DeployConfig = {
   ],
   oracleMaxAgeSec: 30,
   usdu: undefined,
-  lending: [
-    // Example defaults; replace pkgId at runtime via resolveTypeTag
+  lendingMarkets: [
     {
-      asset: '0x2::sui::SUI',
-      baseRateBps: 0,
-      multiplierBps: 700,
-      jumpMultiplierBps: 3000,
+      collat: '::unxv::UNXV',
+      debt: '::usdu::USDU',
+      symbol: 'UNXV/USDC',
+      baseRateBps: 50,
+      multiplierBps: 800,
+      jumpMultiplierBps: 3500,
       kinkUtilBps: 8000,
       reserveFactorBps: 2000,
-      collateralFactorBps: 8500,
-      liquidationCollateralBps: 9200,
+      collateralFactorBps: 7000,
+      liquidationThresholdBps: 8000,
+      liquidationBonusBps: 1000,
+    },
+  ],
+  lendingMarkets: [
+    // Blue-chip assets
+    {
+      name: 'SUI',
+      asset: '0x2::sui::SUI',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'DEEP',
+      asset: '0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'suiETH',
+      asset: '0xd0e89b2af5e4910726fbcd8b8dd37bb79b29e5f83f7491bca830e94f7f226d29::eth::ETH',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'suiBTC',
+      asset: '0xaafb102dd0902f5055cadecd687fb5b71ca82ef0e0285d90afde828ec58ca96b::btc::BTC',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'suiUSDT',
+      asset: '0x375f70cf2ae4c00bf37117d0c85a2c71545e6ee05c4a5c7d282cd66a4504b068::usdt::USDT',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'WBTC',
+      asset: '0x027792d9fed7f9844eb4839566001bb6f6cb4804f66aa2da6fe1ee242d896881::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'WETH',
+      asset: '0xaf8cd5edc19c4512f4259f0bee101a40d41ebed738ade5874359610ef8eeced5::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'WAVAX',
+      asset: '0x1e8b532cca6569cab9f9b9ebc73f8c13885012ade714729aa3b450e0339ac766::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'WBNB',
+      asset: '0xb848cce11ef3a8f62eccea6eb5b35a12c4c2b1ee1af7755d02d7bd6218e8226f::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'WAVAX',
+      asset: '0x1e8b532cca6569cab9f9b9ebc73f8c13885012ade714729aa3b450e0339ac766::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'WFTM',
+      asset: '0x6081300950a4f1e2081580e919c210436a1bed49080502834950d31ee55a2396::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'WGLMR',
+      asset: '0x66f87084e49c38f76502d17f87d17f943f183bb94117561eb573e075fdc5ff75::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
+      liquidationBonusBps: 4000,
+    },
+    {
+      name: 'WAVAX',
+      asset: '0x1e8b532cca6569cab9f9b9ebc73f8c13885012ade714729aa3b450e0339ac766::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 1000,
+      jumpMultiplierBps: 4500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 7000,
+      liquidationCollateralBps: 8500,
       liquidationBonusBps: 4000,
     },
     // Stablecoins
@@ -221,6 +382,19 @@ export const deployConfig: DeployConfig = {
       liquidationCollateralBps: 9200,
       liquidationBonusBps: 4000,
     },
+    {
+      name: 'Solana USDC',
+      asset: '0xb231fcda8bbddb31f2ef02e6161444aec64a514e2c89279584ac9806ce9cf037::coin::COIN',
+      baseRateBps: 50,
+      multiplierBps: 800,
+      jumpMultiplierBps: 3500,
+      kinkUtilBps: 8000,
+      reserveFactorBps: 2000,
+      collateralFactorBps: 8500,
+      liquidationCollateralBps: 9200,
+      liquidationBonusBps: 4000,
+    },
+    // Other
     {
       name: 'Solana USDC',
       asset: '0xb231fcda8bbddb31f2ef02e6161444aec64a514e2c89279584ac9806ce9cf037::coin::COIN',

@@ -7,6 +7,7 @@ export const env = {
 };
 
 export type NetworkName = 'mainnet' | 'testnet';
+export type TypeTag = string;
 
 export type AppConfig = {
   network: NetworkName;
@@ -32,6 +33,15 @@ export type AppConfig = {
   };
   gasFutures: {
     markets: string[];                  // Gas futures market ids
+  };
+  lending?: {
+    feeVaultId: string;                 // unxversal::fees::FeeVault id (where reserves are swept)
+    defaultSweepAmount?: number;        // default u64 amount to sweep per pool if pool.sweepAmount absent
+    pools: Array<{
+      poolId: string;                   // unxversal::lending::LendingPool<T> id
+      asset: TypeTag;                   // type tag for T (e.g., 'SUI' or '::unxv::UNXV')
+      sweepAmount?: number;             // optional override per-pool amount (u64 units of T)
+    }>;
   };
   cron: {
     sleepMs: number;                    // interval between cycles
@@ -63,6 +73,11 @@ export const config: AppConfig = {
   },
   gasFutures: {
     markets: [],
+  },
+  lending: {
+    feeVaultId: '',
+    defaultSweepAmount: 0,
+    pools: [],
   },
   cron: {
     sleepMs: 20_000,

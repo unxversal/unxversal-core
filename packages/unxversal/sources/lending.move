@@ -27,6 +27,8 @@ module unxversal::lending {
     use unxversal::fees::{Self as fees};
     use unxversal::staking::StakingPool;
     use unxversal::rewards as rewards;
+    use unxversal::oracle::{Self as uoracle, OracleRegistry};
+    use switchboard::aggregator::Aggregator;
     
     /// Errors
     const E_NOT_ADMIN: u64 = 1;
@@ -56,6 +58,35 @@ module unxversal::lending {
     public struct BorrowPosition has drop, store {
         principal: u128,        // in asset units
         interest_index_snap: u128, // last snapshot of borrow_index
+    }
+
+    /// Two-asset isolated lending market: Collateral asset -> borrow USDU (stablecoin)
+    public struct LendingMarket<phantom Collat, phantom Debt> has key, store {
+        id: UID,
+        /// Oracle symbol for Collat pricing vs USD, e.g. "SUI/USDC" (1e6 scale)
+        symbol: String,
+        /// Debt-side liquidity and reserves (in USDU)
+        debt_liquidity: Balance<Debt>,
+        debt_reserves: Balance<Debt>,
+        /// Supplier shares for USDU providers
+        total_supply_shares: u128,
+        supplier_shares: Table<address, u128>,
+        /// Collateral vault for pooled Collat and per-user balances
+        collateral_vault: Balance<Collat>,
+        collateral_of: Table<address, u64>,
+        /// Per-account borrow positions in USDU
+        borrows: Table<address, BorrowPosition>,
+        /// Interest model and index for USDU borrows
+        irm: InterestRateModel,
+        borrow_index: u128,
+        total_borrows_principal: u128,
+        last_accrued_ms: u64,
+        /// Risk params
+        reserve_factor_bps: u64,
+        collateral_factor_bps: u64,           // LTV
+        liquidation_threshold_bps: u64,       // >= LTV
+        liquidation_bonus_bps: u64,
+        flash_fee_bps: u64,
     }
 
     /// Main pool object per asset
@@ -103,46 +134,68 @@ module unxversal::lending {
     public struct FlashLoan has copy, drop { who: address, amount: u64, fee: u64, timestamp_ms: u64 }
     public struct FlashRepaid has copy, drop { who: address, principal: u64, fee: u64, timestamp_ms: u64 }
     public struct ReservesSwept has copy, drop { asset: type_name::TypeName, amount: u64, vault_id: ID, timestamp_ms: u64 }
+    public struct StringClone has copy, drop {}
+
+    /// Events for dual-asset markets (Collateral → USDU debt)
+    public struct MarketInitialized2 has copy, drop { market_id: ID, symbol: String, ltv_bps: u64, liq_threshold_bps: u64, reserve_bps: u64, liq_bonus_bps: u64, timestamp_ms: u64 }
+    public struct DebtSupplied has copy, drop { market_id: ID, who: address, amount: u64, shares: u128, timestamp_ms: u64 }
+    public struct DebtWithdrawn has copy, drop { market_id: ID, who: address, amount: u64, shares: u128, timestamp_ms: u64 }
+    public struct CollateralDeposited2 has copy, drop { market_id: ID, who: address, amount: u64, timestamp_ms: u64 }
+    public struct CollateralWithdrawn2 has copy, drop { market_id: ID, who: address, amount: u64, timestamp_ms: u64 }
+    public struct DebtBorrowed has copy, drop { market_id: ID, who: address, amount: u64, principal_after: u128, timestamp_ms: u64 }
+    public struct DebtRepaid has copy, drop { market_id: ID, who: address, amount: u64, remaining_principal: u128, timestamp_ms: u64 }
 
     /// Non-storable, non-droppable capability enforcing same-transaction flash repay
     public struct FlashLoanCap<phantom T> { principal: u64, fee: u64 }
 
-    /// Initialize a new lending pool for asset T
-    public fun init_pool<T>(
+    /// Initialize a new dual-asset market: Collat supplied as collateral, borrow USDU
+    public fun init_market<Collat, Debt>(
         reg_admin: &AdminRegistry,
+        symbol: String,
         base_rate_bps: u64,
         multiplier_bps: u64,
         jump_multiplier_bps: u64,
         kink_util_bps: u64,
         reserve_factor_bps: u64,
         collateral_factor_bps: u64,
-        liquidation_collateral_bps: u64,
+        liquidation_threshold_bps: u64,
         liquidation_bonus_bps: u64,
-        ctx: &mut TxContext
+        ctx: &mut TxContext,
     ) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        assert!(liquidation_collateral_bps >= collateral_factor_bps, E_NOT_ADMIN);
+        assert!(liquidation_threshold_bps >= collateral_factor_bps, E_NOT_ADMIN);
         assert!(kink_util_bps > 0 && kink_util_bps < fees::bps_denom(), E_NOT_ADMIN);
         let irm = InterestRateModel { base_rate_bps, multiplier_bps, jump_multiplier_bps, kink_util_bps };
-        let pool = LendingPool<T> {
+        let m = LendingMarket<Collat, Debt> {
             id: object::new(ctx),
-            liquidity: balance::zero<T>(),
-            total_borrows_principal: 0,
-            borrow_index: WAD,
-            reserve_factor_bps,
-            collateral_factor_bps,
-            liquidation_collateral_bps,
-            liquidation_bonus_bps,
-            flash_fee_bps: 0,
-            irm,
-            last_accrued_ms: sui::tx_context::epoch_timestamp_ms(ctx),
+            symbol,
+            debt_liquidity: balance::zero<Debt>(),
+            debt_reserves: balance::zero<Debt>(),
             total_supply_shares: 0,
             supplier_shares: table::new<address, u128>(ctx),
+            collateral_vault: balance::zero<Collat>(),
+            collateral_of: table::new<address, u64>(ctx),
             borrows: table::new<address, BorrowPosition>(ctx),
-            reserves: balance::zero<T>(),
+            irm,
+            borrow_index: WAD,
+            total_borrows_principal: 0,
+            last_accrued_ms: sui::tx_context::epoch_timestamp_ms(ctx),
+            reserve_factor_bps,
+            collateral_factor_bps,
+            liquidation_threshold_bps,
+            liquidation_bonus_bps,
+            flash_fee_bps: 0,
         };
-        transfer::share_object(pool);
-        event::emit(PoolInitialized { asset: type_name::get<T>(), timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
+        event::emit(MarketInitialized2 { market_id: object::id(&m), symbol: clone_string(&m.symbol), ltv_bps: collateral_factor_bps, liq_threshold_bps: liquidation_threshold_bps, reserve_bps: reserve_factor_bps, liq_bonus_bps: liquidation_bonus_bps, timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
+        transfer::share_object(m);
+    }
+
+    fun clone_string(s: &String): String {
+        let bytes = std::string::as_bytes(s);
+        let mut out = vector::empty<u8>();
+        let mut i = 0; let n = vector::length(bytes);
+        while (i < n) { vector::push_back(&mut out, *vector::borrow(bytes, i)); i = i + 1; };
+        std::string::utf8(out)
     }
 
     /// Admin: update general parameters

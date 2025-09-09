@@ -20,6 +20,7 @@ const OPTIONS_MARKET_IDS = config.options.markets;
 const OPTIONS_SWEEP_MAX = config.options.sweepMax;
 const SWITCHBOARD_AGGREGATOR_IDS = config.switchboard.aggregatorIds;
 const CRON_SLEEP_MS = config.cron.sleepMs;
+const LENDING_CFG = config.lending;
 
 // Keypair for admin/keeper
 const ADMIN_SEED_B64 = process.env.UNXV_ADMIN_SEED_B64 || '';
@@ -181,6 +182,32 @@ async function applyPerpFunding(): Promise<void> {
 }
 
 /**
+ * Lending: sweep reserves from pools into the FeeVault per config.
+ */
+async function sweepLendingReserves(): Promise<void> {
+  if (!LENDING_CFG || !LENDING_CFG.pools?.length) return;
+  const feeVaultId = LENDING_CFG.feeVaultId;
+  if (!feeVaultId) return;
+  for (const p of LENDING_CFG.pools) {
+    const amount = (p.sweepAmount ?? LENDING_CFG.defaultSweepAmount ?? 0);
+    if (!amount || amount <= 0) continue;
+    try {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${config.pkgId}::lending::sweep_reserves_to_fee_vault`,
+        typeArguments: [p.asset.startsWith('0x') || p.asset.startsWith('::') ? (p.asset.startsWith('::') ? `${config.pkgId}${p.asset}` : p.asset) : (p.asset === 'SUI' ? '0x2::sui::SUI' : `${config.pkgId}::${p.asset}`)],
+        arguments: [tx.object(ADMIN_REGISTRY_ID), tx.object(p.poolId), tx.object(feeVaultId), tx.pure.u64(amount), tx.object('0x6')],
+      });
+      const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
+      await client.waitForTransaction({ digest: res.digest });
+      logger.info(`Lending reserves swept pool=${p.poolId} amount=${amount}`);
+    } catch (e) {
+      logger.error(`Lending sweep failed pool=${p.poolId}: ${(e as Error).message}`);
+    }
+  }
+}
+
+/**
  * Lending: accrue interest (soft) via a zero-op that calls accrue internally.
  * We can trigger a 0-amount deposit to force accrue path without changing state; alternatively, add explicit keeper entry if needed.
  * Here we call set_params with current values to emit an Accrued event is not ideal; better pattern is a dedicated entry accrue.
@@ -227,6 +254,7 @@ async function runCron(): Promise<void> {
       (async () => { await applyPerpFunding(); })(),
       (async () => { await refreshIndexPrices(); })(),
       (async () => { await snapSettlements(); })(),
+      (async () => { await sweepLendingReserves(); })(),
     ]);
     await sleep(CRON_SLEEP_MS);
   }

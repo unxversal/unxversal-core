@@ -31,7 +31,7 @@ type DeploymentSummary = {
   tradeFees?: DeployConfig['tradeFees'];
   oracleMaxAgeSec?: number;
   oracleFeeds?: NonNullable<DeployConfig['oracleFeeds']>;
-  lending: Array<{ poolId: string; asset: string; params: NonNullable<DeployConfig['lending']>[number] }>;
+  lending: Array<{ marketId: string; collat: string; debt: string; symbol: string }>;
   options: DeployedOptions[];
   futures: DeployedFutures[];
   gasFutures: DeployedGasFutures[];
@@ -399,29 +399,32 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
 }
 
 async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
-  if (!cfg.lending?.length) return;
-  for (const l of cfg.lending) {
-    if (!l.poolId) {
+  if (!cfg.lendingMarkets?.length) return;
+  for (const m of cfg.lendingMarkets) {
+    if (!m.marketId) {
       const tx = new Transaction();
       tx.moveCall({
-        target: `${cfg.pkgId}::lending::init_pool`,
-        typeArguments: [resolveTypeTag(l.asset, cfg.pkgId)],
+        target: `${cfg.pkgId}::lending::init_market`,
+        typeArguments: [resolveTypeTag(m.collat, cfg.pkgId), resolveTypeTag(m.debt, cfg.pkgId)],
         arguments: [
           tx.object(cfg.adminRegistryId),
-          tx.pure.u64(l.baseRateBps),
-          tx.pure.u64(l.multiplierBps),
-          tx.pure.u64(l.jumpMultiplierBps),
-          tx.pure.u64(l.kinkUtilBps),
-          tx.pure.u64(l.reserveFactorBps),
-          tx.pure.u64(l.collateralFactorBps),
-          tx.pure.u64(l.liquidationCollateralBps),
-          tx.pure.u64(l.liquidationBonusBps),
+          tx.pure.string(m.symbol),
+          tx.pure.u64(m.baseRateBps),
+          tx.pure.u64(m.multiplierBps),
+          tx.pure.u64(m.jumpMultiplierBps),
+          tx.pure.u64(m.kinkUtilBps),
+          tx.pure.u64(m.reserveFactorBps),
+          tx.pure.u64(m.collateralFactorBps),
+          tx.pure.u64(m.liquidationThresholdBps),
+          tx.pure.u64(m.liquidationBonusBps),
         ],
       });
-      const res = await execTx(client, tx, keypair, `lending.init_pool ${l.asset}`);
-      const id = extractCreatedId(res, `${cfg.pkgId}::lending::LendingPool<`);
-      if (id) logger.info(`lending.pool created id=${id}`);
-      if (id) summary.lending.push({ poolId: id, asset: l.asset, params: l });
+      const res = await execTx(client, tx, keypair, `lending.init_market ${m.collat}`);
+      const id = extractCreatedId(res, `${cfg.pkgId}::lending::LendingMarket<`);
+      if (id) {
+        logger.info(`lending.market created id=${id}`);
+        summary.lending.push({ marketId: id, collat: m.collat, debt: m.debt, symbol: m.symbol });
+      }
     }
   }
 }
