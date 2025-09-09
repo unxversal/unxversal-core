@@ -417,6 +417,18 @@ module unxversal::rewards {
         store_user(rew, user, u);
     }
 
+    /// Spot DEX: record swap notional (USD 1e6) for the caller without counterparty concentration tracking.
+    /// This should be invoked by swap helpers in `unxversal::dex` once the swap succeeds.
+    public fun on_spot_swap(rew: &mut Rewards, user: address, notional_usd_1e6: u128, clock: &Clock) {
+        let day = epoch_day(clock);
+        let week = day / 7;
+        let mut u = take_or_new_user(rew, user);
+        rollover_if_needed(rew, user, &mut u, day, week, clock);
+        // Only accrue trading volume; do not update run/concentration metrics for pool counterparties
+        u.trade_volume_usd_1e6 = u.trade_volume_usd_1e6 + notional_usd_1e6;
+        store_user(rew, user, u);
+    }
+
     // ===== Faucet gating (calls unxversal::usdu::claim under the hood) =====
     /// Claim USDU via rewards gate with per-day cap and tier loss budget enforcement.
     public fun claim_usdu_via_rewards(rew: &mut Rewards, usdu_faucet: &mut UsduFaucet, amount: u64, clock: &Clock, ctx: &mut TxContext) {

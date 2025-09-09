@@ -28,6 +28,7 @@ module unxversal::dex {
     use unxversal::unxv::UNXV;
     use unxversal::fees::{Self as fees, FeeConfig, FeeVault};
     use unxversal::staking::{Self as staking, StakingPool};
+    use unxversal::rewards::{Self as rewards, Rewards};
 
     /// Errors
     const E_ZERO_AMOUNT: u64 = 1;
@@ -352,6 +353,26 @@ module unxversal::dex {
         (base_left, quote_out)
     }
 
+    /// Swap exact base for quote and accrue spot rewards using external USD 1e6 notional.
+    /// Caller must provide the USD-normalized notional for the trade.
+    public fun swap_exact_base_for_quote_with_rewards<Base, Quote>(
+        pool: &mut Pool<Base, Quote>,
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        base_in: Coin<Base>,
+        fee_unxv_in: Option<Coin<UNXV>>,
+        staking_pool: &mut StakingPool,
+        min_quote_out: u64,
+        notional_usd_1e6: u128,
+        rew: &mut Rewards,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): (Coin<Base>, Coin<Quote>) {
+        let (base_left, quote_out) = swap_exact_base_for_quote(pool, cfg, vault, base_in, fee_unxv_in, staking_pool, min_quote_out, clock, ctx);
+        rewards::on_spot_swap(rew, ctx.sender(), notional_usd_1e6, clock);
+        (base_left, quote_out)
+    }
+
     /// Swap exact quote for base with Unxversal protocol fee.
     public fun swap_exact_quote_for_base<Base, Quote>(
         pool: &mut Pool<Base, Quote>,
@@ -382,6 +403,26 @@ module unxversal::dex {
         let deep_zero = coin::zero<DEEP>(ctx);
         let (base_out, quote_left, deep_back) = db_pool::swap_exact_quote_for_base(pool, quote_in, deep_zero, min_base_out, clock, ctx);
         transfer::public_transfer(deep_back, ctx.sender());
+        (quote_left, base_out)
+    }
+
+    /// Swap exact quote for base and accrue spot rewards using external USD 1e6 notional.
+    /// Caller must provide the USD-normalized notional for the trade.
+    public fun swap_exact_quote_for_base_with_rewards<Base, Quote>(
+        pool: &mut Pool<Base, Quote>,
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        quote_in: Coin<Quote>,
+        fee_unxv_in: Option<Coin<UNXV>>,
+        staking_pool: &mut StakingPool,
+        min_base_out: u64,
+        notional_usd_1e6: u128,
+        rew: &mut Rewards,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): (Coin<Quote>, Coin<Base>) {
+        let (quote_left, base_out) = swap_exact_quote_for_base(pool, cfg, vault, quote_in, fee_unxv_in, staking_pool, min_base_out, clock, ctx);
+        rewards::on_spot_swap(rew, ctx.sender(), notional_usd_1e6, clock);
         (quote_left, base_out)
     }
 
@@ -830,6 +871,27 @@ module unxversal::dex {
         }
     }
 
+    /// Auto route swap (base→quote) and accrue spot rewards with external USD 1e6 notional.
+    public fun swap_exact_base_for_quote_auto_with_rewards<Base, Quote>(
+        target_pool: &mut Pool<Base, Quote>,
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        base_in: Coin<Base>,
+        staking_pool: &mut StakingPool,
+        // For prefer_deep_backend=true
+        unxv_deep_pool: &mut Pool<UNXV, DEEP>,
+        mut maybe_unxv: Option<Coin<UNXV>>,
+        min_quote_out: u64,
+        notional_usd_1e6: u128,
+        rew: &mut Rewards,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): (Coin<Base>, Coin<Quote>) {
+        let (base_left, quote_out) = swap_exact_base_for_quote_auto(target_pool, cfg, vault, base_in, staking_pool, unxv_deep_pool, maybe_unxv, min_quote_out, clock, ctx);
+        rewards::on_spot_swap(rew, ctx.sender(), notional_usd_1e6, clock);
+        (base_left, quote_out)
+    }
+
     /// Swap auto: quote→base.
     public fun swap_exact_quote_for_base_auto<Base, Quote>(
         target_pool: &mut Pool<Base, Quote>,
@@ -855,6 +917,27 @@ module unxversal::dex {
         } else {
             swap_exact_quote_for_base(target_pool, cfg, vault, quote_in, maybe_unxv, staking_pool, min_base_out, clock, ctx)
         }
+    }
+
+    /// Auto route swap (quote→base) and accrue spot rewards with external USD 1e6 notional.
+    public fun swap_exact_quote_for_base_auto_with_rewards<Base, Quote>(
+        target_pool: &mut Pool<Base, Quote>,
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        quote_in: Coin<Quote>,
+        staking_pool: &mut StakingPool,
+        // For prefer_deep_backend=true
+        deep_unxv_pool: &mut Pool<DEEP, UNXV>,
+        mut maybe_unxv: Option<Coin<UNXV>>,
+        min_base_out: u64,
+        notional_usd_1e6: u128,
+        rew: &mut Rewards,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ): (Coin<Quote>, Coin<Base>) {
+        let (quote_left, base_out) = swap_exact_quote_for_base_auto(target_pool, cfg, vault, quote_in, staking_pool, deep_unxv_pool, maybe_unxv, min_base_out, clock, ctx);
+        rewards::on_spot_swap(rew, ctx.sender(), notional_usd_1e6, clock);
+        (quote_left, base_out)
     }
 
     /// Internal: move UNXV fee into staking (weekly reward) and treasury per FeeConfig
