@@ -20,6 +20,7 @@ module unxversal::lending {
         clock::Clock,
     };
     use std::type_name::{Self as type_name};
+    use std::string::{Self as string, String};
     // no option alias needed
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::fees::{Self as fees};

@@ -41,7 +41,7 @@ module unxversal::futures {
     const E_UNDER_INITIAL_MARGIN: u64 = 5;
     const E_UNDER_MAINT_MARGIN: u64 = 6;
     const E_EXPIRED: u64 = 7;
-    const E_CLOSE_ONLY: u64 = 8;
+    
     const E_PRICE_DEVIATION: u64 = 9;
     const E_EXPOSURE_CAP: u64 = 10;
     const E_ALREADY_SETTLED: u64 = 11;
@@ -472,7 +472,11 @@ module unxversal::futures {
             total_notional_1e6 = total_notional_1e6 + (fqty as u128) * per_unit_1e6 * 1_000_000u128;
             // Rewards: per-fill volume for taker and maker; maker quality bps vs index
             let f_notional_1e6: u128 = (fqty as u128) * per_unit_1e6 * 1_000_000u128;
-            let improve_bps: u64 = if (is_buy) { if (index_px >= px) { (((index_px as u128 - px as u128) * 10_000u128) / (index_px as u128)) as u64 } else { 0 } } else { if (px >= index_px) { (((px as u128 - index_px as u128) * 10_000u128) / (index_px as u128)) as u64 } else { 0 } };
+            let improve_bps: u64 = if (is_buy) {
+                if (index_px >= px) { ((((index_px as u128) - (px as u128)) * 10_000u128) / (index_px as u128)) as u64 } else { 0 }
+            } else {
+                if (px >= index_px) { ((((px as u128) - (index_px as u128)) * 10_000u128) / (index_px as u128)) as u64 } else { 0 }
+            };
             rewards::on_perp_fill(rewards_obj, ctx.sender(), maker_addr, f_notional_1e6, false, 0, clock);
             rewards::on_perp_fill(rewards_obj, maker_addr, ctx.sender(), f_notional_1e6, true, improve_bps, clock);
             // Persist maker
@@ -634,8 +638,8 @@ module unxversal::futures {
     // === Expiry settlement ===
     public fun settle_after_expiry<Collat>(
         market: &mut FuturesMarket<Collat>,
-        reg: &OracleRegistry,
-        agg: &Aggregator,
+        _reg: &OracleRegistry,
+        _agg: &Aggregator,
         clock: &Clock,
         ctx: &mut TxContext,
     ) {
@@ -648,8 +652,8 @@ module unxversal::futures {
     /// User-triggered settlement to flatten positions and realize PnL with credit fallback
     public fun settle_self<Collat>(
         market: &mut FuturesMarket<Collat>,
-        reg: &OracleRegistry,
-        agg: &Aggregator,
+        _reg: &OracleRegistry,
+        _agg: &Aggregator,
         vault: &mut FeeVault,
         clock: &Clock,
         ctx: &mut TxContext,

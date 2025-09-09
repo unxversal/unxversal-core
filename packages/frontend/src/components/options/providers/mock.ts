@@ -39,12 +39,19 @@ export function createMockOptionsProvider(): OptionsDataProvider {
       return { candles, volumes };
     },
     async getChain(expiryId) {
-      const baseStrike = 1.0;
+      // Use the actual spot price from getSummary to center the option chain
+      const summary = await this.getSummary();
+      const spotPrice = summary.last;
+      
+      // Generate strikes centered around spot price with proper rounding
+      const strikeInterval = 0.05;
+      const nearestStrike = Math.round(spotPrice / strikeInterval) * strikeInterval;
+      
       const rand = (min: number, max: number) => Math.random() * (max - min) + min;
       const rows: OptionsChainRow[] = Array.from({ length: 25 }, (_, i) => {
-        const k = baseStrike + (i - 12) * 0.05;
+        const k = nearestStrike + (i - 12) * strikeInterval;
         const spread = rand(0.005, 0.02);
-        const center = Math.max(0.01, 0.18 - Math.abs(k - baseStrike) * 0.4);
+        const center = Math.max(0.01, 0.18 - Math.abs(k - spotPrice) * 0.4);
         return {
           strike: Number(k.toFixed(2)),
           callBid: Number((center - spread).toFixed(3)),

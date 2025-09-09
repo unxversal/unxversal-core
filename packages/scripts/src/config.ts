@@ -65,6 +65,6 @@ export const config: AppConfig = {
     markets: [],
   },
   cron: {
-    sleepMs: 60_000,
+    sleepMs: 20_000,
   },
 };

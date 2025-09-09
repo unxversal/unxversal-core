@@ -285,7 +285,11 @@ module unxversal::gas_futures {
             // Rewards volume & maker quality
             let f_notional_1e6: u128 = (fqty as u128) * per_unit_1e6 * 1_000_000u128;
             let index_px = current_gas_price_1e6(ctx);
-            let improve_bps: u64 = if (is_buy) { if (index_px >= px) { (((index_px as u128 - px as u128) * 10_000u128) / (index_px as u128)) as u64 } else { 0 } } else { if (px >= index_px) { (((px as u128 - index_px as u128) * 10_000u128) / (index_px as u128)) as u64 } else { 0 } };
+            let improve_bps: u64 = if (is_buy) {
+                if (index_px >= px) { ((((index_px as u128) - (px as u128)) * 10_000u128) / (index_px as u128)) as u64 } else { 0 }
+            } else {
+                if (px >= index_px) { ((((px as u128) - (index_px as u128)) * 10_000u128) / (index_px as u128)) as u64 } else { 0 }
+            };
             rewards::on_perp_fill(rewards_obj, ctx.sender(), maker_addr, f_notional_1e6, false, 0, clock);
             rewards::on_perp_fill(rewards_obj, maker_addr, ctx.sender(), f_notional_1e6, true, improve_bps, clock);
             total_qty = total_qty + fqty;

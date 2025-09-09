@@ -314,24 +314,6 @@ module unxversal::perpetuals {
         option::destroy_none(maybe_unxv);
     }
 
-    fun trade_internal<Collat>(
-        market: &mut PerpMarket<Collat>,
-        is_buy: bool,
-        qty: u64,
-        reg: &OracleRegistry,
-        agg: &Aggregator,
-        cfg: &FeeConfig,
-        vault: &mut FeeVault,
-        staking_pool: &mut StakingPool,
-        rewards_obj: &mut rewards::Rewards,
-        maybe_unxv: &mut Option<Coin<UNXV>>,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ) {
-        let limit = if (is_buy) { ((1u128 << 63) - 1) as u64 } else { 1 };
-        taker_trade_internal<Collat>(market, is_buy, qty, limit, reg, agg, cfg, vault, staking_pool, rewards_obj, maybe_unxv, clock, ctx);
-    }
-
     fun taker_trade_internal<Collat>(
         market: &mut PerpMarket<Collat>,
         is_buy: bool,
@@ -392,7 +374,11 @@ module unxversal::perpetuals {
             total_notional_1e6 = total_notional_1e6 + (fqty as u128) * per_unit_1e6 * 1_000_000u128;
             // rewards per fill (taker and maker)
             let f_notional_1e6: u128 = (fqty as u128) * per_unit_1e6 * 1_000_000u128;
-            let improve_bps: u64 = if (is_buy) { if (index_px >= px) { (((index_px as u128 - px as u128) * 10_000u128) / (index_px as u128)) as u64 } else { 0 } } else { if (px >= index_px) { (((px as u128 - index_px as u128) * 10_000u128) / (index_px as u128)) as u64 } else { 0 } };
+            let improve_bps: u64 = if (is_buy) {
+                if (index_px >= px) { ((((index_px as u128) - (px as u128)) * 10_000u128) / (index_px as u128)) as u64 } else { 0 }
+            } else {
+                if (px >= index_px) { ((((px as u128) - (index_px as u128)) * 10_000u128) / (index_px as u128)) as u64 } else { 0 }
+            };
             rewards::on_perp_fill(rewards_obj, ctx.sender(), maker_addr, f_notional_1e6, false, 0, clock);
             rewards::on_perp_fill(rewards_obj, maker_addr, ctx.sender(), f_notional_1e6, true, improve_bps, clock);
             store_account<Collat>(market, maker_addr, maker_acc);

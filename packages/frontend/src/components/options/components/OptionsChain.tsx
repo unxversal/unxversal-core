@@ -60,18 +60,22 @@ export function OptionsChain({
         } else {
           // mock
           if (!mounted) return;
-          const baseStrike = spotPrice || 1.0;
-          const mock: OptionsChainRow[] = Array.from({ length: 15 }, (_, i) => {
-            const k = baseStrike + (i - 7) * 0.1;
+          const currentSpotPrice = spotPrice || 1.0;
+          // Generate strikes centered around spot price with proper rounding
+          const strikeInterval = 0.05;
+          const nearestStrike = Math.round(currentSpotPrice / strikeInterval) * strikeInterval;
+          
+          const mock: OptionsChainRow[] = Array.from({ length: 25 }, (_, i) => {
+            const k = nearestStrike + (i - 12) * strikeInterval;
             const changeSign = Math.random() > 0.6 ? 1 : -1; // 40% chance of negative
             const changePercent = changeSign * (Math.random() * 100 + 20);
             const changeAmount = changeSign * (Math.random() * 3 + 0.5);
             return {
               strike: Number(k.toFixed(2)),
-              callBid: Number((Math.max(0, 0.15 - Math.abs(k - baseStrike) * 0.3) + Math.random() * 0.02).toFixed(3)),
-              callAsk: Number((Math.max(0.01, 0.17 - Math.abs(k - baseStrike) * 0.3) + Math.random() * 0.02).toFixed(3)),
-              putBid: Number((Math.max(0, 0.15 - Math.abs(k - baseStrike) * 0.3) + Math.random() * 0.02).toFixed(3)),
-              putAsk: Number((Math.max(0.01, 0.17 - Math.abs(k - baseStrike) * 0.3) + Math.random() * 0.02).toFixed(3)),
+              callBid: Number((Math.max(0, 0.15 - Math.abs(k - currentSpotPrice) * 0.3) + Math.random() * 0.02).toFixed(3)),
+              callAsk: Number((Math.max(0.01, 0.17 - Math.abs(k - currentSpotPrice) * 0.3) + Math.random() * 0.02).toFixed(3)),
+              putBid: Number((Math.max(0, 0.15 - Math.abs(k - currentSpotPrice) * 0.3) + Math.random() * 0.02).toFixed(3)),
+              putAsk: Number((Math.max(0.01, 0.17 - Math.abs(k - currentSpotPrice) * 0.3) + Math.random() * 0.02).toFixed(3)),
               callIv: Number((0.52 + Math.random() * 0.12).toFixed(3)),
               putIv: Number((0.55 + Math.random() * 0.12).toFixed(3)),
               openInterest: Math.round(80 + Math.random() * 400),
@@ -79,7 +83,7 @@ export function OptionsChain({
               changePercent,
               changeAmount,
               chanceOfProfit: Math.random() * 40 + 50,
-              breakeven: k + (Math.max(0.01, 0.17 - Math.abs(k - baseStrike) * 0.3) + Math.random() * 0.02),
+              breakeven: k + (Math.max(0.01, 0.17 - Math.abs(k - currentSpotPrice) * 0.3) + Math.random() * 0.02),
               priceChange24h: changeSign * (Math.random() * 0.05 + 0.01) // For badge coloring
             };
           });

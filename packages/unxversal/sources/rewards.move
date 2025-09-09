@@ -17,22 +17,25 @@ module unxversal::rewards {
     use sui::event;
     use sui::table::{Self as table, Table};
 
-    use std::option;
-    use std::vector;
+    
 
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::usdu::{Self as usdu, Faucet as UsduFaucet};
 
     // ===== Constants =====
+    /// Basis points denominator used across the module. 1 basis point (bps) = 1/10_000.
     const BPS_DENOM: u64 = 10_000;
+    /// Global scale for reward weights. All weights are expressed in 1e6 scale and divided by `WEIGHT_SCALE` when applied.
     const WEIGHT_SCALE: u64 = 1_000_000; // weights in 1e6 scale
 
+    /// Default number of exact leaders tracked per week for the leaderboard. Users outside Top-K use histogram percentiles.
     const DEFAULT_TOPK: u32 = 1000;
+    /// Counterparty concentration threshold (in bps) above which a flat penalty is applied.
     const CONC_PENALTY_THRESH_BPS: u64 = 6000; // 60%
 
     // ===== Errors =====
+    /// Error codes for access control and policy checks.
     const E_NOT_ADMIN: u64 = 1;
-    const E_INVALID_TIER: u64 = 2;
     const E_COOLDOWN: u64 = 3;
     const E_MINT_CAP: u64 = 4;
     const E_LOSS_BUDGET: u64 = 5;
@@ -41,30 +44,65 @@ module unxversal::rewards {
     const E_REFERRAL_CYCLE: u64 = 8;
 
     // ===== Storage types =====
+    /// Global rewards registry (singleton). Holds tunable parameters and
+    /// persistent state for users, referrals, and weekly aggregates.
     public struct Rewards has key, store {
         id: UID,
+        // Reward weights (1e6 scale; divided by `WEIGHT_SCALE` when applied).
+        // Components:
+        // - wV: sqrt(trade_volume_usd_1e6) contribution (trading participation)
+        // - wM: maker quote improvement quality (price improvement vs mid)
+        // - wP: realized positive PnL (only gains accrue points)
+        // - wF: absolute funding paid/received (participation irrespective of sign)
+        // - wB: borrow-interest × utilization snapshot (credit usage)
+        // - wL: supply quality when utilization exceeds kink (liquidity under stress)
+        // - wQ: liquidation work (debt repaid)
         // weights (1e6 scale)
+        // Weight for sqrt(trade volume) term (trading participation).
         wV: u64,
+        // Weight for maker quote improvement quality (price improvement vs mid).
         wM: u64,
+        // Weight for realized positive PnL term (gains only accrue points).
         wP: u64,
+        // Weight for absolute funding term (paid or received).
         wF: u64,
+        // Weight for borrow interest × utilization snapshot (credit usage).
         wB: u64,
+        // Weight for lend quality when utilization exceeds the kink.
         wL: u64,
+        // Weight for liquidation work proportional to debt repaid.
         wQ: u64,
+        // Referral settings in bps of the child's daily points.
+        // `ref_cap_bps_per_week` caps total referral earnings against the referrer's
+        // own weekly points (i.e., referral_earned ≤ cap_bps × week_points_own).
         // referral settings (bps)
+        // Level-1 referral share (bps of child's day points).
         l1_bps: u64,
+        // Level-2 referral share (bps of child's day points).
         l2_bps: u64,
+        // Level-3 referral share (bps of child's day points).
         l3_bps: u64,
+        // Weekly cap on referral earnings as a percentage (bps) of the referrer's own weekly points.
         ref_cap_bps_per_week: u64,
+        // Faucet gating policy for USDU:
+        // - `per_day_mint_cap_usdu`: per-address daily cap (USDU has 6 decimals)
+        // - `loss_budget_per_tier_usd_1e6`: per-tier daily realized loss budget (tiers 0..N-1)
+        // - `cooldown_days`: days to wait after hitting the budget
         // faucet policy
         per_day_mint_cap_usdu: u128,
-        loss_budget_per_tier_usd_1e6: vector<u128>, // length 4 (tiers A..D)
+        loss_budget_per_tier_usd_1e6: vector<u128>, // length N (tiers 0..N-1)
         cooldown_days: u8,
+        // Seven-day rolling tier thresholds (non-decreasing). Tier index is 0..N-1.
+        // 0 by convention; tier recomputed at day rollover.
         // tiers (7d thresholds; non-decreasing, length 4 for A..D)
         tier_thresholds_7d: vector<u128>,
+        // Leaderboard and histogram configuration:
+        // - `leaderboard_topk`: number of exact leaders to track per week
+        // - `hist_bucket_edges`: inclusive lower bounds for histogram buckets
         // leaderboard / histogram config
         leaderboard_topk: u32,
         hist_bucket_edges: vector<u128>,
+        // State tables
         // state
         users: Table<address, UserState>,
         referrals: Table<address, address>, // child -> parent
@@ -76,16 +114,22 @@ module unxversal::rewards {
         week_hist: Table<u64, Histogram>,
     }
 
+    /// Composite key for weekly totals: (week identifier, user address).
     public struct WeekUserKey has copy, drop, store { week_id: u64, user: address }
 
+    /// Per-user rolling accounting state. Updated lazily on product hooks
+    /// and faucet calls. Day/week boundaries handled via `rollover_if_needed`.
     public struct UserState has store {
+        // Calendar identifiers (UTC day id; week id = day/7)
         // calendar
         day_id: u64,
         week_id: u64,
+        // Faucet controls
         // faucet
         minted_today_usdu: u128,
         cooldown_until_day: u64,
         realized_loss_today_usd_1e6: u128,
+        // Daily accumulators (USD 1e6 units)
         // daily accumulators (USD 1e6 units)
         trade_volume_usd_1e6: u128,
         maker_quality_usd_1e6: u128,
@@ -96,21 +140,25 @@ module unxversal::rewards {
         borrow_interest_util_usd_1e6: u128,
         lend_quality_score_usd_1e6: u128,
         liquidations_usd_1e6: u128,
+        // Anti-abuse tracking across the day
         // anti-abuse (trading)
         total_volume_usd_1e6: u128,
         last_counterparty: address,
         run_volume_usd_1e6: u128,
         top_run_volume_usd_1e6: u128,
+        // Points and 7-day rolling buffer
         // points
         day_points: u128,
         seven_slots: vector<u128>, // length 7 ring buffer
         seven_day_points_sum: u128,
-        current_tier: u8, // 0..3 => A..D
+        current_tier: u8, // tier index 0..N-1
+        // Weekly aggregates (own points, referral-earned) and histogram bucket
         // weekly
         week_points_own: u128,
         week_referral_earned: u128,
         week_bucket_idx: u64,
         week_bucket_for: u64, // week id of the bucket index above
+        // Totals for week and all-time
         // totals
         week_points_total: u128,
         all_time_points: u128,
@@ -128,29 +176,39 @@ module unxversal::rewards {
         counts: vector<u64>,
     }
 
+    /// Pair address with points for leaderboard view output
+    public struct AddressPoints has copy, drop, store { addr: address, points: u128 }
+
     // ===== Events =====
+    /// Emitted when an admin changes any configuration field.
     public struct ConfigUpdated has copy, drop { by: address, timestamp_ms: u64 }
+    /// Emitted when a user binds a parent (immutable, one-time).
     public struct ReferralSet has copy, drop { child: address, parent: address, timestamp_ms: u64 }
+    /// Emitted after a day rollover commits `day_points` into aggregates.
     public struct DayFinalized has copy, drop { user: address, day_id: u64, points: u128 }
+    /// Emitted when the user's tier changes at day rollover.
     public struct TierChanged has copy, drop { user: address, new_tier: u8, seven_day_points: u128, timestamp_ms: u64 }
+    /// Emitted after a successful faucet claim via rewards gating.
     public struct FaucetClaimed has copy, drop { user: address, amount: u64, day_id: u64 }
 
     // ===== Init =====
-    entry fun init(ctx: &mut TxContext) {
+    /// Initialize and share the global `Rewards` object with sensible defaults.
+    /// Defaults target testnet; all can be tuned via admin setters post-deploy.
+    fun init(ctx: &mut TxContext) {
         let mut r = Rewards {
             id: object::new(ctx),
             // weights (defaults from spec; sum < 1e6)
-            wV: 230_000,
-            wM: 180_000,
+            wV: 200_000,
+            wM: 220_000,
             wP: 120_000,
-            wF: 80_000,
-            wB: 180_000,
-            wL: 100_000,
-            wQ: 40_000,
+            wF: 70_000,
+            wB: 170_000,
+            wL: 150_000,
+            wQ: 70_000,
             // referrals
-            l1_bps: 1000, // 10%
-            l2_bps: 300,  // 3%
-            l3_bps: 100,  // 1%
+            l1_bps: 2000, // 20%
+            l2_bps: 600,  // 6%
+            l3_bps: 200,  // 2%
             ref_cap_bps_per_week: 10_000, // 100% cap of own points
             // faucet
             per_day_mint_cap_usdu: 100_000_000u128, // 100k USDU (6 decimals)
@@ -168,17 +226,23 @@ module unxversal::rewards {
             week_topk: table::new<u64, LeaderboardWeek>(ctx),
             week_hist: table::new<u64, Histogram>(ctx),
         };
-        // defaults: budgets tiers A..D
-        vector::push_back<u128>(&mut r.loss_budget_per_tier_usd_1e6, 300_000_000u128);
+        // Defaults: daily realized loss budgets per tier (USD 1e6). Tiers 0..5 map to [$500, $1k, $10k, $20k, $40k, $50k].
+        vector::push_back<u128>(&mut r.loss_budget_per_tier_usd_1e6, 500_000_000u128);
         vector::push_back<u128>(&mut r.loss_budget_per_tier_usd_1e6, 1_000_000_000u128);
-        vector::push_back<u128>(&mut r.loss_budget_per_tier_usd_1e6, 3_000_000_000u128);
         vector::push_back<u128>(&mut r.loss_budget_per_tier_usd_1e6, 10_000_000_000u128);
-        // thresholds (A..D); A=0 by convention
+        vector::push_back<u128>(&mut r.loss_budget_per_tier_usd_1e6, 20_000_000_000u128);
+        vector::push_back<u128>(&mut r.loss_budget_per_tier_usd_1e6, 40_000_000_000u128);
+        vector::push_back<u128>(&mut r.loss_budget_per_tier_usd_1e6, 50_000_000_000u128);
+        // Tier thresholds for the 7-day rolling points sum (non-decreasing). 0 by convention.
+        // Provide six thresholds to match the six tiers above.
         vector::push_back<u128>(&mut r.tier_thresholds_7d, 0u128);
-        vector::push_back<u128>(&mut r.tier_thresholds_7d, 25_000u128);
-        vector::push_back<u128>(&mut r.tier_thresholds_7d, 150_000u128);
-        vector::push_back<u128>(&mut r.tier_thresholds_7d, 1_000_000u128);
-        // histogram default edges (adjust via admin): 0,1k,5k,10k,25k,100k,1M
+        vector::push_back<u128>(&mut r.tier_thresholds_7d, 100_000u128);
+        vector::push_back<u128>(&mut r.tier_thresholds_7d, 500_000u128);
+        vector::push_back<u128>(&mut r.tier_thresholds_7d, 2_500_000u128);
+        vector::push_back<u128>(&mut r.tier_thresholds_7d, 10_000_000u128);
+        vector::push_back<u128>(&mut r.tier_thresholds_7d, 40_000_000u128);
+        // Histogram default edges (inclusive lower bounds). Admin can adjust.
+        // Defaults: 0, 1k, 5k, 10k, 25k, 100k, 1M points.
         vector::push_back<u128>(&mut r.hist_bucket_edges, 0u128);
         vector::push_back<u128>(&mut r.hist_bucket_edges, 1_000u128);
         vector::push_back<u128>(&mut r.hist_bucket_edges, 5_000u128);
@@ -192,16 +256,19 @@ module unxversal::rewards {
     // init_and_share removed: deployment runs `init` directly and shares the object
 
     // ===== Admin updaters =====
+    /// Update reward weights (1e6 scale). Access: admin only.
     public fun set_weights(reg_admin: &AdminRegistry, rew: &mut Rewards, wV: u64, wM: u64, wP: u64, wF: u64, wB: u64, wL: u64, wQ: u64, clock: &Clock, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         rew.wV = wV; rew.wM = wM; rew.wP = wP; rew.wF = wF; rew.wB = wB; rew.wL = wL; rew.wQ = wQ;
         event::emit(ConfigUpdated { by: ctx.sender(), timestamp_ms: clock.timestamp_ms() });
     }
+    /// Update referral shares (bps) and the weekly referral cap (bps). Access: admin only.
     public fun set_referral_bps(reg_admin: &AdminRegistry, rew: &mut Rewards, l1_bps: u64, l2_bps: u64, l3_bps: u64, cap_bps_week: u64, clock: &Clock, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         rew.l1_bps = l1_bps; rew.l2_bps = l2_bps; rew.l3_bps = l3_bps; rew.ref_cap_bps_per_week = cap_bps_week;
         event::emit(ConfigUpdated { by: ctx.sender(), timestamp_ms: clock.timestamp_ms() });
     }
+    /// Update faucet policy: `per_day_cap_usdu` (USDU 6d), `budgets_per_tier` (USD 1e6, length 4), and `cooldown_days`. Access: admin only.
     public fun set_faucet_policy(reg_admin: &AdminRegistry, rew: &mut Rewards, per_day_cap_usdu: u128, budgets_per_tier: vector<u128>, cooldown_days: u8, clock: &Clock, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         rew.per_day_mint_cap_usdu = per_day_cap_usdu;
@@ -209,11 +276,13 @@ module unxversal::rewards {
         rew.cooldown_days = cooldown_days;
         event::emit(ConfigUpdated { by: ctx.sender(), timestamp_ms: clock.timestamp_ms() });
     }
+    /// Replace 7-day tier thresholds (non-decreasing, length 4). Access: admin only.
     public fun set_tier_thresholds(reg_admin: &AdminRegistry, rew: &mut Rewards, thresholds_7d: vector<u128>, clock: &Clock, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         rew.tier_thresholds_7d = thresholds_7d;
         event::emit(ConfigUpdated { by: ctx.sender(), timestamp_ms: clock.timestamp_ms() });
     }
+    /// Update leaderboard Top-K size and histogram bucket edges. Access: admin only.
     public fun set_leaderboard_params(reg_admin: &AdminRegistry, rew: &mut Rewards, topk: u32, new_edges: vector<u128>, clock: &Clock, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         rew.leaderboard_topk = topk;
@@ -222,33 +291,34 @@ module unxversal::rewards {
     }
 
     // ===== User referral binding =====
+    /// Bind caller to a referrer (immutable). Prevents short/3-level cycles. Emits `ReferralSet`.
     public fun set_referrer(rew: &mut Rewards, parent: address, clock: &Clock, ctx: &TxContext) {
         let child = ctx.sender();
         assert!(child != parent, E_REFERRAL_SELF);
         // cannot change once set
-        assert!(!table::contains<&address, address>(&rew.referrals, child), E_REFERRAL_EXISTS);
+        assert!(!table::contains<address, address>(&rew.referrals, child), E_REFERRAL_EXISTS);
         // no short cycles (child->parent, parent->child) and no 3-level cycle
-        let mut p1: address = parent;
+        let p1: address = parent;
         if (p1 == child) { abort E_REFERRAL_CYCLE; };
-        if (table::contains<&address, address>(&rew.referrals, p1)) {
-            let p2 = *table::borrow<&address, address>(&rew.referrals, p1);
+        if (table::contains<address, address>(&rew.referrals, p1)) {
+            let p2 = *table::borrow<address, address>(&rew.referrals, p1);
             if (p2 == child) { abort E_REFERRAL_CYCLE; };
-            if (table::contains<&address, address>(&rew.referrals, p2)) {
-                let p3 = *table::borrow<&address, address>(&rew.referrals, p2);
-                if (p3 == child) { abort E_REFERRAL_CYCLE; };
+            if (table::contains<address, address>(&rew.referrals, p2)) {
+                let p3 = *table::borrow<address, address>(&rew.referrals, p2);
+                if (p3 == child) { abort E_REFERRAL_CYCLE; }
             }
         };
-        table::add<&address, address>(&mut rew.referrals, child, parent);
+        table::add<address, address>(&mut rew.referrals, child, parent);
         event::emit(ReferralSet { child, parent, timestamp_ms: clock.timestamp_ms() });
     }
 
     // ===== External product hooks =====
-    /// Perps/Futures/Gas futures fill update
+    /// Derivatives trade fill update (perps/futures/gas futures). Notional in USD 1e6.
     public fun on_perp_fill(rew: &mut Rewards, user: address, counterparty: address, notional_usd_1e6: u128, is_maker: bool, maker_improve_bps: u64, clock: &Clock) {
         let day = epoch_day(clock);
         let week = day / 7;
         let mut u = take_or_new_user(rew, user);
-        rollover_if_needed(rew, user, &mut u, day, week);
+        rollover_if_needed(rew, user, &mut u, day, week, clock);
         u.trade_volume_usd_1e6 = u.trade_volume_usd_1e6 + notional_usd_1e6;
         u.total_volume_usd_1e6 = u.total_volume_usd_1e6 + notional_usd_1e6;
         if (is_maker && maker_improve_bps > 0) {
@@ -266,101 +336,101 @@ module unxversal::rewards {
         store_user(rew, user, u);
     }
 
-    /// Realized PnL update (USD 1e6 units). Only positive PnL contributes to P; losses tracked for faucet.
+    /// Realized PnL update (USD 1e6). Only positive PnL contributes to points; losses tracked for faucet gating.
     public fun on_realized_pnl(rew: &mut Rewards, user: address, realized_gain_usd_1e6: u128, realized_loss_usd_1e6: u128, clock: &Clock) {
         let day = epoch_day(clock);
         let week = day / 7;
         let mut u = take_or_new_user(rew, user);
-        rollover_if_needed(rew, user, &mut u, day, week);
+        rollover_if_needed(rew, user, &mut u, day, week, clock);
         if (realized_gain_usd_1e6 > 0) { u.realized_pnl_pos_usd_1e6 = u.realized_pnl_pos_usd_1e6 + realized_gain_usd_1e6; };
         if (realized_loss_usd_1e6 > 0) { u.realized_loss_today_usd_1e6 = u.realized_loss_today_usd_1e6 + realized_loss_usd_1e6; };
         store_user(rew, user, u);
     }
 
-    /// Funding paid (+) or received (-). Absolute value contributes to participation.
-    public fun on_funding(rew: &mut Rewards, user: address, funding_usd_1e6: i128, clock: &Clock) {
+    /// Funding paid (+) or received (-) in USD 1e6. Absolute value contributes to participation.
+    public fun on_funding(rew: &mut Rewards, user: address, funding_abs_usd_1e6: u128, clock: &Clock) {
         let day = epoch_day(clock);
         let week = day / 7;
         let mut u = take_or_new_user(rew, user);
-        rollover_if_needed(rew, user, &mut u, day, week);
-        let abs = if (funding_usd_1e6 >= 0) { funding_usd_1e6 as u128 } else { (0u128 - (funding_usd_1e6 as i256) as u128) };
-        u.funding_abs_usd_1e6 = u.funding_abs_usd_1e6 + abs;
+        rollover_if_needed(rew, user, &mut u, day, week, clock);
+        u.funding_abs_usd_1e6 = u.funding_abs_usd_1e6 + funding_abs_usd_1e6;
         store_user(rew, user, u);
     }
 
-    /// Options premium paid/received (USD 1e6). Both buyer and maker accrue.
+    /// Options premium paid/received (USD 1e6). Buyer and maker both accrue.
     public fun on_option_fill(rew: &mut Rewards, buyer: address, maker: address, premium_usd_1e6: u128, clock: &Clock) {
         let day = epoch_day(clock);
         let week = day / 7;
         // buyer
         let mut ub = take_or_new_user(rew, buyer);
-        rollover_if_needed(rew, buyer, &mut ub, day, week);
+        rollover_if_needed(rew, buyer, &mut ub, day, week, clock);
         ub.option_premium_taker_usd_1e6 = ub.option_premium_taker_usd_1e6 + premium_usd_1e6;
         store_user(rew, buyer, ub);
         // maker
         let mut um = take_or_new_user(rew, maker);
-        rollover_if_needed(rew, maker, &mut um, day, week);
+        rollover_if_needed(rew, maker, &mut um, day, week, clock);
         um.option_premium_maker_usd_1e6 = um.option_premium_maker_usd_1e6 + premium_usd_1e6;
         store_user(rew, maker, um);
     }
 
-    /// Lending: record borrow usage at open (use est_interest × util_bps)
+    /// Lending: record borrow usage at open: est_interest × util_bps / BPS_DENOM.
     public fun on_borrow(rew: &mut Rewards, user: address, _borrowed_usd_1e6: u128, util_bps_at_borrow: u64, est_interest_usd_1e6: u128, clock: &Clock) {
         let day = epoch_day(clock);
         let week = day / 7;
         let mut u = take_or_new_user(rew, user);
-        rollover_if_needed(rew, user, &mut u, day, week);
+        rollover_if_needed(rew, user, &mut u, day, week, clock);
         let add = (est_interest_usd_1e6 * (util_bps_at_borrow as u128)) / (BPS_DENOM as u128);
         u.borrow_interest_util_usd_1e6 = u.borrow_interest_util_usd_1e6 + add;
         store_user(rew, user, u);
     }
 
-    /// Lending: interest actually repaid (adds to borrow usage term)
+    /// Lending: interest repaid (adds to borrow usage term).
     public fun on_repay_interest(rew: &mut Rewards, user: address, interest_paid_usd_1e6: u128, clock: &Clock) {
         let day = epoch_day(clock);
         let week = day / 7;
         let mut u = take_or_new_user(rew, user);
-        rollover_if_needed(rew, user, &mut u, day, week);
+        rollover_if_needed(rew, user, &mut u, day, week, clock);
         u.borrow_interest_util_usd_1e6 = u.borrow_interest_util_usd_1e6 + interest_paid_usd_1e6;
         store_user(rew, user, u);
     }
 
-    /// Lending: supply/withdraw quality snapshot when util > kink
+    /// Lending: supply/withdraw quality snapshot when util > kink. Adds delta_supplied × (util-kink)/BPS.
     public fun on_supply_event(rew: &mut Rewards, user: address, delta_supplied_usd_1e6: u128, util_bps: u64, kink_bps: u64, clock: &Clock) {
         if (util_bps <= kink_bps) return;
         let day = epoch_day(clock);
         let week = day / 7;
         let mut u = take_or_new_user(rew, user);
-        rollover_if_needed(rew, user, &mut u, day, week);
+        rollover_if_needed(rew, user, &mut u, day, week, clock);
         let over_bps: u64 = util_bps - kink_bps;
         let add = (delta_supplied_usd_1e6 * (over_bps as u128)) / (BPS_DENOM as u128);
         u.lend_quality_score_usd_1e6 = u.lend_quality_score_usd_1e6 + add;
         store_user(rew, user, u);
     }
 
-    /// Liquidations: reward liquidator (capped internally by admin-tuned weights and caller)
+    /// Liquidations: reward liquidator proportional to debt repaid (USD 1e6).
     public fun on_liquidation(rew: &mut Rewards, user: address, debt_repaid_usd_1e6: u128, clock: &Clock) {
         let day = epoch_day(clock);
         let week = day / 7;
         let mut u = take_or_new_user(rew, user);
-        rollover_if_needed(rew, user, &mut u, day, week);
+        rollover_if_needed(rew, user, &mut u, day, week, clock);
         u.liquidations_usd_1e6 = u.liquidations_usd_1e6 + debt_repaid_usd_1e6;
         store_user(rew, user, u);
     }
 
     // ===== Faucet gating (calls unxversal::usdu::claim under the hood) =====
+    /// Claim USDU via rewards gate with per-day cap and tier loss budget enforcement.
     public fun claim_usdu_via_rewards(rew: &mut Rewards, usdu_faucet: &mut UsduFaucet, amount: u64, clock: &Clock, ctx: &mut TxContext) {
         let day = epoch_day(clock);
         let week = day / 7;
         let user = ctx.sender();
         let mut u = take_or_new_user(rew, user);
-        rollover_if_needed(rew, user, &mut u, day, week);
+        rollover_if_needed(rew, user, &mut u, day, week, clock);
         assert!(day >= u.cooldown_until_day, E_COOLDOWN);
         let cap = rew.per_day_mint_cap_usdu;
         let want: u128 = (amount as u128);
         assert!(u.minted_today_usdu + want <= cap, E_MINT_CAP);
         let tier = u.current_tier;
-        let budget = vector::borrow<&u128>(&rew.loss_budget_per_tier_usd_1e6, (tier as u64));
+        let budget = vector::borrow<u128>(&rew.loss_budget_per_tier_usd_1e6, (tier as u64));
         assert!(u.realized_loss_today_usd_1e6 < *budget, E_LOSS_BUDGET);
         // mint via USDU faucet (enforces its own supply/addr caps as well)
         usdu::claim(usdu_faucet, amount, clock, ctx);
@@ -372,36 +442,40 @@ module unxversal::rewards {
     }
 
     // ===== Views =====
+    /// View a user's total points for a given week. Returns 0 if not present.
     public fun view_week_points(rew: &Rewards, user: address, week_id: u64): u128 {
         let key = WeekUserKey { week_id, user };
-        if (!table::contains<&WeekUserKey, u128>(&rew.week_points, key)) return 0u128;
-        *table::borrow<&WeekUserKey, u128>(&rew.week_points, key)
+        if (!table::contains<WeekUserKey, u128>(&rew.week_points, key)) return 0u128;
+        *table::borrow<WeekUserKey, u128>(&rew.week_points, key)
     }
 
+    /// View a user's all-time accumulated points. Returns 0 if user absent.
     public fun view_alltime_points(rew: &Rewards, user: address): u128 {
-        if (!table::contains<&address, UserState>(&rew.users, user)) return 0u128;
-        let u = table::borrow<&address, UserState>(&rew.users, user);
+        if (!table::contains<address, UserState>(&rew.users, user)) return 0u128;
+        let u = table::borrow<address, UserState>(&rew.users, user);
         u.all_time_points
     }
 
-    public fun view_topk_week(rew: &Rewards, week_id: u64): vector<(address, u128)> {
-        let mut out: vector<(address, u128)> = vector::empty<(address, u128)>();
-        if (!table::contains<&u64, LeaderboardWeek>(&rew.week_topk, week_id)) return out;
-        let lb = table::borrow<&u64, LeaderboardWeek>(&rew.week_topk, week_id);
+    /// View the Top-K leaderboard for a week. Empty if not initialized.
+    public fun view_topk_week(rew: &Rewards, week_id: u64): vector<AddressPoints> {
+        let mut out: vector<AddressPoints> = vector::empty<AddressPoints>();
+        if (!table::contains<u64, LeaderboardWeek>(&rew.week_topk, week_id)) return out;
+        let lb = table::borrow<u64, LeaderboardWeek>(&rew.week_topk, week_id);
         let n = vector::length<address>(&lb.topk_addrs);
         let mut i = 0u64;
         while (i < n) {
             let a = *vector::borrow<address>(&lb.topk_addrs, i);
             let p = *vector::borrow<u128>(&lb.topk_points, i);
-            vector::push_back<(address, u128)>(&mut out, (a, p));
+            vector::push_back<AddressPoints>(&mut out, AddressPoints { addr: a, points: p });
             i = i + 1;
         };
         out
     }
 
+    /// View exact rank (1-based) for user if in Top-K; else `option::none`.
     public fun view_week_rank_exact(rew: &Rewards, user: address, week_id: u64): option::Option<u32> {
-        if (!table::contains<&u64, LeaderboardWeek>(&rew.week_topk, week_id)) return option::none<u32>();
-        let lb = table::borrow<&u64, LeaderboardWeek>(&rew.week_topk, week_id);
+        if (!table::contains<u64, LeaderboardWeek>(&rew.week_topk, week_id)) return option::none<u32>();
+        let lb = table::borrow<u64, LeaderboardWeek>(&rew.week_topk, week_id);
         let n = vector::length<address>(&lb.topk_addrs);
         let mut i = 0u64; let mut rank: u32 = 0u32; let mut found = false;
         while (i < n) {
@@ -411,16 +485,16 @@ module unxversal::rewards {
         if (found) { option::some<u32>(rank) } else { option::none<u32>() }
     }
 
-    /// Percentile (0..10_000 bps) based on histogram
+    /// Percentile (0..10_000 bps) based on histogram for the user's weekly points.
     public fun view_week_percentile(rew: &Rewards, user: address, week_id: u64): u16 {
         let pts = view_week_points(rew, user, week_id);
-        if (!table::contains<&u64, Histogram>(&rew.week_hist, week_id)) return 0u16;
-        let h = table::borrow<&u64, Histogram>(&rew.week_hist, week_id);
+        if (!table::contains<u64, Histogram>(&rew.week_hist, week_id)) return 0u16;
+        let h = table::borrow<u64, Histogram>(&rew.week_hist, week_id);
         let edges_ref = &h.edges; let counts_ref = &h.counts;
         let buckets = vector::length<u128>(edges_ref);
         if (buckets == 0) return 0u16;
         // compute cumulative counts below user's bucket
-        let mut idx = bucket_index(edges_ref, pts);
+        let idx = bucket_index(edges_ref, pts);
         let mut total: u128 = 0u128; let mut below: u128 = 0u128; let mut i = 0u64;
         while (i < buckets) {
             let c = (*vector::borrow<u64>(counts_ref, i)) as u128;
@@ -433,14 +507,18 @@ module unxversal::rewards {
     }
 
     // ===== Internals =====
+    /// Convert clock timestamp_ms to a UTC day identifier.
     fun epoch_day(clock: &Clock): u64 { clock.timestamp_ms() / 86_400_000 }
 
+    /// Take existing user or return a fresh zeroed one if absent.
     fun take_or_new_user(rew: &mut Rewards, who: address): UserState {
-        if (table::contains<&address, UserState>(&rew.users, who)) { table::remove<&address, UserState>(&mut rew.users, who) } else { empty_user() }
+        if (table::contains<address, UserState>(&rew.users, who)) { table::remove<address, UserState>(&mut rew.users, who) } else { empty_user() }
     }
 
-    fun store_user(rew: &mut Rewards, who: address, u: UserState) { table::add<&address, UserState>(&mut rew.users, who, u); }
+    /// Persist user state to the users table.
+    fun store_user(rew: &mut Rewards, who: address, u: UserState) { table::add<address, UserState>(&mut rew.users, who, u); }
 
+    /// Construct a zeroed user with a 7-slot ring buffer for daily points.
     fun empty_user(): UserState {
         let mut slots: vector<u128> = vector::empty<u128>();
         let mut i = 0u64; while (i < 7) { vector::push_back<u128>(&mut slots, 0u128); i = i + 1; };
@@ -476,7 +554,10 @@ module unxversal::rewards {
         }
     }
 
-    fun rollover_if_needed(rew: &mut Rewards, who: address, u: &mut UserState, today: u64, this_week: u64) {
+    /// Handle day/week boundaries lazily. On day change, compute daily points,
+    /// update the 7-day buffer, apply referrals, and update weekly maps,
+    /// leaderboard, and histogram; then reset daily accumulators.
+    fun rollover_if_needed(rew: &mut Rewards, who: address, u: &mut UserState, today: u64, this_week: u64, clock: &Clock) {
         // weekly boundary
         if (u.week_id != this_week) {
             // reset weekly aggregates but keep points persisted in week map
@@ -494,10 +575,10 @@ module unxversal::rewards {
             u.day_points = day_points;
             // 7-day ring buffer
             let idx: u64 = today % 7;
-            let prev = *vector::borrow_mut<&u128>(&mut u.seven_slots, idx);
+            let prev = *vector::borrow<u128>(&u.seven_slots, idx);
             // update sum: remove prev, add new
             if (u.seven_day_points_sum >= prev) { u.seven_day_points_sum = u.seven_day_points_sum - prev; } else { u.seven_day_points_sum = 0u128; };
-            *vector::borrow_mut<&u128>(&mut u.seven_slots, idx) = day_points;
+            *vector::borrow_mut<u128>(&mut u.seven_slots, idx) = day_points;
             u.seven_day_points_sum = u.seven_day_points_sum + day_points;
             // weekly & totals (own points)
             u.week_points_own = u.week_points_own + day_points;
@@ -510,7 +591,7 @@ module unxversal::rewards {
             let new_tier = tier_for(&rew.tier_thresholds_7d, u.seven_day_points_sum);
             if (new_tier != u.current_tier) {
                 u.current_tier = new_tier;
-                event::emit(TierChanged { user: who, new_tier, seven_day_points: u.seven_day_points_sum, timestamp_ms: 0 });
+                event::emit(TierChanged { user: who, new_tier, seven_day_points: u.seven_day_points_sum, timestamp_ms: clock.timestamp_ms() });
             };
             // reset dailies
             u.minted_today_usdu = 0u128;
@@ -539,6 +620,8 @@ module unxversal::rewards {
         if (u.day_id == 0) { u.day_id = today; };
     }
 
+    /// Compute daily points using configured weights. Volume uses sqrt for
+    /// diminishing returns; a flat penalty applies if concentration exceeds threshold.
     fun compute_day_points(rew: &Rewards, u: &UserState): u128 {
         // components
         let v_sqrt = isqrt_u128(u.trade_volume_usd_1e6);
@@ -570,34 +653,37 @@ module unxversal::rewards {
         acc
     }
 
+    /// Determine tier (0..3 => A..D) given thresholds and 7-day sum.
     fun tier_for(thresholds: &vector<u128>, seven_sum: u128): u8 {
-        let n = vector::length<&u128>(thresholds);
+        let n = vector::length<u128>(thresholds);
         if (n == 0) return 0u8;
         let mut i: u64 = 0; let mut out: u8 = 0u8;
-        while (i < n) { let th = *vector::borrow<&u128>(thresholds, i); if (seven_sum >= th) { out = (i as u8); }; i = i + 1; };
+        while (i < n) { let th = *vector::borrow<u128>(thresholds, i); if (seven_sum >= th) { out = (i as u8); }; i = i + 1; };
         out
     }
 
+    /// Insert or replace a user's weekly points in `week_points`.
     fun upsert_week_points(rew: &mut Rewards, who: address, week_id: u64, points: u128) {
         let key = WeekUserKey { week_id, user: who };
-        if (table::contains<&WeekUserKey, u128>(&rew.week_points, key)) { let _ = table::remove<&WeekUserKey, u128>(&mut rew.week_points, key); };
-        table::add<&WeekUserKey, u128>(&mut rew.week_points, key, points);
+        if (table::contains<WeekUserKey, u128>(&rew.week_points, key)) { let _ = table::remove<WeekUserKey, u128>(&mut rew.week_points, key); };
+        table::add<WeekUserKey, u128>(&mut rew.week_points, key, points);
     }
 
+    /// Insert/update a user's weekly total in Top-K, maintaining descending order.
     fun upsert_topk(rew: &mut Rewards, who: address, week_id: u64, points: u128) {
-        if (!table::contains<&u64, LeaderboardWeek>(&rew.week_topk, week_id)) {
+        if (!table::contains<u64, LeaderboardWeek>(&rew.week_topk, week_id)) {
             // initialize empty leaderboard
             let lb = LeaderboardWeek { week_id, topk_addrs: vector::empty<address>(), topk_points: vector::empty<u128>() };
-            table::add<&u64, LeaderboardWeek>(&mut rew.week_topk, week_id, lb);
+            table::add<u64, LeaderboardWeek>(&mut rew.week_topk, week_id, lb);
         };
-        let mut lbm = table::borrow_mut<&u64, LeaderboardWeek>(&mut rew.week_topk, week_id);
+        let lbm = table::borrow_mut<u64, LeaderboardWeek>(&mut rew.week_topk, week_id);
         // try find existing
         let mut idx_opt: option::Option<u64> = option::none<u64>();
-        let n = vector::length<&address>(&lbm.topk_addrs);
-        let mut i = 0u64; while (i < n) { if (*vector::borrow<&address>(&lbm.topk_addrs, i) == who) { idx_opt = option::some<u64>(i); break; }; i = i + 1; };
+        let n = vector::length<address>(&lbm.topk_addrs);
+        let mut i = 0u64; while (i < n) { if (*vector::borrow<address>(&lbm.topk_addrs, i) == who) { idx_opt = option::some<u64>(i); break; }; i = i + 1; };
         if (option::is_some(&idx_opt)) {
             let idx = option::extract(&mut idx_opt);
-            *vector::borrow_mut<&u128>(&mut lbm.topk_points, idx) = points;
+            *vector::borrow_mut<u128>(&mut lbm.topk_points, idx) = points;
             // bubble up/down to keep sorted desc (simple insertion sort step)
             rebalance_topk(&mut lbm.topk_addrs, &mut lbm.topk_points);
             option::destroy_none(idx_opt);
@@ -606,23 +692,24 @@ module unxversal::rewards {
         // insert if capacity or better than tail
         let k = (rew.leaderboard_topk as u64);
         if (n < k) {
-            vector::push_back<&address>(&mut lbm.topk_addrs, who);
-            vector::push_back<&u128>(&mut lbm.topk_points, points);
+            vector::push_back<address>(&mut lbm.topk_addrs, who);
+            vector::push_back<u128>(&mut lbm.topk_points, points);
             rebalance_topk(&mut lbm.topk_addrs, &mut lbm.topk_points);
             option::destroy_none(idx_opt);
             return;
         } else if (n > 0) {
-            let tail_pts = *vector::borrow<&u128>(&lbm.topk_points, n - 1);
+            let tail_pts = *vector::borrow<u128>(&lbm.topk_points, n - 1);
             if (points > tail_pts) {
                 // replace tail
-                *vector::borrow_mut<&address>(&mut lbm.topk_addrs, n - 1) = who;
-                *vector::borrow_mut<&u128>(&mut lbm.topk_points, n - 1) = points;
+                *vector::borrow_mut<address>(&mut lbm.topk_addrs, n - 1) = who;
+                *vector::borrow_mut<u128>(&mut lbm.topk_points, n - 1) = points;
                 rebalance_topk(&mut lbm.topk_addrs, &mut lbm.topk_points);
-            };
+            }
         };
         option::destroy_none(idx_opt);
     }
 
+    /// In-place insertion sort to maintain descending order for Top-K arrays.
     fun rebalance_topk(addrs: &mut vector<address>, pts: &mut vector<u128>) {
         // In-place simple insertion sort to maintain desc order (small K)
         let n = vector::length<u128>(pts);
@@ -642,12 +729,13 @@ module unxversal::rewards {
                 j = j - 1;
             };
             i = i + 1;
-        };
+        }
     }
 
+    /// Update weekly histogram counts by moving the user's bucket if needed.
     fun update_histogram(rew: &mut Rewards, who: address, week_id: u64, points: u128, user_bucket_idx: &mut u64, user_bucket_for: &mut u64) {
         // init histogram for week if missing
-        if (!table::contains<&u64, Histogram>(&rew.week_hist, week_id)) {
+        if (!table::contains<u64, Histogram>(&rew.week_hist, week_id)) {
             // clone edges from config
             let mut edges: vector<u128> = vector::empty<u128>();
             let m = vector::length<u128>(&rew.hist_bucket_edges);
@@ -655,9 +743,9 @@ module unxversal::rewards {
             let mut counts: vector<u64> = vector::empty<u64>();
             let mut i = 0u64; while (i < m) { vector::push_back<u64>(&mut counts, 0u64); i = i + 1; };
             let h = Histogram { week_id, edges, counts };
-            table::add<&u64, Histogram>(&mut rew.week_hist, week_id, h);
+            table::add<u64, Histogram>(&mut rew.week_hist, week_id, h);
         };
-        let mut hmut = table::borrow_mut<&u64, Histogram>(&mut rew.week_hist, week_id);
+        let hmut = table::borrow_mut<u64, Histogram>(&mut rew.week_hist, week_id);
         let idx = bucket_index(&hmut.edges, points);
         // decrement old bucket if same week
         if (*user_bucket_for == week_id) {
@@ -675,6 +763,7 @@ module unxversal::rewards {
         let _ = who; // silence unused param warning
     }
 
+    /// Return bucket index for `points` using inclusive lower edges (last match wins).
     fun bucket_index(edges: &vector<u128>, points: u128): u64 {
         let n = vector::length<u128>(edges);
         if (n == 0) return 0u64;
@@ -683,21 +772,28 @@ module unxversal::rewards {
         out
     }
 
+    /// Propagate child's day points to L1..L3 referrers, enforcing weekly caps.
     fun apply_referrals_for(rew: &mut Rewards, child: address, child_day_points: u128, week_id: u64) {
         // propagate to L1..L3
-        if (!table::contains<&address, address>(&rew.referrals, child)) return;
-        let p1 = *table::borrow<&address, address>(&rew.referrals, child);
-        credit_referral(rew, p1, child_day_points, rew.l1_bps, week_id);
-        if (table::contains<&address, address>(&rew.referrals, p1)) {
-            let p2 = *table::borrow<&address, address>(&rew.referrals, p1);
-            credit_referral(rew, p2, child_day_points, rew.l2_bps, week_id);
-            if (table::contains<&address, address>(&rew.referrals, p2)) {
-                let p3 = *table::borrow<&address, address>(&rew.referrals, p2);
-                credit_referral(rew, p3, child_day_points, rew.l3_bps, week_id);
-            };
-        };
+        if (!table::contains<address, address>(&rew.referrals, child)) return;
+        // snapshot referral bps to avoid immutable borrows while passing &mut rew
+        let l1_bps = rew.l1_bps;
+        let l2_bps = rew.l2_bps;
+        let l3_bps = rew.l3_bps;
+        let p1 = *table::borrow<address, address>(&rew.referrals, child);
+        credit_referral(rew, p1, child_day_points, l1_bps, week_id);
+        if (table::contains<address, address>(&rew.referrals, p1)) {
+            let p2 = *table::borrow<address, address>(&rew.referrals, p1);
+            credit_referral(rew, p2, child_day_points, l2_bps, week_id);
+            if (table::contains<address, address>(&rew.referrals, p2)) {
+                let p3 = *table::borrow<address, address>(&rew.referrals, p2);
+                credit_referral(rew, p3, child_day_points, l3_bps, week_id);
+            }
+        }
     }
 
+    /// Credit a referrer a percentage of `base_points` (bps), capped by
+    /// `ref_cap_bps_per_week × week_points_own / BPS_DENOM`.
     fun credit_referral(rew: &mut Rewards, referrer: address, base_points: u128, bps: u64, week_id: u64) {
         let mut u = take_or_new_user(rew, referrer);
         if (u.week_id != week_id) {
@@ -721,6 +817,7 @@ module unxversal::rewards {
         store_user(rew, referrer, u);
     }
 
+    /// Integer sqrt using Newton's method; returns floor(sqrt(x)).
     fun isqrt_u128(x: u128): u128 {
         if (x == 0u128) return 0u128;
         let mut z: u128 = (x + 1u128) / 2u128;
