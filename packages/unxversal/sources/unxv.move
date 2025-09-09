@@ -52,8 +52,10 @@ module unxversal::unxv {
             6,                         // decimals
             b"UNXV",                   // symbol
             b"Unxversal Token",        // name
-            b"",                       // icon URL placeholder / description
-            option::none(),            // no extensions
+            b"The protocol utility token for the Unxversal DeFi",
+            std::option::some<sui::url::Url>(
+                sui::url::new_unsafe_from_bytes(b"https://example.com")
+            ),
             ctx
         );
         // 3) Freeze metadata
@@ -120,7 +122,9 @@ module unxversal::unxv {
             b"UNXV",
             b"Unxversal Token",
             b"",
-            option::none(),
+            std::option::some<sui::url::Url>(
+                sui::url::new_unsafe_from_bytes(b"https://example.com")
+            ),
             ctx
         );
         transfer::public_freeze_object(metadata);

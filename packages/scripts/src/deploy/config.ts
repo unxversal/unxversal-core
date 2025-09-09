@@ -141,7 +141,10 @@ export const deployConfig: DeployConfig = {
   stakingPoolId: '',
   usduFaucetId: '',
   oracleRegistryId: '',
-  additionalAdmins: [],
+  additionalAdmins: [
+    "0x24945081376e008971b437092ebd3de139bb478fc9501c1101fed02f3a2f4fb0",
+    "0x283d357de0dd9478563cf440227100f381cea0bbc8d84110c6d2a55483b509a2"
+  ],
   feeParams: undefined,
   feeTiers: undefined,
   lendingParams: undefined,

@@ -59,14 +59,14 @@ export function OptionsScreen({ started, surgeReady, network, marketLabel, symbo
         } else {
           if (!mounted) return;
           setSummary({ 
-            last: 0.95, 
+            last: 0.97, 
             vol24h: 120000,
-            high24h: 1.15, 
-            low24h: 0.85, 
-            change24h: 2.3,
-            openInterest: 560000,
-            iv30: 0.62,
-            nextExpiry: Date.now() + 6 * 24 * 60 * 60 * 1000,
+            high24h: 1.12, 
+            low24h: 0.86, 
+            change24h: 1.85,
+            openInterest: 580000,
+            iv30: 0.58,
+            nextExpiry: Date.now() + 5 * 24 * 60 * 60 * 1000,
           });
         }
       } catch {}
@@ -147,17 +147,26 @@ export function OptionsScreen({ started, surgeReady, network, marketLabel, symbo
         if (data.length === 0) {
           const points: CandlestickData<UTCTimestamp>[] = [];
           const volData: { time: UTCTimestamp; value: number }[] = [];
-          let base = 1.0;
+          // Use summary.last as the target final price, defaulting to 1.0
+          const targetPrice = summary.last || 1.0;
+          let base = targetPrice * 0.95; // Start slightly below target
           for (let i = 300; i >= 0; i--) {
             const time = (now - i*step) as UTCTimestamp;
+            // Trend towards target price over time with noise
+            const progress = (300 - i) / 300; // 0 to 1
+            const trend = base + (targetPrice - base) * progress * 0.1;
             const noise = (Math.sin(i/12) + Math.random()*0.3 - 0.15) * 0.05;
             const open = base;
-            const close = Math.max(0.2, base + noise);
+            const close = Math.max(0.2, trend + noise);
             const high = Math.max(open, close) + Math.random()*0.03;
             const low = Math.max(0.2, Math.min(open, close) - Math.random()*0.03);
             base = close;
             points.push({ time, open, high, low, close });
             volData.push({ time, value: Math.round(500 + Math.random()*300) });
+          }
+          // Ensure the final price is close to the target
+          if (points.length > 0) {
+            points[points.length - 1].close = targetPrice;
           }
           data = points;
           vols = volData;
@@ -205,7 +214,7 @@ export function OptionsScreen({ started, surgeReady, network, marketLabel, symbo
       disposed = true; 
       window.removeEventListener('resize', resize); 
     };
-  }, [tf, chartType, showVolume, activeTool, showSMA, showEMA, showBB, dataProvider]);
+  }, [tf, chartType, showVolume, activeTool, showSMA, showEMA, showBB, dataProvider, summary.last]);
 
   const calculateSMA = (data: CandlestickData<UTCTimestamp>[], period: number) => {
     const result: {time: UTCTimestamp, value: number}[] = [];
