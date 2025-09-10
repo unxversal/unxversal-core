@@ -360,19 +360,13 @@ export function loadSettings(): AppSettings {
     if (!raw) return defaultSettings;
     const parsed = JSON.parse(raw) as AppSettings;
     // shallow version merge to keep forward compatibility
-    const tokens: any = (parsed as any).tokens;
-    const normalizedTokens = Array.isArray(tokens)
-      ? tokens
-      : tokens && typeof tokens === 'object'
-        ? Object.values(tokens)
-        : defaultSettings.tokens;
     return {
       ...defaultSettings,
       ...parsed,
       contracts: { ...defaultSettings.contracts, ...(parsed as any).contracts },
       staking: { ...defaultSettings.staking, ...(parsed as any).staking },
       markets: { ...defaultSettings.markets, ...(parsed as any).markets },
-      tokens: normalizedTokens as any,
+      tokens: parsed.tokens || defaultSettings.tokens, // Use parsed tokens or fallback to defaults
       dex: { ...defaultSettings.dex, ...parsed.dex },
     };
   } catch {
@@ -394,8 +388,7 @@ export function updateSettings(mutator: (current: AppSettings) => AppSettings): 
 // Token utility functions
 export function getTokenBySymbol(symbol: string, settings?: AppSettings): TokenInfo | undefined {
   const config = settings || loadSettings();
-  const tokens = Array.isArray((config as any).tokens) ? (config as any).tokens as TokenInfo[] : [];
-  return tokens.find(token => token.symbol === symbol);
+  return config.tokens.find(token => token.symbol === symbol);
 }
 
 export function getTokenInfo(symbol: string): TokenInfo | undefined {
@@ -404,33 +397,30 @@ export function getTokenInfo(symbol: string): TokenInfo | undefined {
 
 export function getTokenByAddress(address: string, settings?: AppSettings): TokenInfo | undefined {
   const config = settings || loadSettings();
-  const tokens = Array.isArray((config as any).tokens) ? (config as any).tokens as TokenInfo[] : [];
-  return tokens.find(token => token.address === address);
+  return config.tokens.find(token => token.address === address);
 }
 
 export function getTokenByTypeTag(typeTag: string, settings?: AppSettings): TokenInfo | undefined {
   const config = settings || loadSettings();
-  const tokens = Array.isArray((config as any).tokens) ? (config as any).tokens as TokenInfo[] : [];
-  return tokens.find(token => token.typeTag === typeTag);
+  return config.tokens.find(token => token.typeTag === typeTag);
 }
 
 export function getTokensByType(type: 'native' | 'stablecoin' | 'wrapped' | 'other', settings?: AppSettings): TokenInfo[] {
   const config = settings || loadSettings();
-  const tokens = Array.isArray((config as any).tokens) ? (config as any).tokens as TokenInfo[] : [];
 
   switch (type) {
     case 'native':
-      return tokens.filter(token => token.isNative);
+      return config.tokens.filter(token => token.isNative);
     case 'stablecoin':
-      return tokens.filter(token =>
+      return config.tokens.filter(token =>
         ['USDC', 'USDT', 'AUSD', 'WUSDC', 'WUSDT'].includes(token.symbol)
       );
     case 'wrapped':
-      return tokens.filter(token =>
+      return config.tokens.filter(token =>
         token.symbol.startsWith('W') && !['WUSDC', 'WUSDT'].includes(token.symbol)
       );
     case 'other':
-      return tokens.filter(token =>
+      return config.tokens.filter(token =>
         !token.isNative &&
         !['USDC', 'USDT', 'AUSD', 'WUSDC', 'WUSDT'].includes(token.symbol) &&
         !token.symbol.startsWith('W')
@@ -442,8 +432,7 @@ export function getTokensByType(type: 'native' | 'stablecoin' | 'wrapped' | 'oth
 
 export function getAllTokenSymbols(settings?: AppSettings): string[] {
   const config = settings || loadSettings();
-  const tokens = Array.isArray((config as any).tokens) ? (config as any).tokens as TokenInfo[] : [];
-  return tokens.map(token => token.symbol);
+  return config.tokens.map(token => token.symbol);
 }
 
 export function getTokenTypeTag(token: TokenInfo): string {

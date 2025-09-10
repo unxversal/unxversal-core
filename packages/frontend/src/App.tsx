@@ -10,7 +10,6 @@ import { startDefaultMarketWatcher } from './lib/marketWatcher'
 import { useCurrentAccount } from '@mysten/dapp-kit'
 import styles from './components/AppShell.module.css'
 import { DexScreen } from './components/dex/DexScreen'
-import { SwapScreen } from './components/swap/SwapScreen'
 import { GasFuturesScreen } from './components/gas-futures/GasFuturesScreen'
 import { FuturesScreen } from './components/futures/FuturesScreen'
 import { PerpsScreen } from './components/perps/PerpsScreen'
@@ -19,15 +18,16 @@ import { StakingScreen } from './components/staking/StakingScreen'
 import { SettingsScreen } from './components/SettingsScreen'
 import { OptionsScreen } from './components/options/OptionsScreen'
 import { BridgeScreen } from './components/bridge/BridgeScreen'
+import { SwapScreen } from './components/swap'
 import { createMockOptionsProvider } from './components/options/providers/mock'
 
-type View = 'swap' | 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'bridge' | 'settings'
+type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'bridge' | 'swap' | 'settings'
 
 function App() {
   const [network] = useState<'testnet' | 'mainnet'>(loadSettings().network)
   const [started, setStarted] = useState(false)
   const [surgeReady, setSurgeReady] = useState(false)
-  const [view, setView] = useState<View>('swap')
+  const [view, setView] = useState<View>('options')
   const account = useCurrentAccount()
 
   // Protocol status tracking
@@ -92,9 +92,6 @@ function App() {
   // Update document title based on current view
   useEffect(() => {
     switch (view) {
-      case 'swap':
-        document.title = 'Unxversal Swap';
-        break;
       case 'dex':
         // DEX screen handles its own title with price/pair info: PRICE | PAIR | Unxversal DEX
         break;
@@ -130,6 +127,9 @@ function App() {
       case 'bridge':
         document.title = 'Unxversal Bridge';
         break;
+      case 'swap':
+        document.title = 'Unxversal Swap';
+        break;
       case 'settings':
         document.title = 'Unxversal Settings';
         break;
@@ -140,20 +140,20 @@ function App() {
   }, [view]);
   
   return (
-    <div className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'bridge' ? styles.appRootDex : styles.appRoot}>
+    <div className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'bridge' || view === 'swap' ? styles.appRootDex : styles.appRoot}>
       <header className={styles.header}>
         <div className={styles.brand}>
           <img src="/whitetransparentunxvdolphin.png" alt="Unxversal" style={{ width: 32, height: 32 }} />
           <span>Unxversal</span>
         </div>
         <nav className={styles.nav}>
-          <span className={view==='swap'?styles.active:''} onClick={() => setView('swap')}>Swap</span>
           <span className={view==='options'?styles.active:''} onClick={() => setView('options')}>Options</span>
           <span className={view==='gas'?styles.active:''} onClick={() => setView('gas')}>MIST Futures</span>
           <span className={view==='futures'?styles.active:''} onClick={() => setView('futures')}>Futures</span>
           <span className={view==='perps'?styles.active:''} onClick={() => setView('perps')}>Perps</span>
           <span className={view==='lending'?styles.active:''} onClick={() => setView('lending')}>Lending</span>
           <span className={view==='dex'?styles.active:''} onClick={() => setView('dex')}>DEX</span>
+          <span className={view==='swap'?styles.active:''} onClick={() => setView('swap')}>Swap</span>
           <span className={view==='staking'?styles.active:''} onClick={() => setView('staking')}>Staking</span>
           <span className={view==='bridge'?styles.active:''} onClick={() => setView('bridge')}>Bridge</span>
           <span className={view==='settings'?styles.active:''} onClick={() => setView('settings')}>Settings</span>
@@ -162,8 +162,7 @@ function App() {
           <ConnectButton />
         </div>
       </header>
-      <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'lending' || view === 'staking' ? styles.mainDex : styles.main}>
-        {view === 'swap' && <SwapScreen network={network} />}
+      <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'lending' || view === 'staking' || view === 'swap' ? styles.mainDex : styles.main}>
         {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'gas' && <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'lending' && <LendingScreen started={started} network={network} protocolStatus={protocolStatus} />}
@@ -171,6 +170,7 @@ function App() {
         {view === 'futures' && <FuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'perps' && <PerpsScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'bridge' && <BridgeScreen network={network} protocolStatus={protocolStatus} />}
+        {view === 'swap' && <SwapScreen network={network} />}
         {view === 'options' && (
           <OptionsScreen
             started={started}
@@ -189,7 +189,7 @@ function App() {
         )}
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>
-      {!(view === 'dex' || view === 'gas' || view === 'futures' || view === 'lending' || view === 'staking' || view === 'perps' || view === 'bridge') && (
+      {!(view === 'dex' || view === 'gas' || view === 'futures' || view === 'lending' || view === 'staking' || view === 'perps' || view === 'bridge' || view === 'swap') && (
         <footer className={styles.footer}>
           <div className={styles.statusBadges}>
             <div className={`${styles.badge} ${protocolStatus.options ? styles.connected : styles.disconnected}`}>

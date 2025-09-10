@@ -1,252 +1,239 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useCurrentAccount, ConnectButton } from '@mysten/dapp-kit';
 import styles from './SwapScreen.module.css';
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient, ConnectButton } from '@mysten/dapp-kit';
-import { buildDeepbookPublicIndexer } from '../../lib/indexer';
-import { DexClient } from '../../protocols/dex/dex';
-import { getContracts } from '../../lib/env';
-import { loadSettings, getAllTokenSymbols, getTokenBySymbol, getTokenTypeTag, type TokenInfo } from '../../lib/settings.config';
-import { Transaction } from '@mysten/sui/transactions';
 
-type Props = {
-  network: 'testnet' | 'mainnet';
-};
+interface Token {
+  symbol: string;
+  name: string;
+  icon?: string;
+  balance?: number;
+}
 
-export function SwapScreen({ network }: Props) {
-  const acct = useCurrentAccount();
-  const client = useSuiClient();
-  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
-  const { pkgUnxversal } = getContracts();
-  const s = loadSettings();
-  const dex = useMemo(() => new DexClient(pkgUnxversal), [pkgUnxversal]);
-  const indexer = useMemo(() => buildDeepbookPublicIndexer(s.dex.deepbookIndexerUrl), [s.dex.deepbookIndexerUrl]);
+// Mock token data - in a real app this would come from the blockchain
+const TOKENS: Token[] = [
+  { symbol: 'DEEP', name: 'DeepBook', balance: 0 },
+  { symbol: 'SUI', name: 'Sui', balance: 0 },
+  { symbol: 'USDC', name: 'USD Coin', balance: 0 },
+  { symbol: 'USDT', name: 'Tether USD', balance: 0 },
+  { symbol: 'WETH', name: 'Wrapped Ethereum', balance: 0 },
+];
 
-  const [fromSymbol, setFromSymbol] = useState<string>('DEEP');
-  const [toSymbol, setToSymbol] = useState<string>('SUI');
-  const [amountIn, setAmountIn] = useState<number>(0);
-  const [quoteOut, setQuoteOut] = useState<number>(0);
-  const [midPrice, setMidPrice] = useState<number>(0);
-  const [slippageBps, setSlippageBps] = useState<number>(30); // 0.3%
-  const [submitting, setSubmitting] = useState<boolean>(false);
-  const [poolId, setPoolId] = useState<string | null>(null);
-  const [fromBalance, setFromBalance] = useState<number>(0);
-  const [toBalance, setToBalance] = useState<number>(0);
-  const [fromDecimals, setFromDecimals] = useState<number>(9);
-  const [toDecimals, setToDecimals] = useState<number>(9);
+export function SwapScreen({ network }: { network?: string }) {
+  const account = useCurrentAccount();
+  
+  // Swap state
+  const [sellingToken, setSellingToken] = useState<Token>(TOKENS[0]); // DEEP
+  const [buyingToken, setBuyingToken] = useState<Token>(TOKENS[1]); // SUI
+  const [sellingAmount, setSellingAmount] = useState('');
+  const [buyingAmount, setBuyingAmount] = useState('');
+  const [showSellingDropdown, setShowSellingDropdown] = useState(false);
+  const [showBuyingDropdown, setShowBuyingDropdown] = useState(false);
+  
+  // Mock exchange rate - in real app this would come from price feeds
+  const [exchangeRate] = useState(0.038745); // 1 DEEP = 0.038745 SUI
+  const [totalSwaps] = useState(1);
 
-  const allSymbols = useMemo(() => getAllTokenSymbols(s), [s]);
-  const fromToken: TokenInfo | undefined = getTokenBySymbol(fromSymbol, s);
-  const toToken: TokenInfo | undefined = getTokenBySymbol(toSymbol, s);
-
-  // Fetch mid price using indexer ticker
+  // Update buying amount when selling amount changes
   useEffect(() => {
-    let mounted = true;
-    const pair = `${fromSymbol}/${toSymbol}`.toUpperCase();
-    async function load() {
-      try {
-        const t = await indexer.ticker();
-        const key = pair.replace(/[\/_-]/g, '_');
-        const row = (t as any)[key];
-        const last = row?.last_price;
-        if (mounted) setMidPrice(Number(last) || 0);
-      } catch {
-        if (mounted) setMidPrice(0);
-      }
+    if (sellingAmount && !isNaN(Number(sellingAmount))) {
+      const amount = Number(sellingAmount) * exchangeRate;
+      setBuyingAmount(amount.toFixed(6));
+    } else {
+      setBuyingAmount('');
     }
-    void load();
-    const id = setInterval(load, 3000);
-    return () => { mounted = false; clearInterval(id); };
-  }, [indexer, fromSymbol, toSymbol]);
+  }, [sellingAmount, exchangeRate]);
 
-  // Resolve DeepBook pool id for selected pair
-  useEffect(() => {
-    let mounted = true;
-    async function resolvePool() {
-      try {
-        const pools = await indexer.getPools();
-        const target = `${fromSymbol}_${toSymbol}`.toUpperCase();
-        const alt = `${toSymbol}_${fromSymbol}`.toUpperCase();
-        const p = pools.find((x: any) => x.pool_name?.toUpperCase() === target || x.pool_name?.toUpperCase() === alt);
-        if (mounted) setPoolId(p?.pool_id ?? null);
-      } catch {
-        if (mounted) setPoolId(null);
-      }
+  const handleSwapTokens = () => {
+    const tempToken = sellingToken;
+    const tempAmount = sellingAmount;
+    
+    setSellingToken(buyingToken);
+    setBuyingToken(tempToken);
+    setSellingAmount(buyingAmount);
+    setBuyingAmount(tempAmount);
+  };
+
+  const handleTokenSelect = (token: Token, isSelling: boolean) => {
+    if (isSelling) {
+      setSellingToken(token);
+      setShowSellingDropdown(false);
+    } else {
+      setBuyingToken(token);
+      setShowBuyingDropdown(false);
     }
-    void resolvePool();
-  }, [indexer, fromSymbol, toSymbol]);
+  };
 
-  // Load balances and decimals for both tokens
-  useEffect(() => {
-    let mounted = true;
-    async function load() {
-      try {
-        const f = getTokenBySymbol(fromSymbol, s);
-        const t = getTokenBySymbol(toSymbol, s);
-        const fType = f ? getTokenTypeTag(f) : '';
-        const tType = t ? getTokenTypeTag(t) : '';
-        const [fm, tm, fb, tb] = await Promise.all([
-          fType ? client.getCoinMetadata({ coinType: fType }).catch(() => ({ decimals: 9 } as any)) : ({ decimals: 9 } as any),
-          tType ? client.getCoinMetadata({ coinType: tType }).catch(() => ({ decimals: 9 } as any)) : ({ decimals: 9 } as any),
-          acct?.address && fType ? client.getBalance({ owner: acct.address, coinType: fType }).catch(() => ({ totalBalance: '0' } as any)) : ({ totalBalance: '0' } as any),
-          acct?.address && tType ? client.getBalance({ owner: acct.address, coinType: tType }).catch(() => ({ totalBalance: '0' } as any)) : ({ totalBalance: '0' } as any),
-        ]);
-        if (!mounted) return;
-        const fd = Number((fm as any)?.decimals ?? 9);
-        const td = Number((tm as any)?.decimals ?? 9);
-        setFromDecimals(fd);
-        setToDecimals(td);
-        setFromBalance(Number((fb as any).totalBalance ?? '0') / 10 ** fd);
-        setToBalance(Number((tb as any).totalBalance ?? '0') / 10 ** td);
-      } catch {
-        if (!mounted) return;
-        setFromBalance(0);
-        setToBalance(0);
-      }
-    }
-    void load();
-  }, [client, acct?.address, fromSymbol, toSymbol, s]);
 
-  // Update output quote when input or price changes
-  useEffect(() => {
-    if (!amountIn || amountIn <= 0 || !midPrice) { setQuoteOut(0); return; }
-    setQuoteOut(amountIn * midPrice);
-  }, [amountIn, midPrice]);
-
-  const canSubmit = Boolean(
-    acct?.address && fromToken && toToken && amountIn > 0 && poolId && s.dex.balanceManagerId && s.dex.tradeProofId && s.dex.feeConfigId && s.dex.feeVaultId
-  );
-
-  async function submitSwap(): Promise<void> {
-    if (!canSubmit || !fromToken || !toToken) return;
-    setSubmitting(true);
-    try {
-      // We implement swap as a DEX market order on pair FROM/TO.
-      // Determine orientation of DeepBook pool and whether we are bidding or asking.
-      const poolName = `${fromSymbol}/${toSymbol}`;
-      const baseSym = poolName.split('/')[0];
-      const [baseType, quoteType] = baseSym === fromSymbol
-        ? [getTokenTypeTag(fromToken), getTokenTypeTag(toToken)]
-        : [getTokenTypeTag(toToken), getTokenTypeTag(fromToken)];
-
-      const isBid = baseSym !== fromSymbol; // if base != from, we are buying base with quote
-
-      // Quantity is in base units for DeepBook; approximate from amountIn and price
-      const quantity = isBid ? Math.floor((amountIn / (midPrice || 1)) ) : Math.floor(amountIn);
-
-      const tx: Transaction = dex.placeMarketOrder({
-        baseType,
-        quoteType,
-        poolId: poolId!,
-        balanceManagerId: s.dex.balanceManagerId,
-        tradeProofId: s.dex.tradeProofId,
-        feeConfigId: s.dex.feeConfigId,
-        feeVaultId: s.dex.feeVaultId,
-        clientOrderId: BigInt(Date.now()),
-        selfMatchingOption: 0,
-        quantity: BigInt(quantity > 0 ? quantity : 1),
-        isBid,
-        payWithDeep: false,
-      });
-      await signAndExecute({ transaction: tx });
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  const canSwap = account?.address && sellingAmount && Number(sellingAmount) > 0;
 
   return (
     <div className={styles.root}>
-      <div className={styles.container}>
-        <div className={styles.topBar}>
-          <div className={styles.toggle}>
-            <span>Aggregator Mode</span>
-          </div>
-          <button className={styles.slippage} onClick={() => setSlippageBps(b => (b === 30 ? 50 : 30))}>
-            <span>{(slippageBps / 100).toFixed(1)}% slippage</span>
-          </button>
-        </div>
+      <div className={styles.swapContainer}>
 
-        {/* From card */}
-        <div className={styles.card}>
-          <div className={styles.cardHeader}>
-            <span>Selling</span>
-            <span className={styles.balance}>0 {fromSymbol}</span>
-          </div>
-          <div className={styles.row}>
-            <input
-              className={styles.amountInput}
-              value={amountIn || ''}
-              onChange={(e) => setAmountIn(Number(e.target.value))}
-              type="number"
-              placeholder="0"
-            />
-            <div className={styles.tokenSelect}>
-              <button className={styles.tokenButton}>
-                {fromToken?.iconUrl ? <img src={fromToken.iconUrl} alt={fromSymbol} /> : null}
-                <span>{fromSymbol}</span>
-              </button>
-              <select value={fromSymbol} onChange={(e) => setFromSymbol(e.target.value)}>
-                {allSymbols.map((s) => (
-                  <option value={s} key={s}>{s}</option>
-                ))}
-              </select>
+        {/* Selling Section */}
+        <div className={styles.swapSection}>
+          <div className={styles.sectionLabel}>Selling</div>
+          <div className={styles.tokenInput}>
+            <div className={styles.tokenSelector} onClick={() => setShowSellingDropdown(!showSellingDropdown)}>
+              <div className={styles.tokenInfo}>
+                <div className={styles.tokenIcon}>
+                  {sellingToken.symbol === 'DEEP' && (
+                    <div className={styles.deepIcon}>🔵</div>
+                  )}
+                  {sellingToken.symbol === 'SUI' && (
+                    <div className={styles.suiIcon}>💧</div>
+                  )}
+                  {sellingToken.symbol !== 'DEEP' && sellingToken.symbol !== 'SUI' && (
+                    <div className={styles.defaultIcon}>{sellingToken.symbol[0]}</div>
+                  )}
+                </div>
+                <span className={styles.tokenSymbol}>{sellingToken.symbol}</span>
+              </div>
+              <svg className={styles.dropdownArrow} width="12" height="8" viewBox="0 0 12 8" fill="none">
+                <path d="M1 1L6 6L11 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
             </div>
-          </div>
-        </div>
-
-        <div className={styles.switcherWrap}>
-          <button
-            className={styles.switcher}
-            onClick={() => { setFromSymbol(toSymbol); setToSymbol(fromSymbol); }}
-            title="Swap direction"
-          >
-            ⇅
-          </button>
-        </div>
-
-        {/* To card */}
-        <div className={styles.card}>
-          <div className={styles.cardHeader}>
-            <span>Buying</span>
-            <span className={styles.balance}>0 {toSymbol}</span>
-          </div>
-          <div className={styles.row}>
-            <input
-              className={styles.amountInput}
-              value={quoteOut || ''}
-              readOnly
-              placeholder="0"
-            />
-            <div className={styles.tokenSelect}>
-              <button className={styles.tokenButton}>
-                {toToken?.iconUrl ? <img src={toToken.iconUrl} alt={toSymbol} /> : null}
-                <span>{toSymbol}</span>
-              </button>
-              <select value={toSymbol} onChange={(e) => setToSymbol(e.target.value)}>
-                {allSymbols.filter(s => s !== fromSymbol).map((s) => (
-                  <option value={s} key={s}>{s}</option>
-                ))}
-              </select>
+            
+            <div className={styles.amountInput}>
+              <input
+                type="number"
+                placeholder="0"
+                value={sellingAmount}
+                onChange={(e) => setSellingAmount(e.target.value)}
+                className={styles.amountField}
+              />
+              <div className={styles.balanceInfo}>
+                <span className={styles.balanceLabel}>{sellingToken.balance || 0} {sellingToken.symbol}</span>
+              </div>
             </div>
+
+            {showSellingDropdown && (
+              <div className={styles.tokenDropdown}>
+                {TOKENS.filter(token => token.symbol !== buyingToken.symbol).map((token) => (
+                  <div
+                    key={token.symbol}
+                    className={styles.tokenOption}
+                    onClick={() => handleTokenSelect(token, true)}
+                  >
+                    <div className={styles.tokenInfo}>
+                      <div className={styles.tokenIcon}>
+                        {token.symbol === 'DEEP' && <div className={styles.deepIcon}>🔵</div>}
+                        {token.symbol === 'SUI' && <div className={styles.suiIcon}>💧</div>}
+                        {token.symbol !== 'DEEP' && token.symbol !== 'SUI' && (
+                          <div className={styles.defaultIcon}>{token.symbol[0]}</div>
+                        )}
+                      </div>
+                      <div className={styles.tokenDetails}>
+                        <span className={styles.tokenSymbol}>{token.symbol}</span>
+                        <span className={styles.tokenName}>{token.name}</span>
+                      </div>
+                    </div>
+                    <span className={styles.tokenBalance}>{token.balance || 0}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
-        {!acct?.address ? (
-          <ConnectButton />
-        ) : (
-          <button className={styles.submit} onClick={() => void submitSwap()} disabled={!canSubmit || submitting}>
-            {submitting ? 'Submitting...' : 'Swap'}
-          </button>
-        )}
 
-        <div className={styles.routeRow}>
-          <span>{fromSymbol} → {toSymbol}</span>
-          <span>1 {fromSymbol} ≈ {midPrice ? (1 * midPrice).toFixed(6) : '-'} {toSymbol}</span>
+        {/* Buying Section */}
+        <div className={styles.swapSection}>
+          <div className={styles.sectionLabel}>Buying</div>
+          <div className={styles.tokenInput}>
+            <div className={styles.tokenSelector} onClick={() => setShowBuyingDropdown(!showBuyingDropdown)}>
+              <div className={styles.tokenInfo}>
+                <div className={styles.tokenIcon}>
+                  {buyingToken.symbol === 'DEEP' && (
+                    <div className={styles.deepIcon}>🔵</div>
+                  )}
+                  {buyingToken.symbol === 'SUI' && (
+                    <div className={styles.suiIcon}>💧</div>
+                  )}
+                  {buyingToken.symbol !== 'DEEP' && buyingToken.symbol !== 'SUI' && (
+                    <div className={styles.defaultIcon}>{buyingToken.symbol[0]}</div>
+                  )}
+                </div>
+                <span className={styles.tokenSymbol}>{buyingToken.symbol}</span>
+              </div>
+              <svg className={styles.dropdownArrow} width="12" height="8" viewBox="0 0 12 8" fill="none">
+                <path d="M1 1L6 6L11 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
+            
+            <div className={styles.amountInput}>
+              <input
+                type="number"
+                placeholder="0"
+                value={buyingAmount}
+                onChange={(e) => setBuyingAmount(e.target.value)}
+                className={styles.amountField}
+                readOnly
+              />
+              <div className={styles.balanceInfo}>
+                <span className={styles.balanceLabel}>{buyingToken.balance || 0} {buyingToken.symbol}</span>
+              </div>
+            </div>
+
+            {showBuyingDropdown && (
+              <div className={styles.tokenDropdown}>
+                {TOKENS.filter(token => token.symbol !== sellingToken.symbol).map((token) => (
+                  <div
+                    key={token.symbol}
+                    className={styles.tokenOption}
+                    onClick={() => handleTokenSelect(token, false)}
+                  >
+                    <div className={styles.tokenInfo}>
+                      <div className={styles.tokenIcon}>
+                        {token.symbol === 'DEEP' && <div className={styles.deepIcon}>🔵</div>}
+                        {token.symbol === 'SUI' && <div className={styles.suiIcon}>💧</div>}
+                        {token.symbol !== 'DEEP' && token.symbol !== 'SUI' && (
+                          <div className={styles.defaultIcon}>{token.symbol[0]}</div>
+                        )}
+                      </div>
+                      <div className={styles.tokenDetails}>
+                        <span className={styles.tokenSymbol}>{token.symbol}</span>
+                        <span className={styles.tokenName}>{token.name}</span>
+                      </div>
+                    </div>
+                    <span className={styles.tokenBalance}>{token.balance || 0}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-        <div className={styles.hint}>Total swaps: 1</div>
+
+        {/* Connect Wallet or Swap Button */}
+        <div className={styles.actionSection}>
+          {!account?.address ? (
+            <div className={styles.connectWalletContainer}>
+              <ConnectButton />
+            </div>
+          ) : (
+            <button 
+              className={`${styles.swapActionButton} ${canSwap ? styles.enabled : styles.disabled}`}
+              disabled={!canSwap}
+            >
+              {!sellingAmount || Number(sellingAmount) === 0 
+                ? 'Enter an amount' 
+                : `Swap ${sellingToken.symbol} for ${buyingToken.symbol}`
+              }
+            </button>
+          )}
+        </div>
+
+        {/* Swap Info */}
+        <div className={styles.swapInfo}>
+          <div className={styles.swapInfoRow}>
+            <span>{sellingToken.symbol} → {buyingToken.symbol}</span>
+            <span>1 {sellingToken.symbol} = {exchangeRate} {buyingToken.symbol}</span>
+          </div>
+          <div className={styles.swapInfoRow}>
+            <span>Total swaps: {totalSwaps}</span>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
-
-export default SwapScreen;
-
-

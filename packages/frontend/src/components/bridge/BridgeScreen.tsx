@@ -34,10 +34,10 @@ export function BridgeScreen({ network, protocolStatus }: {
   const theme: WormholeConnectTheme = useMemo(() => ({
     mode: 'dark',
     primary: '#ffffff',
-    secondary: '#0f131a',
+    secondary: '#0a0c12',
     text: '#e5e7eb',
     textSecondary: '#9ca3af',
-    input: '#0f131a',
+    input: '#1a1d29',
     error: '#ef4444',
     success: '#10b981',
   }), []);

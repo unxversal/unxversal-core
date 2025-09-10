@@ -1,11 +1,11 @@
 import type { DeployConfig } from './types.js';
-import { buildOptions } from './options.js';
-import { buildFuturesSet } from './futures.js';
-import { buildGasFutures } from './gas_futures.js';
-import { buildPerpetuals } from './perpetuals.js';
+import { buildMainnetOptions, buildTestnetOptions } from './options.js';
+import { buildMainnetFuturesSet, buildTestnetFuturesSet } from './futures.js';
+import { buildMainnetGasFutures, buildTestnetGasFutures } from './gas_futures.js';
+import { buildMainnetPerpetuals, buildTestnetPerpetuals } from './perpetuals.js';
 import { buildLendingMarketsMainnet, buildLendingMarketsTestnet } from './lending.js';
 import { MAINNET_ORACLE_FEEDS, TESTNET_ORACLE_FEEDS, ORACLE_MAX_AGE_SEC } from './oracle.js';
-import { buildDexPools } from './dex.js';
+import { buildMainnetDexPools, buildTestnetDexPools } from './dex.js';
 import { buildVaults } from './vaults.js';
 
 export const deployConfig: DeployConfig = {
@@ -30,11 +30,11 @@ export const deployConfig: DeployConfig = {
   oracleMaxAgeSec: ORACLE_MAX_AGE_SEC,
   usdu: undefined,
   lendingMarkets: buildLendingMarketsMainnet(),
-  options: await buildOptions(),
-  futures: buildFuturesSet(),
-  gasFutures: buildGasFutures(),
-  perpetuals: buildPerpetuals(),
-  dexPools: buildDexPools(),
+  options: await buildMainnetOptions(),
+  futures: buildMainnetFuturesSet(),
+  gasFutures: buildMainnetGasFutures(),
+  perpetuals: buildMainnetPerpetuals(),
+  dexPools: buildMainnetDexPools(),
   vaults: buildVaults(),
 };
 
@@ -60,11 +60,11 @@ export const testnetDeployConfig: DeployConfig = {
   oracleMaxAgeSec: ORACLE_MAX_AGE_SEC,
   usdu: undefined,
   lendingMarkets: buildLendingMarketsTestnet(),
-  options: await buildOptions(),
-  futures: buildFuturesSet(),
-  gasFutures: buildGasFutures(),
-  perpetuals: buildPerpetuals(),
-  dexPools: buildDexPools(),
+  options: await buildTestnetOptions(),
+  futures: buildTestnetFuturesSet(),
+  gasFutures: buildTestnetGasFutures(),
+  perpetuals: buildTestnetPerpetuals(),
+  dexPools: buildTestnetDexPools(),
   vaults: buildVaults(),
 };
 
