@@ -152,6 +152,14 @@
   width: 100%;
   outline: none;
   min-width: 0;
+  -webkit-appearance: none;
+  -moz-appearance: textfield;
+}
+
+.amountField::-webkit-outer-spin-button,
+.amountField::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .amountField::placeholder {
