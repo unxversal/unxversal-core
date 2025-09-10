@@ -36,6 +36,7 @@ export type AppConfig = {
   };
   gasFutures: {
     markets: string[];                  // Gas futures market ids
+    expiryMsByMarket?: Record<string, number>; // marketId -> expiry ms (0 = perpetual)
   };
   lending?: {
     feeVaultId: string;                 // unxversal::fees::FeeVault id
@@ -80,6 +81,7 @@ export const config: AppConfig = {
   },
   gasFutures: {
     markets: [],
+    expiryMsByMarket: {},
   },
   lending: {
     feeVaultId: '',

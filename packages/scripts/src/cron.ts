@@ -107,6 +107,8 @@ async function snapSettlements(): Promise<void> {
   // Gas futures snap
   for (const m of GAS_FUTURES_MARKET_IDS) {
     try {
+      const expiryMs = config.gasFutures.expiryMsByMarket?.[m] ?? 0;
+      if (!expiryMs || expiryMs <= 0) { continue; }
       const tx = new Transaction();
       tx.moveCall({
         target: `${config.pkgId}::gas_futures::snap_settlement_price`,

@@ -121,7 +121,7 @@ module unxversal::dex {
         assert!(quantity > 0, E_ZERO_AMOUNT);
         // Notional in Quote units using DeepBook scaling
         let notional_quote = math::mul(quantity, price);
-        let (_, maker_eff) = fees::apply_discounts(
+        let (_, maker_eff) = fees::apply_discounts_dex(
             fees::dex_taker_fee_bps(cfg),
             fees::dex_maker_fee_bps(cfg),
             option::is_some(&maybe_unxv),
@@ -169,7 +169,7 @@ module unxversal::dex {
         ctx: &mut TxContext,
     ): OrderInfo {
         assert!(quantity > 0, E_ZERO_AMOUNT);
-        let (_, maker_eff) = fees::apply_discounts(
+        let (_, maker_eff) = fees::apply_discounts_dex(
             fees::dex_taker_fee_bps(cfg),
             fees::dex_maker_fee_bps(cfg),
             option::is_some(&maybe_unxv),
@@ -214,7 +214,7 @@ module unxversal::dex {
         assert!(quantity > 0, E_ZERO_AMOUNT);
         let mid = db_pool::mid_price<Base, Quote>(pool, clock);
         let notional_quote = math::mul(quantity, mid);
-        let (_, maker_eff) = fees::apply_discounts(
+        let (_, maker_eff) = fees::apply_discounts_dex(
             fees::dex_taker_fee_bps(cfg),
             fees::dex_maker_fee_bps(cfg),
             option::is_some(&maybe_unxv),
@@ -257,7 +257,7 @@ module unxversal::dex {
         ctx: &mut TxContext,
     ): OrderInfo {
         assert!(quantity > 0, E_ZERO_AMOUNT);
-        let (_, maker_eff) = fees::apply_discounts(
+        let (_, maker_eff) = fees::apply_discounts_dex(
             fees::dex_taker_fee_bps(cfg),
             fees::dex_maker_fee_bps(cfg),
             option::is_some(&maybe_unxv),
@@ -327,7 +327,7 @@ module unxversal::dex {
         let base_amt = coin::value(&base_in);
         assert!(base_amt > 0, E_ZERO_AMOUNT);
         // Protocol taker fee from base_in with staking or UNXV discount (no volume tiers)
-        let (taker_bps, _) = fees::apply_discounts(fees::dex_taker_fee_bps(cfg), fees::dex_maker_fee_bps(cfg), option::is_some(&fee_unxv_in), staking_pool, ctx.sender(), cfg);
+        let (taker_bps, _) = fees::apply_discounts_dex(fees::dex_taker_fee_bps(cfg), fees::dex_maker_fee_bps(cfg), option::is_some(&fee_unxv_in), staking_pool, ctx.sender(), cfg);
         let fee_amt = (base_amt as u128 * (taker_bps as u128) / (fees::bps_denom() as u128)) as u64;
         let fee_coin = coin::split(&mut base_in, fee_amt, ctx);
         fees::accrue_generic<Base>(vault, fee_coin, clock, ctx);
@@ -387,7 +387,7 @@ module unxversal::dex {
     ): (Coin<Quote>, Coin<Base>) {
         let q_amt = coin::value(&quote_in);
         assert!(q_amt > 0, E_ZERO_AMOUNT);
-        let (taker_bps, _) = fees::apply_discounts(fees::dex_taker_fee_bps(cfg), fees::dex_maker_fee_bps(cfg), option::is_some(&fee_unxv_in), staking_pool, ctx.sender(), cfg);
+        let (taker_bps, _) = fees::apply_discounts_dex(fees::dex_taker_fee_bps(cfg), fees::dex_maker_fee_bps(cfg), option::is_some(&fee_unxv_in), staking_pool, ctx.sender(), cfg);
         let fee_amt = (q_amt as u128 * (taker_bps as u128) / (fees::bps_denom() as u128)) as u64;
         // Collect taker protocol fee in quote
         let fee_coin = coin::split(&mut quote_in, fee_amt, ctx);
@@ -860,6 +860,24 @@ module unxversal::dex {
     ): (Coin<Base>, Coin<Quote>) {
         if (fees::prefer_deep_backend(cfg)) {
             assert!(option::is_some(&maybe_unxv), E_UNXV_REQUIRED);
+            // Charge protocol taker fee on input even when using DEEP backend
+            let base_amt = coin::value(&base_in);
+            let (taker_bps, _) = fees::apply_discounts_dex(
+                fees::dex_taker_fee_bps(cfg),
+                fees::dex_maker_fee_bps(cfg),
+                true,
+                staking_pool,
+                ctx.sender(),
+                cfg,
+            );
+            let fee_amt = (base_amt as u128 * (taker_bps as u128) / (fees::bps_denom() as u128)) as u64;
+            let (mut base_in, fee_coin) = {
+                let mut tmp = base_in;
+                let fc = coin::split(&mut tmp, fee_amt, ctx);
+                (tmp, fc)
+            };
+            fees::accrue_generic<Base>(vault, fee_coin, clock, ctx);
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: true, amount: fee_amt, asset: type_name::get<Base>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
             let unxv = option::extract(&mut maybe_unxv);
             let deep_in = unxv_to_deep_via_unxv_deep_pool(unxv_deep_pool, unxv, 0, clock, ctx);
             option::destroy_none(maybe_unxv);
@@ -908,6 +926,24 @@ module unxversal::dex {
     ): (Coin<Quote>, Coin<Base>) {
         if (fees::prefer_deep_backend(cfg)) {
             assert!(option::is_some(&maybe_unxv), E_UNXV_REQUIRED);
+            // Charge protocol taker fee on input even when using DEEP backend
+            let q_amt = coin::value(&quote_in);
+            let (taker_bps, _) = fees::apply_discounts_dex(
+                fees::dex_taker_fee_bps(cfg),
+                fees::dex_maker_fee_bps(cfg),
+                true,
+                staking_pool,
+                ctx.sender(),
+                cfg,
+            );
+            let fee_amt = (q_amt as u128 * (taker_bps as u128) / (fees::bps_denom() as u128)) as u64;
+            let (mut quote_in, fee_coin) = {
+                let mut tmp = quote_in;
+                let fc = coin::split(&mut tmp, fee_amt, ctx);
+                (tmp, fc)
+            };
+            fees::accrue_generic<Quote>(vault, fee_coin, clock, ctx);
+            event::emit(ProtocolFeeTaken { payer: ctx.sender(), base_fee_asset_unxv: true, amount: fee_amt, asset: type_name::get<Quote>(), timestamp_ms: sui::clock::timestamp_ms(clock) });
             let unxv = option::extract(&mut maybe_unxv);
             let deep_in = unxv_to_deep_via_deep_unxv_pool(deep_unxv_pool, unxv, 0, clock, ctx);
             option::destroy_none(maybe_unxv);

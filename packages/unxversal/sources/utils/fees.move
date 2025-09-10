@@ -30,6 +30,8 @@ module unxversal::fees {
     const BPS_DENOM: u64 = 10_000;
     const KIND_SPOT: u8 = 0;
     const KIND_PERPS: u8 = 1;
+    /// Minimum effective protocol fee (bps) for DEX after discounts
+    const DEX_MIN_FEE_BPS: u64 = 20;
 
     /// Fee distribution parameters (in BPS, all must sum to BPS_DENOM)
     public struct FeeDistribution has copy, drop, store {
@@ -135,16 +137,16 @@ module unxversal::fees {
             dex_fee_bps: 7,                // 7 bps initial DEX protocol fee
             dex_taker_fee_bps: 7,
             dex_maker_fee_bps: 4,
-            futures_taker_fee_bps: 5,       // default taker fee for futures (0.45 bps)
-            futures_maker_fee_bps: 2,       // default maker fee for futures (0.15 bps)
+            futures_taker_fee_bps: 5,       // default taker fee for futures 
+            futures_maker_fee_bps: 2,       // default maker fee for futures
             gasfut_taker_fee_bps: 5,        // default equal to futures
             gasfut_maker_fee_bps: 2,
             unxv_discount_bps: 3000,         // 30% discount
             treasury: ctx.sender(),
-            prefer_deep_backend: true,
+            prefer_deep_backend: false,
             dist: FeeDistribution { stakers_share_bps: 4000, treasury_share_bps: 4000, burn_share_bps: 2000 },
             pool_creation_fee_unxv: 500,
-            lending_borrow_fee_bps: 5,
+            lending_borrow_fee_bps: 0,
             lending_collateral_bonus_bps_max: 500, // +5% max bonus by default
             sd_t1_thr: 10, sd_t1_bps: 500,
             sd_t2_thr: 100, sd_t2_bps: 1000,
@@ -418,6 +420,21 @@ module unxversal::fees {
         let taker_eff = ((taker_bps as u128) * ((BPS_DENOM - disc_bps) as u128) / (BPS_DENOM as u128)) as u64;
         let maker_eff = ((maker_bps as u128) * ((BPS_DENOM - disc_bps) as u128) / (BPS_DENOM as u128)) as u64;
         (taker_eff, maker_eff)
+    }
+
+    /// DEX-only: apply discounts, then enforce a minimum floor so the most discounted fee is 20 bps.
+    public fun apply_discounts_dex(
+        taker_bps: u64,
+        maker_bps: u64,
+        pay_with_unxv: bool,
+        pool: &StakingPool,
+        user: address,
+        cfg: &FeeConfig,
+    ): (u64, u64) {
+        let (taker_eff, maker_eff) = apply_discounts(taker_bps, maker_bps, pay_with_unxv, pool, user, cfg);
+        let taker_floored = if (taker_eff < DEX_MIN_FEE_BPS) { DEX_MIN_FEE_BPS } else { taker_eff };
+        let maker_floored = if (maker_eff < DEX_MIN_FEE_BPS) { DEX_MIN_FEE_BPS } else { maker_eff };
+        (taker_floored, maker_floored)
     }
 
     // compute_taker_bps_for_user removed along with volume tracking

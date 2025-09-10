@@ -365,6 +365,9 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
           tx.pure.u64(g.maintenanceMarginBps),
           tx.pure.u64(g.liquidationFeeBps),
           tx.pure.u64((g as any).keeperIncentiveBps ?? 0),
+          tx.pure.u64((g as any).tickSize ?? 0),
+          tx.pure.u64((g as any).lotSize ?? 0),
+          tx.pure.u64((g as any).minSize ?? 0),
         ],
       });
       const res = await execTx(client, tx, keypair, 'gas_futures.init_market');
@@ -382,6 +385,32 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
 
       // Apply new gas futures risk controls
       if (g.marketId) {
+        if (typeof (g as any).closeOnly === 'boolean') {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_close_only`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.bool((g as any).closeOnly)] });
+          await execTx(client, tx, keypair, `gas_futures.set_close_only`);
+        }
+        if (typeof (g as any).maxDeviationBps === 'number') {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_price_deviation_bps`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.u64((g as any).maxDeviationBps)] });
+          await execTx(client, tx, keypair, `gas_futures.set_price_deviation_bps`);
+        }
+        if (typeof (g as any).pnlFeeShareBps === 'number') {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_pnl_fee_share_bps`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.u64((g as any).pnlFeeShareBps)] });
+          await execTx(client, tx, keypair, `gas_futures.set_pnl_fee_share_bps`);
+        }
+        if (typeof (g as any).liqTargetBufferBps === 'number') {
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_liq_target_buffer_bps`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.u64((g as any).liqTargetBufferBps)] });
+          await execTx(client, tx, keypair, `gas_futures.set_liq_target_buffer_bps`);
+        }
+        if ((g as any).imbalanceParams) {
+          const p = (g as any).imbalanceParams as { surchargeMaxBps: number; thresholdBps: number };
+          const tx = new Transaction();
+          tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_imbalance_params`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.u64(p.surchargeMaxBps), tx.pure.u64(p.thresholdBps)] });
+          await execTx(client, tx, keypair, `gas_futures.set_imbalance_params`);
+        }
         if ((g as any).accountMaxNotional1e6 || (g as any).marketMaxNotional1e6) {
           const tx = new Transaction();
           tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_notional_caps`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.u128(BigInt((g as any).accountMaxNotional1e6 || '0')), tx.pure.u128(BigInt((g as any).marketMaxNotional1e6 || '0'))] as any });
@@ -421,6 +450,9 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
           tx.pure.u64(p.maintenanceMarginBps),
           tx.pure.u64(p.liquidationFeeBps),
           tx.pure.u64((p as any).keeperIncentiveBps ?? 0),
+          tx.pure.u64((p as any).tickSize ?? 0),
+          tx.pure.u64((p as any).lotSize ?? 0),
+          tx.pure.u64((p as any).minSize ?? 0),
         ],
       });
       const res = await execTx(client, tx, keypair, `perpetuals.init_market ${p.symbol}`);

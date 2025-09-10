@@ -1,6 +1,6 @@
 import type { NetworkName } from '../config.js';
 import type { FuturesMarketSpec, Interval } from './series.js';
-import {generateFuturesMarkets} from './series.js';
+import { generateFuturesMarkets, generateGasFuturesMarkets } from './series.js';
 import { buildAllOptionSeriesForFeeds, type Series, type Policy } from '../utils/series.js';
 
 // Address like 0x + hex (we keep it loose for sanity)
@@ -231,7 +231,7 @@ const FUTURES_TIERS: Record<string, Tier> = {
 
 const TIER_PARAMS: Record<Tier, Pick<FuturesMarketSpec,
   'initialMarginBps' | 'maintenanceMarginBps' | 'liquidationFeeBps' | 'keeperIncentiveBps' |
-  'accountMaxNotional1e6' | 'marketMaxNotional1e6' | 'accountShareOfOiBps'
+  'accountMaxNotional1e6' | 'marketMaxNotional1e6' | 'accountShareOfOiBps' | 'liqTargetBufferBps'
 >> = {
   A: {
     initialMarginBps: 500,                // Initial margin requirement in basis points (5%)
@@ -240,7 +240,8 @@ const TIER_PARAMS: Record<Tier, Pick<FuturesMarketSpec,
     keeperIncentiveBps: 5000,             // Keeper incentive in basis points (50%)
     accountMaxNotional1e6: '50_000_000_000_000',   // Max notional per account (1e6 scale, e.g. $50M)
     marketMaxNotional1e6: '5_000_000_000_000_000',   // Max notional per market (1e6 scale, e.g. $5B)
-    accountShareOfOiBps: 500              // Max % of open interest per account in basis points (5%)
+    accountShareOfOiBps: 500,              // Max % of open interest per account in basis points (5%)
+    liqTargetBufferBps: 500,              // Liquidation target buffer in basis points (5%)
   },
   B: {
     initialMarginBps: 600,                // Initial margin requirement in basis points (6%)
@@ -249,7 +250,8 @@ const TIER_PARAMS: Record<Tier, Pick<FuturesMarketSpec,
     keeperIncentiveBps: 5000,             // Keeper incentive in basis points (10%)
     accountMaxNotional1e6: '20_000_000_000_000',   // Max notional per account (1e6 scale, e.g. $20M)
     marketMaxNotional1e6: '1_000_000_000_000_000',   // Max notional per market (1e6 scale, e.g. $1000M)
-    accountShareOfOiBps: 600              // Max % of open interest per account in basis points (6%)
+    accountShareOfOiBps: 600,              // Max % of open interest per account in basis points (6%)
+    liqTargetBufferBps: 500,              // Liquidation target buffer in basis points (5%)
   },
   C: {
     initialMarginBps: 800,                // Initial margin requirement in basis points (8%)
@@ -258,7 +260,8 @@ const TIER_PARAMS: Record<Tier, Pick<FuturesMarketSpec,
     keeperIncentiveBps: 5000,             // Keeper incentive in basis points (10%)
     accountMaxNotional1e6: '5_000_000_000_000',    // Max notional per account (1e6 scale, e.g. $5M)
     marketMaxNotional1e6: '500_000_000_000_000',    // Max notional per market (1e6 scale, e.g. $500M)
-    accountShareOfOiBps: 800              // Max % of open interest per account in basis points (8%)
+    accountShareOfOiBps: 800,              // Max % of open interest per account in basis points (8%)
+    liqTargetBufferBps: 500,              // Liquidation target buffer in basis points (5%)
   },
   D: {
     initialMarginBps: 1200,               // Initial margin requirement in basis points (12%)
@@ -267,7 +270,8 @@ const TIER_PARAMS: Record<Tier, Pick<FuturesMarketSpec,
     keeperIncentiveBps: 5000,             // Keeper incentive in basis points (10%)
     accountMaxNotional1e6: '1_000_000_000_000',    // Max notional per account (1e6 scale, e.g. $1M)
     marketMaxNotional1e6: '10_000_000_000_000',    // Max notional per market (1e6 scale, e.g. $10M)
-    accountShareOfOiBps: 1000             // Max % of open interest per account in basis points (10%)
+    accountShareOfOiBps: 1000,             // Max % of open interest per account in basis points (10%)
+    liqTargetBufferBps: 500,              // Liquidation target buffer in basis points (5%)
   },
 };
 
@@ -302,6 +306,7 @@ function buildFuturesForSymbol(symbol: string, years: number, interval: Interval
     accountMaxNotional1e6: risk.accountMaxNotional1e6,
     marketMaxNotional1e6: risk.marketMaxNotional1e6,
     accountShareOfOiBps: risk.accountShareOfOiBps,
+    liqTargetBufferBps: risk.liqTargetBufferBps,
     // Optional: keep these undefined unless you want to override on-chain defaults
     // tierThresholds1e6: [...],
     // tierImBps: [...],
@@ -330,6 +335,35 @@ const fut_monthly = [
   'SEND/USDC',
   'WAL/USDC',
 ].flatMap(sym => buildFuturesForSymbol(sym, 1, 'monthly', { monthlyOnDay: 1, maxMarkets: 12, expiryHourUTC: 0 }));
+
+const gasSet = generateGasFuturesMarkets({
+  collat: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+
+  // Choose contractSize so: per-contract notional (MIST) = price_1e6 × contractSize / 1_000_000
+  // If reference gas price ≈ 1,000 MIST, set contractSize = 1_000_000 ⇒ ~1,000 MIST per contract.
+  contractSize: 1_000_000,
+
+  initialMarginBps: 1000,
+  maintenanceMarginBps: 600,
+  liquidationFeeBps: 100,
+  keeperIncentiveBps: 5000,
+
+  // 1-price-tick = 1 MIST (gas price is integral MIST)
+  tickSize: 1,
+
+  // Let users trade single contracts
+  lotSize: 1,
+  minSize: 1,
+
+  years: 1,
+  interval: 'weekly',
+  weeklyOn: 5,       // Fridays
+  expiryHourUTC: 0,
+  maxMarkets: 6,
+
+  // Extra safety buffer above IM during liquidation
+  liqTargetBufferBps: 100,
+});
 
 export type DeployConfig = {
   network: NetworkName;
@@ -436,12 +470,22 @@ export type DeployConfig = {
     maintenanceMarginBps: number;
     liquidationFeeBps: number;
     keeperIncentiveBps?: number;
+    // Orderbook params (required by on-chain init)
+    tickSize: number;
+    lotSize: number;
+    minSize: number;
     // New risk controls
     accountMaxNotional1e6?: string;
     marketMaxNotional1e6?: string;
     accountShareOfOiBps?: number;
     tierThresholds1e6?: number[];
     tierImBps?: number[];
+    // Optional admin knobs
+    closeOnly?: boolean;
+    maxDeviationBps?: number;
+    pnlFeeShareBps?: number;
+    liqTargetBufferBps?: number;
+    imbalanceParams?: { surchargeMaxBps: number; thresholdBps: number };
   }>;
   perpetuals?: Array<{
     marketId?: string;
@@ -453,6 +497,10 @@ export type DeployConfig = {
     maintenanceMarginBps: number;
     liquidationFeeBps: number;
     keeperIncentiveBps?: number;
+    // Orderbook params (required by on-chain init)
+    tickSize: number;
+    lotSize: number;
+    minSize: number;
     // New risk controls (optional future parity)
     accountMaxNotional1e6?: string;
     marketMaxNotional1e6?: string;
@@ -785,7 +833,9 @@ export const deployConfig: DeployConfig = {
     ...fut_biweekly,
     ...fut_monthly,
   ],
-  gasFutures: [],
+  gasFutures: [
+    ...gasSet,
+  ],
   perpetuals: [],
   dexPools: [],
   vaults: [],

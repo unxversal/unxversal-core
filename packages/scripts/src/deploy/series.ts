@@ -354,4 +354,138 @@ export function generateFuturesMarkets(params: GenerateFuturesParams): Array<Fut
 //   maxMarkets: 6,
 // });
 
+// ===== Gas Futures helpers =====
+
+export type GasFuturesMarketSpec = {
+  collat: SuiTypeTag;
+  contractSize: number;         // MIST per contract per 1e6 price unit
+  initialMarginBps: number;
+  maintenanceMarginBps: number;
+  liquidationFeeBps: number;
+  keeperIncentiveBps?: number;
+  // orderbook
+  tickSize: number;
+  lotSize: number;
+  minSize: number;
+  // optional admin knobs
+  closeOnly?: boolean;
+  maxDeviationBps?: number;
+  pnlFeeShareBps?: number;
+  liqTargetBufferBps?: number;
+  imbalanceParams?: { surchargeMaxBps: number; thresholdBps: number };
+  // risk controls
+  accountMaxNotional1e6?: string;
+  marketMaxNotional1e6?: string;
+  accountShareOfOiBps?: number;
+  tierThresholds1e6?: number[];
+  tierImBps?: number[];
+};
+
+export type GenerateGasFuturesParams = {
+  collat: SuiTypeTag;           // Collateral type for gas futures
+  contractSize: number;         // MIST per contract per 1e6 price unit
+  initialMarginBps: number;
+  maintenanceMarginBps: number;
+  liquidationFeeBps: number;
+  keeperIncentiveBps?: number;
+  tickSize: number;
+  lotSize: number;
+  minSize: number;
+  // schedule
+  years: number;
+  interval: Interval;           // weekly/biweekly/monthly typical
+  expiryHourUTC?: number;       // default 0
+  weeklyOn?: number;            // 0..6
+  monthlyOnDay?: number;        // 1..31
+  startMs?: number;             // default now
+  // optional admin knobs
+  closeOnly?: boolean;
+  maxDeviationBps?: number;
+  pnlFeeShareBps?: number;
+  liqTargetBufferBps?: number;
+  imbalanceParams?: { surchargeMaxBps: number; thresholdBps: number };
+  // risk controls
+  accountMaxNotional1e6?: string;
+  marketMaxNotional1e6?: string;
+  accountShareOfOiBps?: number;
+  tierThresholds1e6?: number[];
+  tierImBps?: number[];
+  // max number of markets (safety cap)
+  maxMarkets?: number;
+};
+
+export function generateGasFuturesMarkets(params: GenerateGasFuturesParams): Array<GasFuturesMarketSpec & { expiryMs: number }>{
+  const {
+    collat,
+    contractSize,
+    initialMarginBps,
+    maintenanceMarginBps,
+    liquidationFeeBps,
+    keeperIncentiveBps,
+    tickSize,
+    lotSize,
+    minSize,
+    years,
+    interval,
+    expiryHourUTC = 0,
+    weeklyOn,
+    monthlyOnDay,
+    startMs = Date.now(),
+    closeOnly,
+    maxDeviationBps,
+    pnlFeeShareBps,
+    liqTargetBufferBps,
+    imbalanceParams,
+    accountMaxNotional1e6,
+    marketMaxNotional1e6,
+    accountShareOfOiBps,
+    tierThresholds1e6,
+    tierImBps,
+    maxMarkets,
+  } = params;
+
+  const expiries = buildExpirySchedule({
+    startMs,
+    years,
+    interval,
+    expiryHourUTC,
+    weeklyOn,
+    monthlyOnDay,
+    excludeWeekdays: [],
+    maxSeries: maxMarkets,
+  });
+
+  return expiries.map((expiryMs) => ({
+    collat,
+    contractSize,
+    initialMarginBps,
+    maintenanceMarginBps,
+    liquidationFeeBps,
+    keeperIncentiveBps,
+    tickSize,
+    lotSize,
+    minSize,
+    closeOnly,
+    maxDeviationBps,
+    pnlFeeShareBps,
+    liqTargetBufferBps,
+    imbalanceParams,
+    accountMaxNotional1e6,
+    marketMaxNotional1e6,
+    accountShareOfOiBps,
+    tierThresholds1e6,
+    tierImBps,
+    expiryMs,
+  }));
+}
+
+// Example:
+// const gasFuts = generateGasFuturesMarkets({
+//   collat: '0x2::sui::SUI',
+//   contractSize: 1_000_000, initialMarginBps: 1000, maintenanceMarginBps: 600, liquidationFeeBps: 100,
+//   tickSize: 1, lotSize: 1_000_000, minSize: 1_000_000,
+//   years: 1, interval: 'monthly', monthlyOnDay: 1, expiryHourUTC: 0,
+//   maxMarkets: 6,
+// });
+
 
