@@ -365,6 +365,111 @@ const gasSet = generateGasFuturesMarkets({
   liqTargetBufferBps: 100,
 });
 
+// --- Perps helper -----------------------------------------------------------
+
+type PerpSpec = NonNullable<DeployConfig["perpetuals"]>[number];
+
+const PERP_TIERS: Record<string, Tier> = FUTURES_TIERS; // reuse same mapping
+
+// Default tier schedule (1e6 notional units) — matches your Move defaults
+const DEFAULT_PERP_TIER_THRESHOLDS_1E6 = [
+  1_000_000_000_000,   // $1M
+  5_000_000_000_000,   // $5M
+  25_000_000_000_000,  // $25M
+  100_000_000_000_000, // $100M
+  250_000_000_000_000, // $250M
+];
+const DEFAULT_PERP_TIER_IM_BPS = [250, 300, 500, 800, 1200];
+
+// Sensible funding cadence by liquidity tier
+const FUNDING_BY_TIER_MS: Record<Tier, number> = {
+  A: 3_600_000,   // 1h
+  B: 7_200_000,   // 2h
+  C: 28_800_000,  // 8h
+  D: 28_800_000,  // 8h
+};
+
+function buildPerpForSymbol(
+  symbol: string,
+  opts?: {
+    fundingIntervalMs?: number;
+    contractSize?: number;         // base units per contract (linear perps)
+    tickSize?: number;             // 1e6 price units
+    lotSizeContracts?: number;     // orderbook qty step, in contracts
+    minSizeContracts?: number;     // minimum order size, in contracts
+    keeperIncentiveBps?: number;
+    caps?: {
+      accountMaxNotional1e6?: string;
+      marketMaxNotional1e6?: string;
+      accountShareOfOiBps?: number;
+    };
+    tiers?: {
+      thresholds1e6?: number[];
+      imBps?: number[];
+    };
+    tier?: Tier;                   // override tier mapping if needed
+  }
+): PerpSpec {
+  const cfg = DERIVATIVE_TYPE_TAGS[symbol];
+  if (!cfg) throw new Error(`Missing DERIVATIVE_TYPE_TAGS for ${symbol}`);
+
+  const tier = opts?.tier ?? PERP_TIERS[symbol];
+  const risk = TIER_PARAMS[tier];
+
+  return {
+    // identity / sizing
+    collat: cfg.quote,
+    symbol,
+    contractSize: opts?.contractSize ?? cfg.lotSize,  // keep parity with futures sizing
+    fundingIntervalMs: opts?.fundingIntervalMs ?? FUNDING_BY_TIER_MS[tier],
+
+    // risk & fees
+    initialMarginBps: risk.initialMarginBps,
+    maintenanceMarginBps: risk.maintenanceMarginBps,
+    liquidationFeeBps: risk.liquidationFeeBps,
+    keeperIncentiveBps: opts?.keeperIncentiveBps ?? risk.keeperIncentiveBps,
+
+    // orderbook (in CONTRACTS)
+    tickSize: opts?.tickSize ?? cfg.tickSize,
+    lotSize: opts?.lotSizeContracts ?? 1,
+    minSize: opts?.minSizeContracts ?? 1,
+
+    // caps (1e6 notional units)
+    accountMaxNotional1e6: opts?.caps?.accountMaxNotional1e6 ?? risk.accountMaxNotional1e6,
+    marketMaxNotional1e6:  opts?.caps?.marketMaxNotional1e6  ?? risk.marketMaxNotional1e6,
+    accountShareOfOiBps:   opts?.caps?.accountShareOfOiBps   ?? risk.accountShareOfOiBps,
+
+    // tiered IM schedule (explicit so every field is present)
+    tierThresholds1e6: opts?.tiers?.thresholds1e6 ?? DEFAULT_PERP_TIER_THRESHOLDS_1E6,
+    tierImBps:         opts?.tiers?.imBps         ?? DEFAULT_PERP_TIER_IM_BPS,
+  };
+}
+
+// Build perps for ALL symbols, with explicit fields populated
+const perps_all: PerpSpec[] = DERIVATIVE_SYMBOLS.map((sym) => {
+  const t = PERP_TIERS[sym];
+  const cfg = DERIVATIVE_TYPE_TAGS[sym];
+  const risk = TIER_PARAMS[t];
+  return buildPerpForSymbol(sym, {
+    // make everything explicit (you can tweak per symbol if desired)
+    fundingIntervalMs: FUNDING_BY_TIER_MS[t],
+    contractSize: cfg.lotSize,
+    tickSize: cfg.tickSize,
+    lotSizeContracts: 1,
+    minSizeContracts: 1,
+    keeperIncentiveBps: risk.keeperIncentiveBps,
+    caps: {
+      accountMaxNotional1e6: risk.accountMaxNotional1e6,
+      marketMaxNotional1e6:  risk.marketMaxNotional1e6,
+      accountShareOfOiBps:   risk.accountShareOfOiBps,
+    },
+    tiers: {
+      thresholds1e6: DEFAULT_PERP_TIER_THRESHOLDS_1E6,
+      imBps: DEFAULT_PERP_TIER_IM_BPS,
+    },
+  });
+});
+
 export type DeployConfig = {
   network: NetworkName;
   pkgId: string;
@@ -515,7 +620,8 @@ export type DeployConfig = {
     feeConfigId: string;
     feeVaultId: string;
     stakingPoolId: string;
-    unxvFeeCoinId: string;
+    unxvFeeCoinId?: string;     // optional: if omitted, admin path is used
+    adminRegistryId?: string;   // required when using admin path
     tickSize: number; lotSize: number; minSize: number;
   }>;
   vaults?: Array<{
@@ -836,7 +942,9 @@ export const deployConfig: DeployConfig = {
   gasFutures: [
     ...gasSet,
   ],
-  perpetuals: [],
+  perpetuals: [
+    ...perps_all,
+  ],
   dexPools: [],
   vaults: [],
 };

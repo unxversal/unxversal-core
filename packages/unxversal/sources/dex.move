@@ -26,6 +26,7 @@ module unxversal::dex {
     use deepbook::math;
     use token::deep::DEEP;
     use unxversal::unxv::UNXV;
+    use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::fees::{Self as fees, FeeConfig, FeeVault};
     use unxversal::staking::{Self as staking, StakingPool};
     use unxversal::rewards::{Self as rewards, Rewards};
@@ -35,6 +36,7 @@ module unxversal::dex {
     const E_POOL_FEE_NOT_PAID: u64 = 2;
     const E_UNXV_REQUIRED: u64 = 3;
     const E_INJECTION_FEE_NOT_PAID: u64 = 4;
+    const E_NOT_ADMIN: u64 = 5;
 
     /// Events
     public struct ProtocolFeeTaken has copy, drop {
@@ -309,6 +311,20 @@ module unxversal::dex {
         let change = fee_payment_unxv;
         transfer::public_transfer(change, ctx.sender());
         // create DeepBook pool (DeepBook collects its own DEEP creation fee internally)
+        db_pool::create_permissionless_pool<Base, Quote>(registry, tick_size, lot_size, min_size, coin::zero<DEEP>(ctx), ctx)
+    }
+
+    /// Admin-only pool creation that does not require paying the UNXV creation fee.
+    /// This is intended for governance-controlled or bootstrap scenarios.
+    public fun create_pool_admin<Base, Quote>(
+        reg_admin: &AdminRegistry,
+        registry: &mut DBRegistry,
+        tick_size: u64,
+        lot_size: u64,
+        min_size: u64,
+        ctx: &mut TxContext,
+    ): ID {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         db_pool::create_permissionless_pool<Base, Quote>(registry, tick_size, lot_size, min_size, coin::zero<DEEP>(ctx), ctx)
     }
 
