@@ -76,6 +76,9 @@ type DeployedPerp = {
 };
 type DeployedDexPool = { poolId: string; base: string; quote: string; tickSize: number; lotSize: number; minSize: number; registryId: string };
 
+// Collect every raw response from signAndExecuteTransaction
+const txResponses: Array<{ label: string; digest?: string; response: any }> = [];
+
 type DeploymentSummary = {
   network: string;
   timestampMs: number;
@@ -136,6 +139,11 @@ async function execTx(client: SuiClient, tx: Transaction, keypair: Ed25519Keypai
   const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true, showObjectChanges: true } });
   await client.waitForTransaction({ digest: res.digest });
   logger.info(`${label}: ${res.digest}`);
+  try {
+    txResponses.push({ label, digest: res.digest, response: res });
+  } catch (_) {
+    // best-effort; ignore serialization issues
+  }
   return res;
 }
 
@@ -823,6 +831,18 @@ function getOutputPath(): string {
   return path.resolve(__dirname, '..', '..', 'deploy-output.md');
 }
 
+function getTxResponsesPath(): string {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  return path.resolve(__dirname, '..', '..', 'deploy-tx-responses.json');
+}
+
+function getSummaryJsonPath(): string {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  return path.resolve(__dirname, '..', '..', 'deploy-summary.json');
+}
+
 async function writeDeploymentMarkdown(summary: DeploymentSummary) {
   const lines: string[] = [];
   lines.push(`# Unxversal Deploy Summary`);
@@ -1041,6 +1061,21 @@ export async function main(): Promise<void> {
 
   logger.info('Generating comprehensive deployment markdown');
   await writeDeploymentMarkdown(summary);
+
+  // Also write machine-readable artifacts
+  const respPath = getTxResponsesPath();
+  await writeFile(respPath, JSON.stringify({
+    network: deployConfig.network,
+    pkgId: deployConfig.pkgId,
+    timestampMs: summary.timestampMs,
+    count: txResponses.length,
+    responses: txResponses,
+  }, null, 2));
+  logger.info(`Wrote raw tx responses to ${respPath}`);
+
+  const summaryJsonPath = getSummaryJsonPath();
+  await writeFile(summaryJsonPath, JSON.stringify(summary, null, 2));
+  logger.info(`Wrote deployment summary JSON to ${summaryJsonPath}`);
 
   logger.info('Deploy completed');
 }

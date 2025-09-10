@@ -19,27 +19,122 @@
   gap: 12px;
 }
 
+/* Title */
+.title {
+  color: #e5e7eb;
+  font-size: 24px;
+  font-weight: 600;
+  text-align: left;
+  margin-bottom: 8px;
+}
+
+/* Action Badges Row */
+.actionBadgesRow {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.actionBadges {
+  display: flex;
+  gap: 8px;
+}
+
+.actionBadge {
+  border: none;
+  border-radius: 20px;
+  padding: 6px 16px;
+  font-weight: 500;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.7;
+}
+
+.actionBadge:hover {
+  opacity: 1;
+}
+
+.actionBadge.active {
+  opacity: 1;
+}
+
+.stakeBadge {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+}
+
+.stakeBadge:hover,
+.stakeBadge.active {
+  background: rgba(59, 130, 246, 0.3);
+  color: #60a5fa;
+}
+
+.unstakeBadge {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
+.unstakeBadge:hover,
+.unstakeBadge.active {
+  background: rgba(245, 158, 11, 0.3);
+  color: #f59e0b;
+}
+
+.claimBadge {
+  background: rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+}
+
+.claimBadge:hover,
+.claimBadge.active {
+  background: rgba(16, 185, 129, 0.3);
+  color: #34d399;
+}
+
+/* Description */
+.description {
+  color: #9ca3af;
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: left;
+  margin-bottom: 8px;
+}
+
 /* Stats Section */
 .statsSection {
   background: #151821;
   border-radius: 12px;
   padding: 16px;
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
   gap: 16px;
 }
 
 .statItem {
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.statItem:nth-child(2),
+.statItem:nth-child(4) {
+  text-align: right;
+  align-items: flex-end;
 }
 
 .statLabel {
   color: #9ca3af;
   font-size: 12px;
   font-weight: 500;
-  margin-bottom: 4px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .statValue {
@@ -48,11 +143,213 @@
   font-weight: 600;
 }
 
-/* Stake Section */
-.stakeSection {
+.rewardsValue {
+  color: #3b82f6;
+}
+
+.claimableRewardsValue {
+  color: #10b981;
+}
+
+/* Tier Section */
+.tierSection {
+  position: relative;
+}
+
+.helpButton {
+  background: none;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 2px;
+  margin-left: 6px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.helpButton:hover {
+  color: #9ca3af;
+  background: rgba(107, 114, 128, 0.1);
+}
+
+.tooltip {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1000;
+  margin-top: 8px;
+  background: #1f2937;
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+  min-width: 280px;
+}
+
+.tooltipContent {
+  padding: 16px;
+}
+
+.tooltipTitle {
+  color: #e5e7eb;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.tierList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tierItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+}
+
+.tierName {
+  color: #3b82f6;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.tierRequirement {
+  color: #9ca3af;
+  font-size: 11px;
+  text-align: right;
+}
+
+.tierInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tierValue {
+  color: #3b82f6;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.helpButton {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  transition: color 0.2s ease;
+}
+
+.helpButton:hover {
+  color: #e5e7eb;
+}
+
+/* Tooltip */
+.tooltip {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  margin-top: 8px;
+}
+
+.tooltipContent {
+  background: #1a1d29;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  min-width: 280px;
+}
+
+.tooltipTitle {
+  color: #e5e7eb;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tierList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tierList > div {
+  color: #9ca3af;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* Action Content */
+.actionContent {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Action Sections */
+.stakeSection,
+.unstakeSection,
+.claimSection {
   background: #151821;
   border-radius: 12px;
   padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.claimInfo {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 16px 0;
+}
+
+.claimAmount {
+  color: #10b981;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.claimLabel {
+  color: #9ca3af;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.executeButton {
+  background: #3b82f6;
+  border: none;
+  color: #ffffff;
+  border-radius: 12px;
+  padding: 12px 24px;
+  font-weight: 600;
+  font-size: 14px;
+  width: 100%;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.executeButton:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.executeButton:disabled {
+  background: #374151;
+  color: #6b7280;
+  cursor: not-allowed;
 }
 
 .sectionLabel {
@@ -100,16 +397,10 @@
   text-align: right;
 }
 
-/* Action Section */
-.actionSection {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
+/* Connect Wallet Section */
 .connectWalletContainer {
   display: flex;
-  width: 100%;
+  justify-content: center;
 }
 
 .connectWalletContainer :global(button) {
@@ -128,52 +419,6 @@
 
 .connectWalletContainer :global(button:hover) {
   background: #2563eb !important;
-}
-
-.stakeButton {
-  background: #3b82f6;
-  border: none;
-  color: #ffffff;
-  border-radius: 12px;
-  padding: 16px 24px;
-  font-weight: 600;
-  font-size: 16px;
-  width: 100%;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.stakeButton:hover:not(:disabled) {
-  background: #2563eb;
-}
-
-.stakeButton:disabled {
-  background: #374151;
-  color: #9ca3af;
-  cursor: not-allowed;
-}
-
-.claimButton {
-  background: #10b981;
-  border: none;
-  color: #ffffff;
-  border-radius: 12px;
-  padding: 16px 24px;
-  font-weight: 600;
-  font-size: 16px;
-  width: 100%;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.claimButton:hover:not(:disabled) {
-  background: #059669;
-}
-
-.claimButton:disabled {
-  background: #374151;
-  color: #9ca3af;
-  cursor: not-allowed;
 }
 
 /* Remove focus outline on all interactive elements */
