@@ -8,9 +8,72 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 type DeployedOptions = { marketId: string; base: string; quote: string; series: Array<{ expiryMs: number; strike1e6: number; isCall: boolean; symbol: string }> };
-type DeployedFutures = { marketId: string; collat: string; symbol: string; contractSize: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number; keeperIncentiveBps: number };
-type DeployedGasFutures = { marketId: string; collat: string; expiryMs: number; contractSize: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number; keeperIncentiveBps: number };
-type DeployedPerp = { marketId: string; collat: string; symbol: string; contractSize: number; fundingIntervalMs: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number; keeperIncentiveBps: number };
+type DeployedFutures = {
+  marketId: string;
+  collat: string;
+  symbol: string;
+  expiryMs?: number;
+  contractSize: number;
+  tickSize?: number;
+  lotSize?: number;
+  minSize?: number;
+  initialMarginBps: number;
+  maintenanceMarginBps: number;
+  liquidationFeeBps: number;
+  keeperIncentiveBps: number;
+  accountMaxNotional1e6?: string;
+  marketMaxNotional1e6?: string;
+  accountShareOfOiBps?: number;
+  tierThresholds1e6?: number[];
+  tierImBps?: number[];
+  closeOnly?: boolean;
+  maxDeviationBps?: number;
+  pnlFeeShareBps?: number;
+  liqTargetBufferBps?: number;
+  imbalanceParams?: { surchargeMaxBps: number; thresholdBps: number };
+};
+type DeployedGasFutures = {
+  marketId: string;
+  collat: string;
+  expiryMs: number;
+  contractSize: number;
+  tickSize?: number;
+  lotSize?: number;
+  minSize?: number;
+  initialMarginBps: number;
+  maintenanceMarginBps: number;
+  liquidationFeeBps: number;
+  keeperIncentiveBps: number;
+  accountMaxNotional1e6?: string;
+  marketMaxNotional1e6?: string;
+  accountShareOfOiBps?: number;
+  tierThresholds1e6?: number[];
+  tierImBps?: number[];
+  closeOnly?: boolean;
+  maxDeviationBps?: number;
+  pnlFeeShareBps?: number;
+  liqTargetBufferBps?: number;
+  imbalanceParams?: { surchargeMaxBps: number; thresholdBps: number };
+};
+type DeployedPerp = {
+  marketId: string;
+  collat: string;
+  symbol: string;
+  contractSize: number;
+  fundingIntervalMs: number;
+  tickSize?: number;
+  lotSize?: number;
+  minSize?: number;
+  initialMarginBps: number;
+  maintenanceMarginBps: number;
+  liquidationFeeBps: number;
+  keeperIncentiveBps: number;
+  accountMaxNotional1e6?: string;
+  marketMaxNotional1e6?: string;
+  accountShareOfOiBps?: number;
+  tierThresholds1e6?: number[];
+  tierImBps?: number[];
+};
 type DeployedDexPool = { poolId: string; base: string; quote: string; tickSize: number; lotSize: number; minSize: number; registryId: string };
 
 type DeploymentSummary = {
@@ -34,7 +97,20 @@ type DeploymentSummary = {
   // Newly observed package ids and object types from created objects during this run
   createdPackageIds: string[];
   createdObjectTypes: string[];
-  lending: Array<{ marketId: string; collat: string; debt: string; symbol: string }>;
+  lending: Array<{
+    marketId: string;
+    collat: string;
+    debt: string;
+    symbol: string;
+    baseRateBps?: number;
+    multiplierBps?: number;
+    jumpMultiplierBps?: number;
+    kinkUtilBps?: number;
+    reserveFactorBps?: number;
+    collateralFactorBps?: number;
+    liquidationThresholdBps?: number;
+    liquidationBonusBps?: number;
+  }>;
   options: DeployedOptions[];
   futures: DeployedFutures[];
   gasFutures: DeployedGasFutures[];
@@ -56,6 +132,7 @@ function kpFromEnv(): Ed25519Keypair {
 }
 
 async function execTx(client: SuiClient, tx: Transaction, keypair: Ed25519Keypair, label: string) {
+  logger.debug(`[tx] preparing ${label}`);
   const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true, showObjectChanges: true } });
   await client.waitForTransaction({ digest: res.digest });
   logger.info(`${label}: ${res.digest}`);
@@ -103,7 +180,11 @@ function accumulateFromRes(res: any, summary: DeploymentSummary) {
 }
 
 async function ensureOracleRegistry(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary): Promise<string> {
-  if (cfg.oracleRegistryId) return cfg.oracleRegistryId;
+  if (cfg.oracleRegistryId) {
+    logger.info(`oracle.init_registry skipped (reusing registry ${cfg.oracleRegistryId})`);
+    return cfg.oracleRegistryId;
+  }
+  logger.info('oracle.init_registry starting');
   const tx = new Transaction();
   tx.moveCall({ target: `${cfg.pkgId}::oracle::init_registry`, arguments: [tx.object(cfg.adminRegistryId), tx.object('0x6')] });
   const res = await execTx(client, tx, keypair, 'oracle.init_registry');
@@ -116,12 +197,15 @@ async function ensureOracleRegistry(client: SuiClient, cfg: DeployConfig, keypai
 
 async function setOracleParams(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
   if (cfg.oracleMaxAgeSec && cfg.oracleRegistryId) {
+    logger.info(`oracle.set_max_age -> ${cfg.oracleMaxAgeSec}s on registry ${cfg.oracleRegistryId}`);
     const tx = new Transaction();
     tx.moveCall({ target: `${cfg.pkgId}::oracle::set_max_age_registry`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.u64(cfg.oracleMaxAgeSec), tx.object('0x6')] });
     await execTx(client, tx, keypair, 'oracle.set_max_age');
   }
   if (cfg.oracleFeeds && cfg.oracleFeeds.length && cfg.oracleRegistryId) {
+    logger.info(`oracle.set_feed_from_bytes for ${cfg.oracleFeeds.length} feeds`);
     for (const f of cfg.oracleFeeds) {
+      logger.debug(`  feed ${f.symbol} -> ${f.priceId}`);
       const tx = new Transaction();
       tx.moveCall({ target: `${cfg.pkgId}::oracle::set_feed_from_bytes`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.string(f.symbol), tx.pure.vector('u8', Array.from(Buffer.from(f.priceId.replace(/^0x/, ''), 'hex'))), tx.object('0x6')] as any });
       await execTx(client, tx, keypair, `oracle.set_feed_from_bytes ${f.symbol}`);
@@ -131,6 +215,7 @@ async function setOracleParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
 
 async function addAdditionalAdmins(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
   if (!cfg.additionalAdmins || cfg.additionalAdmins.length === 0) return;
+  logger.info(`admin.add_admin for ${cfg.additionalAdmins.length} addresses`);
   for (const addr of cfg.additionalAdmins) {
     const tx = new Transaction();
     tx.moveCall({ target: `${cfg.pkgId}::admin::add_admin`, arguments: [tx.object(cfg.adminRegistryId), tx.pure.address(addr)] });
@@ -141,6 +226,8 @@ async function addAdditionalAdmins(client: SuiClient, cfg: DeployConfig, keypair
 async function updateFeeParams(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair) {
   if (cfg.feeParams) {
     const p = cfg.feeParams;
+    logger.info('fees.set_params');
+    logger.debug(JSON.stringify(p));
     const tx = new Transaction();
     tx.moveCall({
       target: `${cfg.pkgId}::fees::set_params`,
@@ -161,6 +248,8 @@ async function updateFeeParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
   }
   if (cfg.feeTiers) {
     const t = cfg.feeTiers;
+    logger.info('fees.set_staking_tiers');
+    logger.debug(JSON.stringify(t));
     const tx = new Transaction();
     tx.moveCall({
       target: `${cfg.pkgId}::fees::set_staking_tiers`,
@@ -179,29 +268,38 @@ async function updateFeeParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
   }
   if (cfg.tradeFees?.dex) {
     const t = cfg.tradeFees.dex;
+    logger.info('fees.set_trade_fees (DEX)');
+    logger.debug(JSON.stringify(t));
     const tx = new Transaction();
     tx.moveCall({ target: `${cfg.pkgId}::fees::set_trade_fees`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(t.takerBps), tx.pure.u64(t.makerBps)] });
     await execTx(client, tx, keypair, 'fees.set_trade_fees');
   }
   if (cfg.tradeFees?.futures) {
     const t = cfg.tradeFees.futures;
+    logger.info('fees.set_futures_trade_fees');
+    logger.debug(JSON.stringify(t));
     const tx = new Transaction();
     tx.moveCall({ target: `${cfg.pkgId}::fees::set_futures_trade_fees`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(t.takerBps), tx.pure.u64(t.makerBps)] });
     await execTx(client, tx, keypair, 'fees.set_futures_trade_fees');
   }
   if (cfg.tradeFees?.gasFutures) {
     const t = cfg.tradeFees.gasFutures;
+    logger.info('fees.set_gasfutures_trade_fees');
+    logger.debug(JSON.stringify(t));
     const tx = new Transaction();
     tx.moveCall({ target: `${cfg.pkgId}::fees::set_gasfutures_trade_fees`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(t.takerBps), tx.pure.u64(t.makerBps)] });
     await execTx(client, tx, keypair, 'fees.set_gasfutures_trade_fees');
   }
   if (cfg.lendingParams) {
     const lp = cfg.lendingParams;
+    logger.info('fees.set_lending_params');
+    logger.debug(JSON.stringify(lp));
     const tx = new Transaction();
     tx.moveCall({ target: `${cfg.pkgId}::fees::set_lending_params`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(lp.borrowFeeBps), tx.pure.u64(lp.collateralBonusMaxBps)] });
     await execTx(client, tx, keypair, 'fees.set_lending_params');
   }
   if (typeof cfg.poolCreationFeeUnxv === 'number') {
+    logger.info(`fees.set_pool_creation_fee_unxv -> ${cfg.poolCreationFeeUnxv}`);
     const tx = new Transaction();
     tx.moveCall({ target: `${cfg.pkgId}::fees::set_pool_creation_fee_unxv`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(cfg.poolCreationFeeUnxv)] });
     await execTx(client, tx, keypair, 'fees.set_pool_creation_fee_unxv');
@@ -212,11 +310,13 @@ async function applyUsduFaucetSettings(client: SuiClient, cfg: DeployConfig, key
   if (!cfg.usdu || !cfg.usduFaucetId) return;
   const { perAddressLimit, paused } = cfg.usdu;
   if (perAddressLimit != null) {
+    logger.info(`usdu.set_per_address_limit -> ${perAddressLimit}`);
     const tx = new Transaction();
     tx.moveCall({ target: `${cfg.pkgId}::usdu::set_per_address_limit`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.usduFaucetId), tx.pure.u64(perAddressLimit), tx.object('0x6')] });
     await execTx(client, tx, keypair, 'usdu.set_per_address_limit');
   }
   if (paused != null) {
+    logger.info(`usdu.set_paused -> ${paused}`);
     const tx = new Transaction();
     tx.moveCall({ target: `${cfg.pkgId}::usdu::set_paused`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.usduFaucetId), tx.pure.bool(paused), tx.object('0x6')] });
     await execTx(client, tx, keypair, 'usdu.set_paused');
@@ -225,9 +325,11 @@ async function applyUsduFaucetSettings(client: SuiClient, cfg: DeployConfig, key
 
 async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.options?.length) return;
+  logger.info(`Deploying Options: ${cfg.options.length} market(s)`);
   for (const m of cfg.options) {
     let marketId = m.marketId;
     if (!marketId) {
+      logger.debug(`options.init_market (base=${m.base}, quote=${m.quote})`);
       const tx = new Transaction();
       tx.moveCall({ target: `${cfg.pkgId}::options::init_market`, arguments: [tx.object(cfg.adminRegistryId)] });
       const res = await execTx(client, tx, keypair, 'options.init_market');
@@ -236,6 +338,8 @@ async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25
       if (marketId) logger.info(`options.market created id=${marketId}`);
     }
     if (m.series?.length && marketId) {
+      const symbol = m.series[0]?.symbol ?? '';
+      logger.info(`Creating ${m.series.length} option series for market ${marketId} (${symbol})`);
       for (const s of m.series) {
         const tx = new Transaction();
         tx.moveCall({
@@ -265,8 +369,10 @@ async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25
 
 async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.futures?.length) return;
+  logger.info(`Deploying Futures: ${cfg.futures.length} market spec(s)`);
   for (const f of cfg.futures) {
     if (!f.marketId) {
+      logger.debug(`futures.init_market symbol=${f.symbol} expiryMs=${(f as any).expiryMs ?? 0}`);
       const tx = new Transaction();
       tx.moveCall({
         target: `${cfg.pkgId}::futures::init_market`,
@@ -289,9 +395,55 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
       accumulateFromRes(res, summary);
       const id = extractCreatedId(res, `${cfg.pkgId}::futures::FuturesMarket<`);
       if (id) logger.info(`futures.market created id=${id}`);
-      if (id) summary.futures.push({ marketId: id, collat: f.collat, symbol: f.symbol, contractSize: f.contractSize, initialMarginBps: f.initialMarginBps, maintenanceMarginBps: f.maintenanceMarginBps, liquidationFeeBps: f.liquidationFeeBps, keeperIncentiveBps: (f as any).keeperIncentiveBps ?? 0 });
+      if (id) summary.futures.push({
+        marketId: id,
+        collat: f.collat,
+        symbol: f.symbol,
+        expiryMs: (f as any).expiryMs,
+        contractSize: f.contractSize,
+        tickSize: (f as any).tickSize,
+        lotSize: (f as any).lotSize,
+        minSize: (f as any).minSize,
+        initialMarginBps: f.initialMarginBps,
+        maintenanceMarginBps: f.maintenanceMarginBps,
+        liquidationFeeBps: f.liquidationFeeBps,
+        keeperIncentiveBps: (f as any).keeperIncentiveBps ?? 0,
+        accountMaxNotional1e6: (f as any).accountMaxNotional1e6,
+        marketMaxNotional1e6: (f as any).marketMaxNotional1e6,
+        accountShareOfOiBps: (f as any).accountShareOfOiBps,
+        tierThresholds1e6: (f as any).tierThresholds1e6,
+        tierImBps: (f as any).tierImBps,
+        closeOnly: (f as any).closeOnly,
+        maxDeviationBps: (f as any).maxDeviationBps,
+        pnlFeeShareBps: (f as any).pnlFeeShareBps,
+        liqTargetBufferBps: (f as any).liqTargetBufferBps,
+        imbalanceParams: (f as any).imbalanceParams,
+      });
     } else {
-      summary.futures.push({ marketId: f.marketId, collat: f.collat, symbol: f.symbol, contractSize: f.contractSize, initialMarginBps: f.initialMarginBps, maintenanceMarginBps: f.maintenanceMarginBps, liquidationFeeBps: f.liquidationFeeBps, keeperIncentiveBps: (f as any).keeperIncentiveBps ?? 0 });
+      summary.futures.push({
+        marketId: f.marketId,
+        collat: f.collat,
+        symbol: f.symbol,
+        expiryMs: (f as any).expiryMs,
+        contractSize: f.contractSize,
+        tickSize: (f as any).tickSize,
+        lotSize: (f as any).lotSize,
+        minSize: (f as any).minSize,
+        initialMarginBps: f.initialMarginBps,
+        maintenanceMarginBps: f.maintenanceMarginBps,
+        liquidationFeeBps: f.liquidationFeeBps,
+        keeperIncentiveBps: (f as any).keeperIncentiveBps ?? 0,
+        accountMaxNotional1e6: (f as any).accountMaxNotional1e6,
+        marketMaxNotional1e6: (f as any).marketMaxNotional1e6,
+        accountShareOfOiBps: (f as any).accountShareOfOiBps,
+        tierThresholds1e6: (f as any).tierThresholds1e6,
+        tierImBps: (f as any).tierImBps,
+        closeOnly: (f as any).closeOnly,
+        maxDeviationBps: (f as any).maxDeviationBps,
+        pnlFeeShareBps: (f as any).pnlFeeShareBps,
+        liqTargetBufferBps: (f as any).liqTargetBufferBps,
+        imbalanceParams: (f as any).imbalanceParams,
+      });
       if (typeof (f as any).keeperIncentiveBps === 'number' && f.marketId) {
         const tx = new Transaction();
         tx.moveCall({ target: `${cfg.pkgId}::futures::set_keeper_incentive_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).keeperIncentiveBps)] });
@@ -351,8 +503,10 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
 
 async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.gasFutures?.length) return;
+  logger.info(`Deploying Gas Futures: ${cfg.gasFutures.length} market spec(s)`);
   for (const g of cfg.gasFutures) {
     if (!g.marketId) {
+      logger.debug(`gas_futures.init_market expiryMs=${g.expiryMs}`);
       const tx = new Transaction();
       tx.moveCall({
         target: `${cfg.pkgId}::gas_futures::init_market`,
@@ -374,9 +528,53 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
       accumulateFromRes(res, summary);
       const id = extractCreatedId(res, `${cfg.pkgId}::gas_futures::GasMarket<`);
       if (id) logger.info(`gas_futures.market created id=${id}`);
-      if (id) summary.gasFutures.push({ marketId: id, collat: g.collat, expiryMs: g.expiryMs, contractSize: g.contractSize, initialMarginBps: g.initialMarginBps, maintenanceMarginBps: g.maintenanceMarginBps, liquidationFeeBps: g.liquidationFeeBps, keeperIncentiveBps: (g as any).keeperIncentiveBps ?? 0 });
+      if (id) summary.gasFutures.push({
+        marketId: id,
+        collat: g.collat,
+        expiryMs: g.expiryMs,
+        contractSize: g.contractSize,
+        tickSize: (g as any).tickSize,
+        lotSize: (g as any).lotSize,
+        minSize: (g as any).minSize,
+        initialMarginBps: g.initialMarginBps,
+        maintenanceMarginBps: g.maintenanceMarginBps,
+        liquidationFeeBps: g.liquidationFeeBps,
+        keeperIncentiveBps: (g as any).keeperIncentiveBps ?? 0,
+        accountMaxNotional1e6: (g as any).accountMaxNotional1e6,
+        marketMaxNotional1e6: (g as any).marketMaxNotional1e6,
+        accountShareOfOiBps: (g as any).accountShareOfOiBps,
+        tierThresholds1e6: (g as any).tierThresholds1e6,
+        tierImBps: (g as any).tierImBps,
+        closeOnly: (g as any).closeOnly,
+        maxDeviationBps: (g as any).maxDeviationBps,
+        pnlFeeShareBps: (g as any).pnlFeeShareBps,
+        liqTargetBufferBps: (g as any).liqTargetBufferBps,
+        imbalanceParams: (g as any).imbalanceParams,
+      });
     } else {
-      summary.gasFutures.push({ marketId: g.marketId, collat: g.collat, expiryMs: g.expiryMs, contractSize: g.contractSize, initialMarginBps: g.initialMarginBps, maintenanceMarginBps: g.maintenanceMarginBps, liquidationFeeBps: g.liquidationFeeBps, keeperIncentiveBps: (g as any).keeperIncentiveBps ?? 0 });
+      summary.gasFutures.push({
+        marketId: g.marketId,
+        collat: g.collat,
+        expiryMs: g.expiryMs,
+        contractSize: g.contractSize,
+        tickSize: (g as any).tickSize,
+        lotSize: (g as any).lotSize,
+        minSize: (g as any).minSize,
+        initialMarginBps: g.initialMarginBps,
+        maintenanceMarginBps: g.maintenanceMarginBps,
+        liquidationFeeBps: g.liquidationFeeBps,
+        keeperIncentiveBps: (g as any).keeperIncentiveBps ?? 0,
+        accountMaxNotional1e6: (g as any).accountMaxNotional1e6,
+        marketMaxNotional1e6: (g as any).marketMaxNotional1e6,
+        accountShareOfOiBps: (g as any).accountShareOfOiBps,
+        tierThresholds1e6: (g as any).tierThresholds1e6,
+        tierImBps: (g as any).tierImBps,
+        closeOnly: (g as any).closeOnly,
+        maxDeviationBps: (g as any).maxDeviationBps,
+        pnlFeeShareBps: (g as any).pnlFeeShareBps,
+        liqTargetBufferBps: (g as any).liqTargetBufferBps,
+        imbalanceParams: (g as any).imbalanceParams,
+      });
       if (typeof (g as any).keeperIncentiveBps === 'number' && g.marketId) {
         const tx = new Transaction();
         tx.moveCall({ target: `${cfg.pkgId}::gas_futures::set_keeper_incentive_bps`, typeArguments: [g.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(g.marketId), tx.pure.u64((g as any).keeperIncentiveBps)] });
@@ -435,8 +633,10 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
 
 async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.perpetuals?.length) return;
+  logger.info(`Deploying Perpetuals: ${cfg.perpetuals.length} market spec(s)`);
   for (const p of cfg.perpetuals) {
     if (!p.marketId) {
+      logger.debug(`perpetuals.init_market symbol=${p.symbol}`);
       const tx = new Transaction();
       tx.moveCall({
         target: `${cfg.pkgId}::perpetuals::init_market`,
@@ -459,9 +659,45 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
       accumulateFromRes(res, summary);
       const id = extractCreatedId(res, `${cfg.pkgId}::perpetuals::PerpMarket<`);
       if (id) logger.info(`perpetuals.market created id=${id}`);
-      if (id) summary.perpetuals.push({ marketId: id, collat: p.collat, symbol: p.symbol, contractSize: p.contractSize, fundingIntervalMs: p.fundingIntervalMs, initialMarginBps: p.initialMarginBps, maintenanceMarginBps: p.maintenanceMarginBps, liquidationFeeBps: p.liquidationFeeBps, keeperIncentiveBps: (p as any).keeperIncentiveBps ?? 0 });
+      if (id) summary.perpetuals.push({
+        marketId: id,
+        collat: p.collat,
+        symbol: p.symbol,
+        contractSize: p.contractSize,
+        fundingIntervalMs: p.fundingIntervalMs,
+        tickSize: (p as any).tickSize,
+        lotSize: (p as any).lotSize,
+        minSize: (p as any).minSize,
+        initialMarginBps: p.initialMarginBps,
+        maintenanceMarginBps: p.maintenanceMarginBps,
+        liquidationFeeBps: p.liquidationFeeBps,
+        keeperIncentiveBps: (p as any).keeperIncentiveBps ?? 0,
+        accountMaxNotional1e6: (p as any).accountMaxNotional1e6,
+        marketMaxNotional1e6: (p as any).marketMaxNotional1e6,
+        accountShareOfOiBps: (p as any).accountShareOfOiBps,
+        tierThresholds1e6: (p as any).tierThresholds1e6,
+        tierImBps: (p as any).tierImBps,
+      });
     } else {
-      summary.perpetuals.push({ marketId: p.marketId, collat: p.collat, symbol: p.symbol, contractSize: p.contractSize, fundingIntervalMs: p.fundingIntervalMs, initialMarginBps: p.initialMarginBps, maintenanceMarginBps: p.maintenanceMarginBps, liquidationFeeBps: p.liquidationFeeBps, keeperIncentiveBps: (p as any).keeperIncentiveBps ?? 0 });
+      summary.perpetuals.push({
+        marketId: p.marketId,
+        collat: p.collat,
+        symbol: p.symbol,
+        contractSize: p.contractSize,
+        fundingIntervalMs: p.fundingIntervalMs,
+        tickSize: (p as any).tickSize,
+        lotSize: (p as any).lotSize,
+        minSize: (p as any).minSize,
+        initialMarginBps: p.initialMarginBps,
+        maintenanceMarginBps: p.maintenanceMarginBps,
+        liquidationFeeBps: p.liquidationFeeBps,
+        keeperIncentiveBps: (p as any).keeperIncentiveBps ?? 0,
+        accountMaxNotional1e6: (p as any).accountMaxNotional1e6,
+        marketMaxNotional1e6: (p as any).marketMaxNotional1e6,
+        accountShareOfOiBps: (p as any).accountShareOfOiBps,
+        tierThresholds1e6: (p as any).tierThresholds1e6,
+        tierImBps: (p as any).tierImBps,
+      });
       if (typeof (p as any).keeperIncentiveBps === 'number' && p.marketId) {
         const tx = new Transaction();
         tx.moveCall({ target: `${cfg.pkgId}::perpetuals::set_keeper_incentive_bps`, typeArguments: [p.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(p.marketId), tx.pure.u64((p as any).keeperIncentiveBps)] });
@@ -493,8 +729,10 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
 
 async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.lendingMarkets?.length) return;
+  logger.info(`Deploying Lending: ${cfg.lendingMarkets.length} market spec(s)`);
   for (const m of cfg.lendingMarkets) {
     if (!m.marketId) {
+      logger.debug(`lending.init_market symbol=${m.symbol}`);
       const tx = new Transaction();
       tx.moveCall({
         target: `${cfg.pkgId}::lending::init_market`,
@@ -517,7 +755,20 @@ async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25
       const id = extractCreatedId(res, `${cfg.pkgId}::lending::LendingMarket<`);
       if (id) {
         logger.info(`lending.market created id=${id}`);
-        summary.lending.push({ marketId: id, collat: m.collat, debt: m.debt, symbol: m.symbol });
+        summary.lending.push({
+          marketId: id,
+          collat: m.collat,
+          debt: m.debt,
+          symbol: m.symbol,
+          baseRateBps: m.baseRateBps,
+          multiplierBps: m.multiplierBps,
+          jumpMultiplierBps: m.jumpMultiplierBps,
+          kinkUtilBps: m.kinkUtilBps,
+          reserveFactorBps: m.reserveFactorBps,
+          collateralFactorBps: m.collateralFactorBps,
+          liquidationThresholdBps: m.liquidationThresholdBps,
+          liquidationBonusBps: m.liquidationBonusBps,
+        });
       }
     }
   }
@@ -525,6 +776,7 @@ async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25
 
 async function deployDexPools(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.dexPools?.length) return;
+  logger.info(`Creating DEX Pools: ${cfg.dexPools.length} spec(s)`);
   for (const d of cfg.dexPools) {
     const tx = new Transaction();
     const adminId = d.adminRegistryId ?? cfg.adminRegistryId;
@@ -588,48 +840,120 @@ async function writeDeploymentMarkdown(summary: DeploymentSummary) {
   if (summary.oracleRegistryId) lines.push(`- **OracleRegistry**: \`${summary.oracleRegistryId}\``);
   if (summary.additionalAdmins?.length) lines.push(`- **Additional Admins**: ${summary.additionalAdmins.map((a) => `\`${a}\``).join(', ')}`);
   lines.push('');
-  lines.push('## Fee settings');
-  if (summary.feeParams) lines.push('```json\n' + JSON.stringify(summary.feeParams, null, 2) + '\n```');
-  if (summary.feeTiers) lines.push('```json\n' + JSON.stringify(summary.feeTiers, null, 2) + '\n```');
-  if (summary.lendingParams) lines.push('```json\n' + JSON.stringify(summary.lendingParams, null, 2) + '\n```');
+  lines.push('## Configuration & Fees');
+  if (summary.feeParams) lines.push('### Fee Params\n```json\n' + JSON.stringify(summary.feeParams, null, 2) + '\n```');
+  if (summary.feeTiers) lines.push('### Staking Tiers\n```json\n' + JSON.stringify(summary.feeTiers, null, 2) + '\n```');
+  if (summary.lendingParams) lines.push('### Lending Params\n```json\n' + JSON.stringify(summary.lendingParams, null, 2) + '\n```');
   if (typeof summary.poolCreationFeeUnxv === 'number') lines.push(`- **Pool Creation Fee (UNXV)**: ${summary.poolCreationFeeUnxv}`);
-  if (summary.tradeFees) lines.push('```json\n' + JSON.stringify(summary.tradeFees, null, 2) + '\n```');
+  if (summary.tradeFees) lines.push('### Trade Fees\n```json\n' + JSON.stringify(summary.tradeFees, null, 2) + '\n```');
   lines.push('');
   lines.push('## Oracle');
   if (typeof summary.oracleMaxAgeSec === 'number') lines.push(`- **Max Age (sec)**: ${summary.oracleMaxAgeSec}`);
   if (summary.oracleFeeds?.length) {
-    lines.push('- **Feeds**:');
+    lines.push(`- **Feeds (${summary.oracleFeeds.length})**:`);
     for (const f of summary.oracleFeeds) lines.push(`  - **${f.symbol}**: \`${f.priceId}\``);
   }
   lines.push('');
+  // Counts overview
+  lines.push('## Objects Created (Counts)');
+  lines.push(`- **Lending**: ${summary.lending.length}`);
+  lines.push(`- **Options markets**: ${summary.options.length}`);
+  const optionSeriesCount = summary.options.reduce((n, m) => n + (m.series?.length || 0), 0);
+  lines.push(`  - Series total: ${optionSeriesCount}`);
+  lines.push(`- **Futures**: ${summary.futures.length}`);
+  lines.push(`- **Gas Futures**: ${summary.gasFutures.length}`);
+  lines.push(`- **Perpetuals**: ${summary.perpetuals.length}`);
+  lines.push(`- **DEX Pools**: ${summary.dexPools.length}`);
+  lines.push(`- **Vaults**: ${summary.vaults.length}`);
+  lines.push('');
+  if (summary.lending.length) {
+    lines.push('## Lending Markets');
+    for (const m of summary.lending) {
+      lines.push(`- **${m.symbol}** market=\`${m.marketId}\` (<${m.collat}> → <${m.debt}>)`);
+      lines.push(`  - Rates: base=${m.baseRateBps} | mul=${m.multiplierBps} | jump=${m.jumpMultiplierBps} | kink=${m.kinkUtilBps}`);
+      lines.push(`  - Risk: reserve=${m.reserveFactorBps} | collat=${m.collateralFactorBps} | liqTh=${m.liquidationThresholdBps} | liqBonus=${m.liquidationBonusBps}`);
+    }
+    lines.push('');
+  }
   if (summary.options.length) {
     lines.push('## Options Markets');
     for (const m of summary.options) {
-      lines.push(`- **Market** \`${m.marketId}\` (<${m.base}>, <${m.quote}>)`);
+      const total = m.series?.length || 0;
+      const expiries = (m.series || []).map((s) => s.expiryMs).sort((a, b) => a - b);
+      const first = expiries[0];
+      const last = expiries[expiries.length - 1];
+      lines.push(`- **Market** \`${m.marketId}\` (<${m.base}>, <${m.quote}>) — series=${total}${first ? `, first=${new Date(first).toISOString()}` : ''}${last ? `, last=${new Date(last).toISOString()}` : ''}`);
       if (m.series?.length) {
-        for (const s of m.series) lines.push(`  - ${s.symbol} | expiry=${s.expiryMs} | strike1e6=${s.strike1e6} | isCall=${s.isCall}`);
+        for (const s of m.series) lines.push(`  - ${s.symbol} | expiry=${new Date(s.expiryMs).toISOString()} | strike1e6=${s.strike1e6} | isCall=${s.isCall}`);
       }
     }
     lines.push('');
   }
   if (summary.futures.length) {
     lines.push('## Futures Markets');
-    for (const m of summary.futures) lines.push(`- **${m.symbol}**: market=\`${m.marketId}\`, collat=<${m.collat}>, cs=${m.contractSize}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}, KeeperBps=${m.keeperIncentiveBps}`);
+    const bySym = new Map<string, DeployedFutures[]>();
+    for (const f of summary.futures) {
+      const arr = bySym.get(f.symbol) || [];
+      arr.push(f); bySym.set(f.symbol, arr);
+    }
+    for (const [sym, arr] of bySym.entries()) {
+      lines.push(`### ${sym} (${arr.length})`);
+      for (const m of arr.sort((a, b) => (a.expiryMs || 0) - (b.expiryMs || 0))) {
+        lines.push(`- market=\`${m.marketId}\` expiry=${m.expiryMs ?? 0} (${m.expiryMs ? new Date(m.expiryMs).toISOString() : 'perp'})`);
+        lines.push(`  - collat=<${m.collat}> cs=${m.contractSize} tick=${m.tickSize} lot=${m.lotSize} min=${m.minSize}`);
+        lines.push(`  - IM=${m.initialMarginBps} MM=${m.maintenanceMarginBps} LiqFee=${m.liquidationFeeBps} KeeperBps=${m.keeperIncentiveBps}`);
+        if (m.accountMaxNotional1e6 || m.marketMaxNotional1e6) lines.push(`  - Caps: acct=${m.accountMaxNotional1e6} market=${m.marketMaxNotional1e6}`);
+        if (m.accountShareOfOiBps != null) lines.push(`  - ShareOfOI=${m.accountShareOfOiBps}`);
+        if (m.tierThresholds1e6 && m.tierImBps) lines.push(`  - Tiers: thresholds=${JSON.stringify(m.tierThresholds1e6)} imbps=${JSON.stringify(m.tierImBps)}`);
+        if (m.closeOnly != null) lines.push(`  - closeOnly=${m.closeOnly}`);
+        if (m.maxDeviationBps != null) lines.push(`  - maxDeviationBps=${m.maxDeviationBps}`);
+        if (m.pnlFeeShareBps != null) lines.push(`  - pnlFeeShareBps=${m.pnlFeeShareBps}`);
+        if (m.liqTargetBufferBps != null) lines.push(`  - liqTargetBufferBps=${m.liqTargetBufferBps}`);
+        if (m.imbalanceParams) lines.push(`  - imbalance: surchargeMax=${m.imbalanceParams.surchargeMaxBps} threshold=${m.imbalanceParams.thresholdBps}`);
+      }
+    }
     lines.push('');
   }
   if (summary.gasFutures.length) {
     lines.push('## Gas Futures Markets');
-    for (const m of summary.gasFutures) lines.push(`- market=\`${m.marketId}\`, collat=<${m.collat}>, expiry=${m.expiryMs}, cs=${m.contractSize}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}, KeeperBps=${m.keeperIncentiveBps}`);
+    for (const m of summary.gasFutures.sort((a, b) => a.expiryMs - b.expiryMs)) {
+      lines.push(`- market=\`${m.marketId}\` expiry=${m.expiryMs} (${new Date(m.expiryMs).toISOString()})`);
+      lines.push(`  - collat=<${m.collat}> cs=${m.contractSize} tick=${m.tickSize} lot=${m.lotSize} min=${m.minSize}`);
+      lines.push(`  - IM=${m.initialMarginBps} MM=${m.maintenanceMarginBps} LiqFee=${m.liquidationFeeBps} KeeperBps=${m.keeperIncentiveBps}`);
+      if (m.accountMaxNotional1e6 || m.marketMaxNotional1e6) lines.push(`  - Caps: acct=${m.accountMaxNotional1e6} market=${m.marketMaxNotional1e6}`);
+      if (m.accountShareOfOiBps != null) lines.push(`  - ShareOfOI=${m.accountShareOfOiBps}`);
+      if (m.tierThresholds1e6 && m.tierImBps) lines.push(`  - Tiers: thresholds=${JSON.stringify(m.tierThresholds1e6)} imbps=${JSON.stringify(m.tierImBps)}`);
+      if (m.closeOnly != null) lines.push(`  - closeOnly=${m.closeOnly}`);
+      if (m.maxDeviationBps != null) lines.push(`  - maxDeviationBps=${m.maxDeviationBps}`);
+      if (m.pnlFeeShareBps != null) lines.push(`  - pnlFeeShareBps=${m.pnlFeeShareBps}`);
+      if (m.liqTargetBufferBps != null) lines.push(`  - liqTargetBufferBps=${m.liqTargetBufferBps}`);
+      if (m.imbalanceParams) lines.push(`  - imbalance: surchargeMax=${m.imbalanceParams.surchargeMaxBps} threshold=${m.imbalanceParams.thresholdBps}`);
+    }
     lines.push('');
   }
   if (summary.perpetuals.length) {
     lines.push('## Perpetuals Markets');
-    for (const m of summary.perpetuals) lines.push(`- **${m.symbol}**: market=\`${m.marketId}\`, collat=<${m.collat}>, cs=${m.contractSize}, fundInt=${m.fundingIntervalMs}, IM=${m.initialMarginBps}, MM=${m.maintenanceMarginBps}, LiqFee=${m.liquidationFeeBps}, KeeperBps=${m.keeperIncentiveBps}`);
+    const bySym = new Map<string, DeployedPerp[]>();
+    for (const p of summary.perpetuals) {
+      const arr = bySym.get(p.symbol) || [];
+      arr.push(p); bySym.set(p.symbol, arr);
+    }
+    for (const [sym, arr] of bySym.entries()) {
+      lines.push(`### ${sym} (${arr.length})`);
+      for (const m of arr) {
+        lines.push(`- market=\`${m.marketId}\``);
+        lines.push(`  - collat=<${m.collat}> cs=${m.contractSize} fundIntMs=${m.fundingIntervalMs} tick=${m.tickSize} lot=${m.lotSize} min=${m.minSize}`);
+        lines.push(`  - IM=${m.initialMarginBps} MM=${m.maintenanceMarginBps} LiqFee=${m.liquidationFeeBps} KeeperBps=${m.keeperIncentiveBps}`);
+        if (m.accountMaxNotional1e6 || m.marketMaxNotional1e6) lines.push(`  - Caps: acct=${m.accountMaxNotional1e6} market=${m.marketMaxNotional1e6}`);
+        if (m.accountShareOfOiBps != null) lines.push(`  - ShareOfOI=${m.accountShareOfOiBps}`);
+        if (m.tierThresholds1e6 && m.tierImBps) lines.push(`  - Tiers: thresholds=${JSON.stringify(m.tierThresholds1e6)} imbps=${JSON.stringify(m.tierImBps)}`);
+      }
+    }
     lines.push('');
   }
   if (summary.dexPools.length) {
     lines.push('## DEX Pools (DeepBook)');
-    for (const p of summary.dexPools) lines.push(`- pool=\`${p.poolId}\`, <${p.base}>/<${p.quote}>, tick=${p.tickSize}, lot=${p.lotSize}, min=${p.minSize}`);
+    for (const p of summary.dexPools) lines.push(`- pool=\`${p.poolId}\`, <${p.base}>/<${p.quote}>, tick=${p.tickSize}, lot=${p.lotSize}, min=${p.minSize}, registry=\`${p.registryId}\``);
     lines.push('');
   }
   if (summary.vaults.length) {
@@ -655,6 +979,9 @@ async function writeDeploymentMarkdown(summary: DeploymentSummary) {
 export async function main(): Promise<void> {
   const keypair = kpFromEnv();
   const client = new SuiClient({ url: getFullnodeUrl(deployConfig.network) });
+
+  logger.info(`Starting Unxversal deploy -> network=${deployConfig.network}`);
+  logger.info(`Config counts: options=${deployConfig.options?.length || 0}, futures=${deployConfig.futures?.length || 0}, gasFutures=${deployConfig.gasFutures?.length || 0}, perps=${deployConfig.perpetuals?.length || 0}, lending=${deployConfig.lendingMarkets?.length || 0}, dexPools=${deployConfig.dexPools?.length || 0}, vaults=${deployConfig.vaults?.length || 0}`);
 
   const summary: DeploymentSummary = {
     network: deployConfig.network,
@@ -712,6 +1039,7 @@ export async function main(): Promise<void> {
     }
   }
 
+  logger.info('Generating comprehensive deployment markdown');
   await writeDeploymentMarkdown(summary);
 
   logger.info('Deploy completed');

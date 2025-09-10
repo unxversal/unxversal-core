@@ -10,6 +10,7 @@ import { startDefaultMarketWatcher } from './lib/marketWatcher'
 import { useCurrentAccount } from '@mysten/dapp-kit'
 import styles from './components/AppShell.module.css'
 import { DexScreen } from './components/dex/DexScreen'
+import { SwapScreen } from './components/swap/SwapScreen'
 import { GasFuturesScreen } from './components/gas-futures/GasFuturesScreen'
 import { FuturesScreen } from './components/futures/FuturesScreen'
 import { PerpsScreen } from './components/perps/PerpsScreen'
@@ -20,13 +21,13 @@ import { OptionsScreen } from './components/options/OptionsScreen'
 import { BridgeScreen } from './components/bridge/BridgeScreen'
 import { createMockOptionsProvider } from './components/options/providers/mock'
 
-type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'bridge' | 'settings'
+type View = 'swap' | 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'bridge' | 'settings'
 
 function App() {
   const [network] = useState<'testnet' | 'mainnet'>(loadSettings().network)
   const [started, setStarted] = useState(false)
   const [surgeReady, setSurgeReady] = useState(false)
-  const [view, setView] = useState<View>('options')
+  const [view, setView] = useState<View>('swap')
   const account = useCurrentAccount()
 
   // Protocol status tracking
@@ -91,6 +92,9 @@ function App() {
   // Update document title based on current view
   useEffect(() => {
     switch (view) {
+      case 'swap':
+        document.title = 'Unxversal Swap';
+        break;
       case 'dex':
         // DEX screen handles its own title with price/pair info: PRICE | PAIR | Unxversal DEX
         break;
@@ -143,6 +147,7 @@ function App() {
           <span>Unxversal</span>
         </div>
         <nav className={styles.nav}>
+          <span className={view==='swap'?styles.active:''} onClick={() => setView('swap')}>Swap</span>
           <span className={view==='options'?styles.active:''} onClick={() => setView('options')}>Options</span>
           <span className={view==='gas'?styles.active:''} onClick={() => setView('gas')}>MIST Futures</span>
           <span className={view==='futures'?styles.active:''} onClick={() => setView('futures')}>Futures</span>
@@ -158,6 +163,7 @@ function App() {
         </div>
       </header>
       <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'lending' || view === 'staking' ? styles.mainDex : styles.main}>
+        {view === 'swap' && <SwapScreen network={network} />}
         {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'gas' && <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'lending' && <LendingScreen started={started} network={network} protocolStatus={protocolStatus} />}

@@ -1,7 +1,7 @@
 // Utility to generate options series specs for deploy config
 // Produces entries compatible with DeployConfig.options[*].series
 
-import type { SuiTypeTag } from './config.js';
+import type { SuiTypeTag } from './types.js';
 
 export type Interval = 'daily' | 'weekly' | 'biweekly' | 'monthly';
 
