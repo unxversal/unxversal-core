@@ -1,10 +1,10 @@
-/// Module: unxversal_ueth (Testnet token + USDU-priced faucet)
+/// Module: testtokens_ueth (Testnet token + USDU-priced faucet)
 /// ------------------------------------------------------------
 /// - Defines `UETH` (Unxversal Testnet ETH) with 6 decimals
 /// - Faucet mints `UETH` in exchange for `USDU` at the on-chain Pyth price
 /// - Price source: `ETH/USDC` from `unxversal::oracle::OracleRegistry`
 /// - Collected `USDU` is stored in an internal treasury and withdrawable by admins
-module unxversal::ueth {
+module testtokens::ueth {
     use sui::coin::{Self as coin, Coin, TreasuryCap};
     use sui::balance::{Self as balance, Balance};
     use sui::clock::Clock;
@@ -114,5 +114,6 @@ module unxversal::ueth {
     /// Constant symbol used for oracle lookup: "ETH/USDC"
     fun symbol_eth_usdc(): String { string::utf8(b"ETH/USDC") }
 }
+
 
 

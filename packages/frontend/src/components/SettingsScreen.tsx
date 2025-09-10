@@ -86,9 +86,6 @@ export function SettingsScreen({ onClose }: { onClose?: () => void }) {
           <label>Balance Manager Id</label>
           <input value={s.dex.balanceManagerId} onChange={(e) => setS({ ...s, dex: { ...s.dex, balanceManagerId: e.target.value } })} />
 
-          <label>Trade Proof Id</label>
-          <input value={s.dex.tradeProofId} onChange={(e) => setS({ ...s, dex: { ...s.dex, tradeProofId: e.target.value } })} />
-
           <label>Fee Config Id</label>
           <input value={s.dex.feeConfigId} onChange={(e) => setS({ ...s, dex: { ...s.dex, feeConfigId: e.target.value } })} />
 
@@ -108,6 +105,9 @@ export function SettingsScreen({ onClose }: { onClose?: () => void }) {
 
           <label>UNXV Staking Pool Id</label>
           <input value={s.staking?.poolId ?? ''} onChange={(e) => setS({ ...s, staking: { ...(s.staking ?? { poolId: '' }), poolId: e.target.value } })} />
+
+          <label>Rewards Object Id</label>
+          <input value={(s as any).contracts?.rewardsId ?? ''} onChange={(e) => setS({ ...s, contracts: { ...s.contracts as any, rewardsId: e.target.value } as any })} />
         </div>
       </div>
 

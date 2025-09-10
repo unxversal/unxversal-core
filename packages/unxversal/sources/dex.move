@@ -294,6 +294,8 @@ module unxversal::dex {
         tick_size: u64,
         lot_size: u64,
         min_size: u64,
+        /// DeepBook creation fee in DEEP; must equal deepbook::constants::pool_creation_fee()
+        creation_fee_deep: Coin<DEEP>,
         staking_pool: &mut StakingPool,
         clock: &Clock,
         ctx: &mut TxContext,
@@ -310,8 +312,8 @@ module unxversal::dex {
         // refund remainder
         let change = fee_payment_unxv;
         transfer::public_transfer(change, ctx.sender());
-        // create DeepBook pool (DeepBook collects its own DEEP creation fee internally)
-        db_pool::create_permissionless_pool<Base, Quote>(registry, tick_size, lot_size, min_size, coin::zero<DEEP>(ctx), ctx)
+        // create DeepBook pool and pay DEEP creation fee
+        db_pool::create_permissionless_pool<Base, Quote>(registry, tick_size, lot_size, min_size, creation_fee_deep, ctx)
     }
 
     /// Admin-only pool creation that does not require paying the UNXV creation fee.
@@ -322,10 +324,12 @@ module unxversal::dex {
         tick_size: u64,
         lot_size: u64,
         min_size: u64,
+        /// DeepBook creation fee in DEEP; must equal deepbook::constants::pool_creation_fee()
+        creation_fee_deep: Coin<DEEP>,
         ctx: &mut TxContext,
     ): ID {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        db_pool::create_permissionless_pool<Base, Quote>(registry, tick_size, lot_size, min_size, coin::zero<DEEP>(ctx), ctx)
+        db_pool::create_permissionless_pool<Base, Quote>(registry, tick_size, lot_size, min_size, creation_fee_deep, ctx)
     }
 
     /// Swap exact base for quote with Unxversal protocol fee on input. Can accept UNXV for discounted fee and split.

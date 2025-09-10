@@ -172,6 +172,9 @@ export type DeployConfig = {
     quote: SuiTypeTag;
     adminRegistryId?: string;   // defaults to global adminRegistryId
     tickSize: number; lotSize: number; minSize: number;
+    // Optional: DEEP creation fee coin source and amount (defaults to 600)
+    deepCreationFeeCoinId?: string;
+    deepCreationFeeAmount?: number;
   }>;
   vaults?: Array<{
     asset: SuiTypeTag;

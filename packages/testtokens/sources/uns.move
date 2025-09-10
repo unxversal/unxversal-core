@@ -1,6 +1,6 @@
-/// Module: unxversal_uns (Testnet token + USDU-priced faucet)
+/// Module: testtokens_uns (Testnet token + USDU-priced faucet)
 /// - Symbol: UNS, 6 decimals. Price from Pyth symbol "NS/USDC".
-module unxversal::uns {
+module testtokens::uns {
     use sui::coin::{Self as coin, Coin, TreasuryCap};
     use sui::balance::{Self as balance, Balance};
     use sui::clock::Clock;

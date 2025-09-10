@@ -25,6 +25,7 @@ module unxversal::fees {
     const E_NOT_ADMIN: u64 = 1;
     const E_SPLIT_INVALID: u64 = 2;
     const E_ZERO_AMOUNT: u64 = 3;
+    const E_INSUFFICIENT_FUNDS: u64 = 4;
 
     /// Basis points denominator
     const BPS_DENOM: u64 = 10_000;
@@ -121,6 +122,15 @@ module unxversal::fees {
         stakers_unxv: u64,
         treasury_unxv: u64,
         burn_unxv: u64,
+        timestamp_ms: u64,
+    }
+
+    /// Emitted when admin withdraws fees from the FeeVault
+    public struct FeeWithdrawn has copy, drop {
+        who: address,
+        to: address,
+        asset: TypeName,
+        amount: u64,
         timestamp_ms: u64,
     }
 
@@ -478,6 +488,96 @@ module unxversal::fees {
         let bal = coin::into_balance(coin_in);
         if (bag::contains(&vault.store, key)) { let b: &mut Balance<T> = &mut vault.store[key]; b.join(bal); } else { vault.store.add(key, bal); };
     }
+
+    /***********************
+     * Admin withdrawals
+     ***********************/
+    /// View: available balance for asset T in FeeVault
+    public fun fee_available<T>(vault: &FeeVault): u64 {
+        let key = FeeKey<T> {};
+        if (bag::contains(&vault.store, key)) { let b: &Balance<T> = &vault.store[key]; balance::value(b) } else { 0 }
+    }
+
+    /// Admin: withdraw a specific amount of asset T from FeeVault to a recipient address
+    public fun admin_withdraw_generic<T>(
+        reg_admin: &AdminRegistry,
+        vault: &mut FeeVault,
+        amount: u64,
+        to: address,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        let key = FeeKey<T> {};
+        assert!(bag::contains(&vault.store, key), E_ZERO_AMOUNT);
+        let b: &mut Balance<T> = &mut vault.store[key];
+        let avail = balance::value(b);
+        assert!(avail >= amount, E_INSUFFICIENT_FUNDS);
+        let part = balance::split(b, amount);
+        let c = coin::from_balance(part, ctx);
+        transfer::public_transfer(c, to);
+        event::emit(FeeWithdrawn { who: ctx.sender(), to, asset: type_name::get<T>(), amount, timestamp_ms: sui::clock::timestamp_ms(clock) });
+    }
+
+    /// Admin: withdraw the full available balance of asset T from FeeVault to a recipient address
+    public fun admin_withdraw_generic_all<T>(
+        reg_admin: &AdminRegistry,
+        vault: &mut FeeVault,
+        to: address,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        let key = FeeKey<T> {};
+        assert!(bag::contains(&vault.store, key), E_ZERO_AMOUNT);
+        let b: &mut Balance<T> = &mut vault.store[key];
+        let amt = balance::value(b);
+        assert!(amt > 0, E_ZERO_AMOUNT);
+        let part = balance::split(b, amt);
+        let c = coin::from_balance(part, ctx);
+        transfer::public_transfer(c, to);
+        event::emit(FeeWithdrawn { who: ctx.sender(), to, asset: type_name::get<T>(), amount: amt, timestamp_ms: sui::clock::timestamp_ms(clock) });
+    }
+
+    /// Admin: convenience to withdraw asset T to FeeConfig.treasury
+    public fun admin_withdraw_generic_to_treasury<T>(
+        reg_admin: &AdminRegistry,
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        amount: u64,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ) { admin_withdraw_generic<T>(reg_admin, vault, amount, cfg.treasury, clock, ctx) }
+
+    /// Admin: withdraw UNXV accumulated in burn bucket to a recipient (e.g., treasury)
+    public fun admin_withdraw_unxv_burn_to(
+        reg_admin: &AdminRegistry,
+        vault: &mut FeeVault,
+        amount: u64,
+        to: address,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        assert!(amount > 0, E_ZERO_AMOUNT);
+        let avail = balance::value(&vault.unxv_to_burn);
+        assert!(avail >= amount, E_INSUFFICIENT_FUNDS);
+        let bal_out = balance::split(&mut vault.unxv_to_burn, amount);
+        let c = coin::from_balance(bal_out, ctx);
+        transfer::public_transfer(c, to);
+        event::emit(FeeWithdrawn { who: ctx.sender(), to, asset: type_name::get<UNXV>(), amount, timestamp_ms: sui::clock::timestamp_ms(clock) });
+    }
+
+    /// Admin: convenience to withdraw UNXV burn bucket to FeeConfig.treasury
+    public fun admin_withdraw_unxv_burn_to_treasury(
+        reg_admin: &AdminRegistry,
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        amount: u64,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ) { admin_withdraw_unxv_burn_to(reg_admin, vault, amount, cfg.treasury, clock, ctx) }
 
     #[test_only]
     public fun new_fee_config_for_testing(ctx: &mut TxContext): FeeConfig {

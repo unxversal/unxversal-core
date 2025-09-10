@@ -32,12 +32,11 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
   const baseType = s.dex.baseType;
   const quoteType = s.dex.quoteType;
   const balanceManagerId = s.dex.balanceManagerId;
-  const tradeProofId = s.dex.tradeProofId;
   const feeConfigId = s.dex.feeConfigId;
   const feeVaultId = s.dex.feeVaultId;
   const stakingPoolId = s.staking?.poolId ?? '';
 
-  const disabled = !acct?.address || !balanceManagerId || !tradeProofId || !feeConfigId || !feeVaultId || submitting;
+  const disabled = !acct?.address || !balanceManagerId || !feeConfigId || !feeVaultId || submitting;
 
   const [baseSym, quoteSym] = ((): [string, string] => {
     const src = pool.includes('-') ? pool : pool.replace(/_/g, '-');
@@ -113,7 +112,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
     try {
       let tx: Transaction;
       const common = {
-        baseType, quoteType, poolId: pool, balanceManagerId, tradeProofId, feeConfigId, feeVaultId,
+        baseType, quoteType, poolId: pool, balanceManagerId, feeConfigId, feeVaultId,
       } as const;
       const isBid = side === 'buy';
       if (mode === 'market') {

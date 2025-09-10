@@ -1,6 +1,6 @@
-/// Module: unxversal_ubtc (Testnet token + USDU-priced faucet)
+/// Module: testtokens_ubtc (Testnet token + USDU-priced faucet)
 /// - Symbol: UBTC, 6 decimals. Price from Pyth symbol "BTC/USDC".
-module unxversal::ubtc {
+module testtokens::ubtc {
     use sui::coin::{Self as coin, Coin, TreasuryCap};
     use sui::balance::{Self as balance, Balance};
     use sui::clock::Clock;

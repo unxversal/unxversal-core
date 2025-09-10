@@ -34,6 +34,8 @@ export function buildTestnetDexPools(): NonNullable<DeployConfig['dexPools']> {
         tickSize: cfg.tickSize,
         lotSize: cfg.lotSize,
         minSize: cfg.minSize,
+        deepCreationFeeCoinId: '0x36dbef866a1d62bf7328989a10fb2f07d769f4ee587c0de4a0a256e57e0a58a8',
+        deepCreationFeeAmount: 600,
       } as const;
     });
 }

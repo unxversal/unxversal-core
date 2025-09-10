@@ -427,6 +427,53 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
         liqTargetBufferBps: (f as any).liqTargetBufferBps,
         imbalanceParams: (f as any).imbalanceParams,
       });
+      // Apply post-init admin knobs and risk controls for newly created market
+      if (id) {
+        const fc = f as any;
+        if (typeof fc.closeOnly === 'boolean') {
+          const t1 = new Transaction();
+          t1.moveCall({ target: `${cfg.pkgId}::futures::set_close_only`, typeArguments: [f.collat], arguments: [t1.object(cfg.adminRegistryId), t1.object(id), t1.pure.bool(fc.closeOnly)] });
+          await execTx(client, t1, keypair, `futures.set_close_only ${f.symbol}`);
+        }
+        if (typeof fc.maxDeviationBps === 'number') {
+          const t2 = new Transaction();
+          t2.moveCall({ target: `${cfg.pkgId}::futures::set_price_deviation_bps`, typeArguments: [f.collat], arguments: [t2.object(cfg.adminRegistryId), t2.object(id), t2.pure.u64(fc.maxDeviationBps)] });
+          await execTx(client, t2, keypair, `futures.set_price_deviation_bps ${f.symbol}`);
+        }
+        if (typeof fc.pnlFeeShareBps === 'number') {
+          const t3 = new Transaction();
+          t3.moveCall({ target: `${cfg.pkgId}::futures::set_pnl_fee_share_bps`, typeArguments: [f.collat], arguments: [t3.object(cfg.adminRegistryId), t3.object(id), t3.pure.u64(fc.pnlFeeShareBps)] });
+          await execTx(client, t3, keypair, `futures.set_pnl_fee_share_bps ${f.symbol}`);
+        }
+        if (typeof fc.liqTargetBufferBps === 'number') {
+          const t4 = new Transaction();
+          t4.moveCall({ target: `${cfg.pkgId}::futures::set_liq_target_buffer_bps`, typeArguments: [f.collat], arguments: [t4.object(cfg.adminRegistryId), t4.object(id), t4.pure.u64(fc.liqTargetBufferBps)] });
+          await execTx(client, t4, keypair, `futures.set_liq_target_buffer_bps ${f.symbol}`);
+        }
+        if (fc.imbalanceParams) {
+          const p = fc.imbalanceParams as { surchargeMaxBps: number; thresholdBps: number };
+          const t5 = new Transaction();
+          t5.moveCall({ target: `${cfg.pkgId}::futures::set_imbalance_params`, typeArguments: [f.collat], arguments: [t5.object(cfg.adminRegistryId), t5.object(id), t5.pure.u64(p.surchargeMaxBps), t5.pure.u64(p.thresholdBps)] });
+          await execTx(client, t5, keypair, `futures.set_imbalance_params ${f.symbol}`);
+        }
+        if (fc.accountMaxNotional1e6 || fc.marketMaxNotional1e6) {
+          const t6 = new Transaction();
+          t6.moveCall({ target: `${cfg.pkgId}::futures::set_notional_caps`, typeArguments: [f.collat], arguments: [t6.object(cfg.adminRegistryId), t6.object(id), t6.pure.u128(BigInt(fc.accountMaxNotional1e6 || '0')), t6.pure.u128(BigInt(fc.marketMaxNotional1e6 || '0'))] as any });
+          await execTx(client, t6, keypair, `futures.set_notional_caps ${f.symbol}`);
+        }
+        if (typeof fc.accountShareOfOiBps === 'number') {
+          const t7 = new Transaction();
+          t7.moveCall({ target: `${cfg.pkgId}::futures::set_share_of_oi_bps`, typeArguments: [f.collat], arguments: [t7.object(cfg.adminRegistryId), t7.object(id), t7.pure.u64(fc.accountShareOfOiBps)] });
+          await execTx(client, t7, keypair, `futures.set_share_of_oi_bps ${f.symbol}`);
+        }
+        if (fc.tierThresholds1e6 && fc.tierImBps) {
+          const thresholds = fc.tierThresholds1e6 as number[];
+          const imbps = fc.tierImBps as number[];
+          const t8 = new Transaction();
+          t8.moveCall({ target: `${cfg.pkgId}::futures::set_risk_tiers`, typeArguments: [f.collat], arguments: [t8.object(cfg.adminRegistryId), t8.object(id), t8.pure.vector('u64', thresholds), t8.pure.vector('u64', imbps)] as any });
+          await execTx(client, t8, keypair, `futures.set_risk_tiers ${f.symbol}`);
+        }
+      }
     } else {
       summary.futures.push({
         marketId: f.marketId,
@@ -559,6 +606,53 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
         liqTargetBufferBps: (g as any).liqTargetBufferBps,
         imbalanceParams: (g as any).imbalanceParams,
       });
+      // Apply post-init admin knobs and risk controls for newly created gas futures market
+      if (id) {
+        const gc = g as any;
+        if (typeof gc.closeOnly === 'boolean') {
+          const t1 = new Transaction();
+          t1.moveCall({ target: `${cfg.pkgId}::gas_futures::set_close_only`, typeArguments: [g.collat], arguments: [t1.object(cfg.adminRegistryId), t1.object(id), t1.pure.bool(gc.closeOnly)] });
+          await execTx(client, t1, keypair, `gas_futures.set_close_only`);
+        }
+        if (typeof gc.maxDeviationBps === 'number') {
+          const t2 = new Transaction();
+          t2.moveCall({ target: `${cfg.pkgId}::gas_futures::set_price_deviation_bps`, typeArguments: [g.collat], arguments: [t2.object(cfg.adminRegistryId), t2.object(id), t2.pure.u64(gc.maxDeviationBps)] });
+          await execTx(client, t2, keypair, `gas_futures.set_price_deviation_bps`);
+        }
+        if (typeof gc.pnlFeeShareBps === 'number') {
+          const t3 = new Transaction();
+          t3.moveCall({ target: `${cfg.pkgId}::gas_futures::set_pnl_fee_share_bps`, typeArguments: [g.collat], arguments: [t3.object(cfg.adminRegistryId), t3.object(id), t3.pure.u64(gc.pnlFeeShareBps)] });
+          await execTx(client, t3, keypair, `gas_futures.set_pnl_fee_share_bps`);
+        }
+        if (typeof gc.liqTargetBufferBps === 'number') {
+          const t4 = new Transaction();
+          t4.moveCall({ target: `${cfg.pkgId}::gas_futures::set_liq_target_buffer_bps`, typeArguments: [g.collat], arguments: [t4.object(cfg.adminRegistryId), t4.object(id), t4.pure.u64(gc.liqTargetBufferBps)] });
+          await execTx(client, t4, keypair, `gas_futures.set_liq_target_buffer_bps`);
+        }
+        if (gc.imbalanceParams) {
+          const p = gc.imbalanceParams as { surchargeMaxBps: number; thresholdBps: number };
+          const t5 = new Transaction();
+          t5.moveCall({ target: `${cfg.pkgId}::gas_futures::set_imbalance_params`, typeArguments: [g.collat], arguments: [t5.object(cfg.adminRegistryId), t5.object(id), t5.pure.u64(p.surchargeMaxBps), t5.pure.u64(p.thresholdBps)] });
+          await execTx(client, t5, keypair, `gas_futures.set_imbalance_params`);
+        }
+        if (gc.accountMaxNotional1e6 || gc.marketMaxNotional1e6) {
+          const t6 = new Transaction();
+          t6.moveCall({ target: `${cfg.pkgId}::gas_futures::set_notional_caps`, typeArguments: [g.collat], arguments: [t6.object(cfg.adminRegistryId), t6.object(id), t6.pure.u128(BigInt(gc.accountMaxNotional1e6 || '0')), t6.pure.u128(BigInt(gc.marketMaxNotional1e6 || '0'))] as any });
+          await execTx(client, t6, keypair, 'gas_futures.set_notional_caps');
+        }
+        if (typeof gc.accountShareOfOiBps === 'number') {
+          const t7 = new Transaction();
+          t7.moveCall({ target: `${cfg.pkgId}::gas_futures::set_share_of_oi_bps`, typeArguments: [g.collat], arguments: [t7.object(cfg.adminRegistryId), t7.object(id), t7.pure.u64(gc.accountShareOfOiBps)] });
+          await execTx(client, t7, keypair, 'gas_futures.set_share_of_oi_bps');
+        }
+        if (gc.tierThresholds1e6 && gc.tierImBps) {
+          const thresholds = gc.tierThresholds1e6 as number[];
+          const imbps = gc.tierImBps as number[];
+          const t8 = new Transaction();
+          t8.moveCall({ target: `${cfg.pkgId}::gas_futures::set_risk_tiers`, typeArguments: [g.collat], arguments: [t8.object(cfg.adminRegistryId), t8.object(id), t8.pure.vector('u64', thresholds), t8.pure.vector('u64', imbps)] as any });
+          await execTx(client, t8, keypair, 'gas_futures.set_risk_tiers');
+        }
+      }
     } else {
       summary.gasFutures.push({
         marketId: g.marketId,
@@ -686,6 +780,27 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
         tierThresholds1e6: (p as any).tierThresholds1e6,
         tierImBps: (p as any).tierImBps,
       });
+      // Apply post-init risk controls for newly created perps market
+      if (id) {
+        const pc = p as any;
+        if (pc.accountMaxNotional1e6 || pc.marketMaxNotional1e6) {
+          const t1 = new Transaction();
+          t1.moveCall({ target: `${cfg.pkgId}::perpetuals::set_notional_caps`, typeArguments: [p.collat], arguments: [t1.object(cfg.adminRegistryId), t1.object(id), t1.pure.u128(BigInt(pc.accountMaxNotional1e6 || '0')), t1.pure.u128(BigInt(pc.marketMaxNotional1e6 || '0'))] as any });
+          await execTx(client, t1, keypair, `perpetuals.set_notional_caps ${p.symbol}`);
+        }
+        if (typeof pc.accountShareOfOiBps === 'number') {
+          const t2 = new Transaction();
+          t2.moveCall({ target: `${cfg.pkgId}::perpetuals::set_share_of_oi_bps`, typeArguments: [p.collat], arguments: [t2.object(cfg.adminRegistryId), t2.object(id), t2.pure.u64(pc.accountShareOfOiBps)] });
+          await execTx(client, t2, keypair, `perpetuals.set_share_of_oi_bps ${p.symbol}`);
+        }
+        if (pc.tierThresholds1e6 && pc.tierImBps) {
+          const thresholds = pc.tierThresholds1e6 as number[];
+          const imbps = pc.tierImBps as number[];
+          const t3 = new Transaction();
+          t3.moveCall({ target: `${cfg.pkgId}::perpetuals::set_risk_tiers`, typeArguments: [p.collat], arguments: [t3.object(cfg.adminRegistryId), t3.object(id), t3.pure.vector('u64', thresholds), t3.pure.vector('u64', imbps)] as any });
+          await execTx(client, t3, keypair, `perpetuals.set_risk_tiers ${p.symbol}`);
+        }
+      }
     } else {
       summary.perpetuals.push({
         marketId: p.marketId,
@@ -788,6 +903,13 @@ async function deployDexPools(client: SuiClient, cfg: DeployConfig, keypair: Ed2
   for (const d of cfg.dexPools) {
     const tx = new Transaction();
     const adminId = d.adminRegistryId ?? cfg.adminRegistryId;
+    // Prepare DEEP creation fee coin: split exact amount from provided DEEP coin id
+    const deepFeeAmount = (d as any).deepCreationFeeAmount ?? 600;
+    const deepFeeCoinId = (d as any).deepCreationFeeCoinId as string | undefined;
+    if (!deepFeeCoinId) {
+      throw new Error(`Missing deepCreationFeeCoinId for ${String(d.base)}/${String(d.quote)}. Provide a DEEP coin id via dexPools[*].deepCreationFeeCoinId or env.`);
+    }
+    const [deepFeeCoin] = tx.splitCoins(tx.object(deepFeeCoinId), [tx.pure.u64(deepFeeAmount)]);
     tx.moveCall({
       target: `${cfg.pkgId}::dex::create_pool_admin`,
       typeArguments: [d.base, d.quote],
@@ -797,6 +919,7 @@ async function deployDexPools(client: SuiClient, cfg: DeployConfig, keypair: Ed2
         tx.pure.u64(d.tickSize),
         tx.pure.u64(d.lotSize),
         tx.pure.u64(d.minSize),
+        deepFeeCoin,
       ],
     });
     const res = await execTx(client, tx, keypair, 'dex.create_permissionless_pool');

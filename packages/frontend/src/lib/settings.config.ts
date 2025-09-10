@@ -17,7 +17,6 @@ export type DexSettings = {
   baseType: string;
   quoteType: string;
   balanceManagerId: string;
-  tradeProofId: string;
   feeConfigId: string;
   feeVaultId: string;
 };
@@ -346,9 +345,8 @@ export const defaultSettings: AppSettings = {
     deepbookIndexerUrl: 'https://api.naviprotocol.io',
     poolId: 'SUI-USDC',
     baseType: '0x2::sui::SUI',
-    quoteType: '0x2::sui::SUI',
+    quoteType: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
     balanceManagerId: '',
-    tradeProofId: '',
     feeConfigId: '',
     feeVaultId: '',
   },
