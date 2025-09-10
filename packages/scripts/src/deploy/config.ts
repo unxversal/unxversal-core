@@ -470,6 +470,28 @@ const perps_all: PerpSpec[] = DERIVATIVE_SYMBOLS.map((sym) => {
   });
 });
 
+// --- DEX pools ---------------------------------------------------------------
+// Map derivative symbol -> existing DeepBook pool id (skip creation for these)
+const EXISTING_DEX_POOL_IDS: Partial<Record<string, string>> = {
+  // 'SUI/USDC': '0x...',
+  // 'ETH/USDC': '0x...',
+};
+
+const dexPoolsAll = DERIVATIVE_SYMBOLS
+  .filter((symbol) => !EXISTING_DEX_POOL_IDS[symbol])
+  .map((symbol) => {
+    const cfg = DERIVATIVE_TYPE_TAGS[symbol];
+    if (!cfg) throw new Error(`Missing DERIVATIVE_TYPE_TAGS for ${symbol}`);
+    return {
+      registryId: "0x7c256edbda983a2cd6f946655f4bf3f00a41043993781f8674a7046e8c0e11d1",
+      base: cfg.base,
+      quote: cfg.quote,
+      tickSize: cfg.tickSize,
+      lotSize: cfg.lotSize,
+      minSize: cfg.minSize,
+    } as const;
+  });
+
 export type DeployConfig = {
   network: NetworkName;
   pkgId: string;
@@ -617,11 +639,7 @@ export type DeployConfig = {
     registryId: string;
     base: SuiTypeTag;
     quote: SuiTypeTag;
-    feeConfigId: string;
-    feeVaultId: string;
-    stakingPoolId: string;
-    unxvFeeCoinId?: string;     // optional: if omitted, admin path is used
-    adminRegistryId?: string;   // required when using admin path
+    adminRegistryId?: string;   // defaults to global adminRegistryId
     tickSize: number; lotSize: number; minSize: number;
   }>;
   vaults?: Array<{
@@ -640,8 +658,8 @@ export const deployConfig: DeployConfig = {
   usduFaucetId: '',
   oracleRegistryId: '',
   additionalAdmins: [
-    "0x24945081376e008971b437092ebd3de139bb478fc9501c1101fed02f3a2f4fb0",
-    "0x283d357de0dd9478563cf440227100f381cea0bbc8d84110c6d2a55483b509a2"
+    process.env.UNXV_TWO ?? "",
+    process.env.UNXV_THREE ?? ""
   ],
   feeParams: undefined,
   feeTiers: undefined,
@@ -945,6 +963,8 @@ export const deployConfig: DeployConfig = {
   perpetuals: [
     ...perps_all,
   ],
-  dexPools: [],
+  dexPools: [
+    ...dexPoolsAll,
+  ],
   vaults: [],
 };

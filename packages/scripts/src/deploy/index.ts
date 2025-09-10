@@ -11,7 +11,7 @@ type DeployedOptions = { marketId: string; base: string; quote: string; series: 
 type DeployedFutures = { marketId: string; collat: string; symbol: string; contractSize: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number; keeperIncentiveBps: number };
 type DeployedGasFutures = { marketId: string; collat: string; expiryMs: number; contractSize: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number; keeperIncentiveBps: number };
 type DeployedPerp = { marketId: string; collat: string; symbol: string; contractSize: number; fundingIntervalMs: number; initialMarginBps: number; maintenanceMarginBps: number; liquidationFeeBps: number; keeperIncentiveBps: number };
-type DeployedDexPool = { poolId: string; base: string; quote: string; tickSize: number; lotSize: number; minSize: number; registryId: string; feeConfigId: string; feeVaultId: string; stakingPoolId: string };
+type DeployedDexPool = { poolId: string; base: string; quote: string; tickSize: number; lotSize: number; minSize: number; registryId: string };
 
 type DeploymentSummary = {
   network: string;
@@ -527,41 +527,23 @@ async function deployDexPools(client: SuiClient, cfg: DeployConfig, keypair: Ed2
   if (!cfg.dexPools?.length) return;
   for (const d of cfg.dexPools) {
     const tx = new Transaction();
-    if (d.unxvFeeCoinId) {
-      tx.moveCall({
-        target: `${cfg.pkgId}::dex::create_permissionless_pool`,
-        typeArguments: [d.base, d.quote],
-        arguments: [
-          tx.object(d.registryId),
-          tx.object(d.feeConfigId),
-          tx.object(d.feeVaultId),
-          tx.object(d.unxvFeeCoinId),
-          tx.pure.u64(d.tickSize),
-          tx.pure.u64(d.lotSize),
-          tx.pure.u64(d.minSize),
-          tx.object(d.stakingPoolId),
-          tx.object('0x6'),
-        ],
-      });
-    } else {
-      const adminId = d.adminRegistryId ?? cfg.adminRegistryId;
-      tx.moveCall({
-        target: `${cfg.pkgId}::dex::create_pool_admin`,
-        typeArguments: [d.base, d.quote],
-        arguments: [
-          tx.object(adminId),
-          tx.object(d.registryId),
-          tx.pure.u64(d.tickSize),
-          tx.pure.u64(d.lotSize),
-          tx.pure.u64(d.minSize),
-        ],
-      });
-    }
+    const adminId = d.adminRegistryId ?? cfg.adminRegistryId;
+    tx.moveCall({
+      target: `${cfg.pkgId}::dex::create_pool_admin`,
+      typeArguments: [d.base, d.quote],
+      arguments: [
+        tx.object(adminId),
+        tx.object(d.registryId),
+        tx.pure.u64(d.tickSize),
+        tx.pure.u64(d.lotSize),
+        tx.pure.u64(d.minSize),
+      ],
+    });
     const res = await execTx(client, tx, keypair, 'dex.create_permissionless_pool');
     accumulateFromRes(res, summary);
     const poolId = extractCreatedId(res, 'deepbook::pool::Pool<') || '';
     if (poolId) {
-      summary.dexPools.push({ poolId, base: d.base, quote: d.quote, tickSize: d.tickSize, lotSize: d.lotSize, minSize: d.minSize, registryId: d.registryId, feeConfigId: d.feeConfigId, feeVaultId: d.feeVaultId, stakingPoolId: d.stakingPoolId });
+      summary.dexPools.push({ poolId, base: d.base, quote: d.quote, tickSize: d.tickSize, lotSize: d.lotSize, minSize: d.minSize, registryId: d.registryId });
     }
   }
 }
