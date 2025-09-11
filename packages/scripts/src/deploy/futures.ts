@@ -14,14 +14,16 @@ function buildMainnetFuturesForSymbol(symbol: string, years: number, interval: I
   return generateFuturesMarkets({
     baseSymbol: symbol,
     collat: cfg.quote,
-    contractSize: cfg.lotSize,
+    // Futures contract size is independent from orderbook lot size; use 1e6 quote units per contract by default
+    contractSize: 1_000_000,
     initialMarginBps: risk.initialMarginBps,
     maintenanceMarginBps: risk.maintenanceMarginBps,
     liquidationFeeBps: risk.liquidationFeeBps,
     keeperIncentiveBps: risk.keeperIncentiveBps,
     tickSize: cfg.tickSize,
-    lotSize: cfg.lotSize,
-    minSize: cfg.minSize,
+    // Derivatives trade in contract counts; enforce lot/min = 1 contract
+    lotSize: 1,
+    minSize: 1,
     years,
     interval,
     expiryHourUTC: opts?.expiryHourUTC ?? 0,
@@ -73,14 +75,16 @@ function buildTestnetFuturesForSymbol(symbol: string, years: number, interval: I
   return generateFuturesMarkets({
     baseSymbol: symbol,
     collat: cfg.quote,
-    contractSize: cfg.lotSize,
+    // Futures contract size independent of mapping lot size; use 1e6 quote units per contract by default
+    contractSize: 1_000_000,
     initialMarginBps: risk.initialMarginBps,
     maintenanceMarginBps: risk.maintenanceMarginBps,
     liquidationFeeBps: risk.liquidationFeeBps,
     keeperIncentiveBps: risk.keeperIncentiveBps,
     tickSize: cfg.tickSize,
-    lotSize: cfg.lotSize,
-    minSize: cfg.minSize,
+    // Derivatives trade in contract counts; enforce lot/min = 1 contract
+    lotSize: 1,
+    minSize: 1,
     years,
     interval,
     expiryHourUTC: opts?.expiryHourUTC ?? 0,

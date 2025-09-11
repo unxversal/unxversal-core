@@ -7,7 +7,7 @@ import { buildLendingMarketsMainnet, buildLendingMarketsTestnet } from './lendin
 import { MAINNET_ORACLE_FEEDS, TESTNET_ORACLE_FEEDS, ORACLE_MAX_AGE_SEC } from './oracle.js';
 import { buildMainnetDexPools, buildTestnetDexPools } from './dex.js';
 import { buildVaults } from './vaults.js';
-import { TIER_PARAMS } from './markets.js';
+import { TIER_PARAMS, TESTNET_DERIVATIVE_PERP_FUT_SPECS } from './markets.js';
 import type { SuiTypeTag } from './types.js';
 import { generateExpiriesMs } from '../utils/series.js';
 
@@ -24,25 +24,21 @@ const EXTRA_DERIVATIVE_SYMBOLS_TESTNET = [
 
 // Testnet USDC type tag used for derivatives collateral
 const USDC_TESTNET_TYPE: SuiTypeTag = '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC';
-const DEFAULT_TICK_SIZE = 10_000;      // $0.01 in 1e6 scale
-const DEFAULT_CONTRACT_SIZE = 1_000_000; // 1 contract ~ $price notional
-const DEFAULT_LOT_SIZE = 1;            // 1 contract step
-const DEFAULT_MIN_SIZE = 1;            // minimum 1 contract
-
 const EXTRA_PERPS_TESTNET = EXTRA_DERIVATIVE_SYMBOLS_TESTNET.map((symbol) => {
   const risk = TIER_PARAMS['C'];
+  const spec = TESTNET_DERIVATIVE_PERP_FUT_SPECS[symbol] ?? { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 };
   return {
     collat: USDC_TESTNET_TYPE,
     symbol,
-    contractSize: DEFAULT_CONTRACT_SIZE,
+    contractSize: spec.contractSize,
     fundingIntervalMs: 3_600_000,
     initialMarginBps: risk.initialMarginBps,
     maintenanceMarginBps: risk.maintenanceMarginBps,
     liquidationFeeBps: risk.liquidationFeeBps,
     keeperIncentiveBps: risk.keeperIncentiveBps,
-    tickSize: DEFAULT_TICK_SIZE,
-    lotSize: DEFAULT_LOT_SIZE,
-    minSize: DEFAULT_MIN_SIZE,
+    tickSize: spec.tickSize,
+    lotSize: spec.lotSize,
+    minSize: spec.minSize,
     accountMaxNotional1e6: risk.accountMaxNotional1e6,
     marketMaxNotional1e6: risk.marketMaxNotional1e6,
     accountShareOfOiBps: risk.accountShareOfOiBps,
@@ -55,19 +51,20 @@ const EXTRA_FUTURES_TESTNET: NonNullable<DeployConfig['futures']> = (() => {
   const risk = TIER_PARAMS['C'];
   const out: NonNullable<DeployConfig['futures']> = [];
   for (const symbol of EXTRA_DERIVATIVE_SYMBOLS_TESTNET) {
+    const spec = TESTNET_DERIVATIVE_PERP_FUT_SPECS[symbol] ?? { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 };
     for (const expiryMs of expiries) {
       out.push({
         collat: USDC_TESTNET_TYPE,
         symbol,
         expiryMs,
-        contractSize: DEFAULT_CONTRACT_SIZE,
+        contractSize: spec.contractSize,
         initialMarginBps: risk.initialMarginBps,
         maintenanceMarginBps: risk.maintenanceMarginBps,
         liquidationFeeBps: risk.liquidationFeeBps,
         keeperIncentiveBps: risk.keeperIncentiveBps,
-        tickSize: DEFAULT_TICK_SIZE,
-        lotSize: DEFAULT_LOT_SIZE,
-        minSize: DEFAULT_MIN_SIZE,
+        tickSize: spec.tickSize,
+        lotSize: spec.lotSize,
+        minSize: spec.minSize,
         accountMaxNotional1e6: risk.accountMaxNotional1e6,
         marketMaxNotional1e6: risk.marketMaxNotional1e6,
         accountShareOfOiBps: risk.accountShareOfOiBps,

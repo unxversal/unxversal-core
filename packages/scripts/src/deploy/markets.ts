@@ -432,3 +432,50 @@ export const TIER_PARAMS: Record<Tier, RiskParams> = {
 };
 
 
+
+// Perps/Futures specs per symbol for testnet (contract size and orderbook params in contracts)
+// contractSize: quote units per 1 contract when price is 1e6 scale
+// tickSize: price tick in 1e6 quote units (e.g., 10_000 => $0.01)
+// lotSize/minSize: minimum number of contracts (usually 1)
+export const TESTNET_DERIVATIVE_PERP_FUT_SPECS: Record<string, {
+  contractSize: number;
+  tickSize: number;
+  lotSize: number;
+  minSize: number;
+}> = {
+  'HYPE/USDC':   { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'PUMP/USDC':   { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'ENA/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'WLD/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'DOGE/USDC':   { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'WLFI/USDC':   { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'XRP/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'LINK/USDC':   { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'LTC/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'LAUNCHCOIN/USDC': { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'AAVE/USDC':   { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'ARB/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'KAITO/USDC':  { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'IP/USDC':     { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'MNT/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'UNI/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'PYTH/USDC':   { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'TIA/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'TAO/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'NEAR/USDC':   { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'TRX/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'XLM/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'DOT/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'XMR/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'ICP/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'FIL/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'OP/USDC':     { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'INJ/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'PAXG/USDC':   { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'LDO/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'CAKE/USDC':   { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'RENDER/USDC': { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'XAUt/USDC':   { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'IMX/USDC':    { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+  'PI/USDC':     { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 },
+};

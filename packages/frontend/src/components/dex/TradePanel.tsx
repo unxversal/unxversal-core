@@ -290,6 +290,16 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
             <button className={walletTab==='assets'?styles.active:''} onClick={()=>setWalletTab('assets')}>Assets</button>
             <button className={walletTab==='staking'?styles.active:''} onClick={()=>setWalletTab('staking')}>Staking</button>
           </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ opacity: 0.8, fontSize: 12 }}>
+              BM: {balanceManagerId ? `${balanceManagerId.slice(0,6)}…${balanceManagerId.slice(-4)}` : 'none'}
+            </span>
+            {!balanceManagerId && (
+              <button disabled={submitting} onClick={() => void onCreateBM()}>
+                Create
+              </button>
+            )}
+          </div>
         </div>
         {walletTab==='assets' ? (
           <div className={styles.balances}>
