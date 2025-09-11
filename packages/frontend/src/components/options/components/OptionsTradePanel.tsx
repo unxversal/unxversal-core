@@ -25,7 +25,7 @@ export function OptionsTradePanel({
 }) {
   const [side, setSide] = useState<'call' | 'put'>('call');
   const [action, setAction] = useState<'buy' | 'sell'>('buy');
-  const [mode, setMode] = useState<'market' | 'limit'>('limit');
+  // Options are limit-only on-chain; UI uses limit exclusively
   const [size, setSize] = useState<number>(1);
   const [price, setPrice] = useState<number>(Number(mid?.toFixed(3) || '1'));
   const [strike, setStrike] = useState<number>(Number(mid?.toFixed(2) || '1'));
@@ -68,10 +68,7 @@ export function OptionsTradePanel({
       {/* Order Card */}
       <div className={styles.orderCard}>
         <div className={styles.orderHeader}>
-          <div className={styles.modeToggle}>
-            <button className={mode==='market'?styles.active:''} onClick={()=>setMode('market')}>Market</button>
-            <button className={mode==='limit'?styles.active:''} onClick={()=>setMode('limit')}>Limit</button>
-          </div>
+          {/* Removed Market/Limit toggle; options are limit-only */}
           
           <div className={styles.tabs}>
             <button className={action==='buy'?styles.active:''} onClick={()=>setAction('buy')}>Buy</button>
@@ -116,18 +113,16 @@ export function OptionsTradePanel({
             />
           </div>
 
-          {mode === 'limit' && (
-            <div className={styles.field}>
-              <label className={styles.fieldLabel}>Limit Price ({quoteSymbol})</label>
-              <input 
-                className={styles.input}
-                type="number" 
-                value={price} 
-                onChange={(e)=>setPrice(Number(e.target.value))} 
-                placeholder="0.00"
-              />
-            </div>
-          )}
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>Limit Price ({quoteSymbol})</label>
+            <input 
+              className={styles.input}
+              type="number" 
+              value={price} 
+              onChange={(e)=>setPrice(Number(e.target.value))} 
+              placeholder="0.00"
+            />
+          </div>
 
           <div className={styles.orderSummary}>
             <div className={styles.summaryRow}>
@@ -189,7 +184,7 @@ export function OptionsTradePanel({
               onClick={async ()=>{
                 try {
                   if (!provider?.submitOrder) return;
-                  await provider.submitOrder({ side, action, mode, size, price, strike, expiry });
+                  await provider.submitOrder({ side, action, size, price, strike, expiry });
                   onClose?.();
                 } catch (error) {
                   console.error('Failed to submit order:', error);
