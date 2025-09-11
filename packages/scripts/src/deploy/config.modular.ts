@@ -7,7 +7,7 @@ import { buildLendingMarketsMainnet, buildLendingMarketsTestnet } from './lendin
 import { MAINNET_ORACLE_FEEDS, TESTNET_ORACLE_FEEDS, ORACLE_MAX_AGE_SEC } from './oracle.js';
 import { buildMainnetDexPools, buildTestnetDexPools } from './dex.js';
 import { buildVaults } from './vaults.js';
-import { TIER_PARAMS, TESTNET_DERIVATIVE_PERP_FUT_SPECS } from './markets.js';
+import { TIER_PARAMS, DERIVATIVE_PERP_FUT_SPECS } from './markets.js';
 import type { SuiTypeTag } from './types.js';
 import { generateExpiriesMs } from '../utils/series.js';
 
@@ -26,7 +26,7 @@ const EXTRA_DERIVATIVE_SYMBOLS_TESTNET = [
 const USDC_TESTNET_TYPE: SuiTypeTag = '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC';
 const EXTRA_PERPS_TESTNET = EXTRA_DERIVATIVE_SYMBOLS_TESTNET.map((symbol) => {
   const risk = TIER_PARAMS['C'];
-  const spec = TESTNET_DERIVATIVE_PERP_FUT_SPECS[symbol] ?? { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 };
+  const spec = DERIVATIVE_PERP_FUT_SPECS[symbol] ?? { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 };
   return {
     collat: USDC_TESTNET_TYPE,
     symbol,
@@ -51,7 +51,7 @@ const EXTRA_FUTURES_TESTNET: NonNullable<DeployConfig['futures']> = (() => {
   const risk = TIER_PARAMS['C'];
   const out: NonNullable<DeployConfig['futures']> = [];
   for (const symbol of EXTRA_DERIVATIVE_SYMBOLS_TESTNET) {
-    const spec = TESTNET_DERIVATIVE_PERP_FUT_SPECS[symbol] ?? { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 };
+    const spec = DERIVATIVE_PERP_FUT_SPECS[symbol] ?? { contractSize: 1_000_000, tickSize: 10_000, lotSize: 1, minSize: 1 };
     for (const expiryMs of expiries) {
       out.push({
         collat: USDC_TESTNET_TYPE,

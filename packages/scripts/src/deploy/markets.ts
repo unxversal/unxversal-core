@@ -437,7 +437,7 @@ export const TIER_PARAMS: Record<Tier, RiskParams> = {
 // contractSize: quote units per 1 contract when price is 1e6 scale
 // tickSize: price tick in 1e6 quote units (e.g., 10_000 => $0.01)
 // lotSize/minSize: minimum number of contracts (usually 1)
-export const TESTNET_DERIVATIVE_PERP_FUT_SPECS: Record<string, {
+export const DERIVATIVE_PERP_FUT_SPECS: Record<string, {
   contractSize: number;
   tickSize: number;
   lotSize: number;
