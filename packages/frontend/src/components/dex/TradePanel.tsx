@@ -290,41 +290,35 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
             <button className={walletTab==='assets'?styles.active:''} onClick={()=>setWalletTab('assets')}>Assets</button>
             <button className={walletTab==='staking'?styles.active:''} onClick={()=>setWalletTab('staking')}>Staking</button>
           </div>
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ opacity: 0.8, fontSize: 12 }}>
-              BM: {balanceManagerId ? `${balanceManagerId.slice(0,6)}…${balanceManagerId.slice(-4)}` : 'none'}
-            </span>
-            {!balanceManagerId && (
-              <button disabled={submitting} onClick={() => void onCreateBM()}>
-                Create
-              </button>
+        </div>
+        
+        {/* BalanceManager Section */}
+        <div className={styles.bmSection}>
+          <div className={styles.bmHeader}>
+            <span className={styles.bmTitle}>Balance Manager</span>
+            {balanceManagerId ? (
+              <span className={styles.bmStatus}>{balanceManagerId.slice(0,6)}…{balanceManagerId.slice(-4)}</span>
+            ) : (
+              <button className={styles.bmCreateBtn} disabled={submitting} onClick={() => void onCreateBM()}>Create</button>
             )}
           </div>
+          {balanceManagerId && (
+            <div className={styles.bmActions}>
+              <button className={styles.miniButton} disabled={submitting} onClick={() => void onDepositToBM('base')}>Deposit {baseSym}</button>
+              <button className={styles.miniButton} disabled={submitting} onClick={() => void onDepositToBM('quote')}>Deposit {quoteSym}</button>
+              <button className={styles.miniButton} disabled={submitting} onClick={() => void onWithdrawFromBM('base', qty || 0)}>Withdraw {baseSym}</button>
+              <button className={styles.miniButton} disabled={submitting} onClick={() => void onWithdrawFromBM('quote', qty || 0)}>Withdraw {quoteSym}</button>
+            </div>
+          )}
         </div>
         {walletTab==='assets' ? (
           <div className={styles.balances}>
-            <div className={styles.balanceRow}><span>{baseSym}:</span><span>{baseBal.toFixed(4)}</span></div>
-            <div className={styles.balanceRow}><span>{quoteSym}:</span><span>{quoteBal.toFixed(4)}</span></div>
-            {!balanceManagerId ? (
-              <div className={styles.balanceRow}>
-                <button disabled={submitting} onClick={() => void onCreateBM()}>Create Balance Manager</button>
-              </div>
-            ) : (
-              <div className={styles.balanceRow} style={{ display: 'flex', gap: 8 }}>
-                <button disabled={submitting} onClick={() => void onDepositToBM('base')}>Deposit {baseSym} → BM</button>
-                <button disabled={submitting} onClick={() => void onDepositToBM('quote')}>Deposit {quoteSym} → BM</button>
-              </div>
-            )}
-            {balanceManagerId && (
-              <div className={styles.balanceRow} style={{ display: 'flex', gap: 8 }}>
-                <button disabled={submitting} onClick={() => void onWithdrawFromBM('base', qty || 0)}>Withdraw {baseSym} ← BM</button>
-                <button disabled={submitting} onClick={() => void onWithdrawFromBM('quote', qty || 0)}>Withdraw {quoteSym} ← BM</button>
-              </div>
-            )}
+            <div className={styles.balanceRow}><span>{baseSym}:</span><span className={styles.balanceAmount}>{baseBal.toFixed(4)}</span></div>
+            <div className={styles.balanceRow}><span>{quoteSym}:</span><span className={styles.balanceAmount}>{quoteBal.toFixed(4)}</span></div>
           </div>
         ) : (
           <div className={styles.balances}>
-            <div className={styles.balanceRow}><span>Active UNXV:</span><span>{activeStakeUnxv.toLocaleString(undefined,{maximumFractionDigits:2})}</span></div>
+            <div className={styles.balanceRow}><span>Active UNXV:</span><span className={styles.balanceAmount}>{activeStakeUnxv.toLocaleString(undefined,{maximumFractionDigits:2})}</span></div>
           </div>
         )}
       </div>

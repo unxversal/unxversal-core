@@ -7,7 +7,7 @@ select:focus {
   outline: none;
 }
 
-.walletCard { background: #0a0c12; border: none; border-radius: 8px; padding: 12px; display: grid; gap: 12px; }
+.walletCard { background: #0a0c12; border: none; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .orderCard { 
   background: #0a0c12; 
   border: none; 
@@ -19,17 +19,76 @@ select:focus {
   overflow: hidden;
 }
 .cardHeader { display: flex; justify-content: space-between; align-items: center; }
-.cardTitle { font-weight: 600; color: #e5e7eb; }
-.subTabs { display: grid; grid-auto-flow: column; gap: 6px; }
-.subTabs > button { background: transparent; border: none; color: #cbd5e1; padding: 6px 8px; border-radius: 6px; font-size: 11px; }
+.cardTitle { font-weight: 600; color: #e5e7eb; font-size: 14px; }
+.subTabs { display: flex; gap: 4px; }
+.subTabs > button { background: #0f131a; border: none; color: #cbd5e1; padding: 6px 12px; border-radius: 6px; font-size: 11px; font-weight: 500; cursor: pointer; transition: all 0.2s ease; }
 .subTabs > button.active { background: #ffffff; color: #000000; }
+.subTabs > button:hover:not(.active) { background: #1a1d29; color: #e5e7eb; }
 
-.balances { display: grid; gap: 6px; }
-.balanceRow { display: flex; justify-content: space-between; font-size: 12px; color: #cbd5e1; }
+/* BalanceManager section */
+.bmSection { 
+  background: #0f131a; 
+  border-radius: 6px; 
+  padding: 8px;
+}
+.bmHeader { 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center; 
+  margin-bottom: 6px;
+}
+.bmTitle { 
+  color: #9ca3af; 
+  font-size: 10px; 
+  font-weight: 500;
+  text-transform: uppercase;
+}
+.bmStatus { 
+  color: #e5e7eb; 
+  font-size: 10px;
+  font-family: monospace;
+  font-weight: 500;
+}
+.bmCreateBtn { 
+  background: #3b82f6; 
+  border: none; 
+  color: #ffffff; 
+  border-radius: 4px; 
+  padding: 4px 8px; 
+  font-size: 10px; 
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+.bmCreateBtn:hover { background: #2563eb; }
+.bmActions { 
+  display: flex; 
+  gap: 4px; 
+  flex-wrap: wrap;
+}
 
-.modeToggle { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; align-items: center; }
-.modeToggle > button { background: transparent; border: none; color: #9ca3af; font-size: 11px; padding: 4px 6px; text-align: center; }
-.modeToggle > button.active { color: #ffffff; font-weight: 600; }
+.balances { display: flex; flex-direction: column; gap: 4px; }
+.balanceRow { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #9ca3af; padding: 2px 0; }
+.balanceAmount { color: #e5e7eb; font-weight: 500; }
+.miniButton { 
+  background: #1a1d29; 
+  border: none; 
+  color: #e5e7eb; 
+  border-radius: 4px; 
+  padding: 3px 6px; 
+  font-size: 9px; 
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+.miniButton:hover { background: #2a2d3a; }
+.miniButton:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.modeToggle { display: flex; gap: 4px; }
+.modeToggle > button { background: #0f131a; border: none; color: #9ca3af; font-size: 11px; padding: 6px 12px; border-radius: 6px; font-weight: 500; cursor: pointer; transition: all 0.2s ease; }
+.modeToggle > button.active { background: #ffffff; color: #000000; }
+.modeToggle > button:hover:not(.active) { background: #1a1d29; color: #e5e7eb; }
 
 .tabs { 
   display: grid; 
@@ -421,6 +480,7 @@ select:focus {
   padding: 0;
   -webkit-appearance: none;
   -moz-appearance: textfield;
+  appearance: textfield;
   height: 20px;
   line-height: 20px;
 }
@@ -428,6 +488,7 @@ select:focus {
 .customLeverageInput::-webkit-outer-spin-button,
 .customLeverageInput::-webkit-inner-spin-button {
   -webkit-appearance: none;
+  appearance: none;
   margin: 0;
 }
 
