@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import styles from './GasFuturesTradePanel.module.css';
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient, ConnectButton } from '@mysten/dapp-kit';
+import { useCurrentAccount, useSuiClient, ConnectButton } from '@mysten/dapp-kit';
 import { loadSettings } from '../../lib/settings.config';
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
@@ -9,10 +9,9 @@ import type { TradePanelDataProvider } from '../derivatives/types';
 export function GasFuturesTradePanel({ mid, provider, baseSymbol = 'MIST', quoteSymbol = 'USDC' }: { mid: number; provider?: TradePanelDataProvider; baseSymbol?: string; quoteSymbol?: string }) {
   const acct = useCurrentAccount();
   const client = useSuiClient();
-  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   
   const [side, setSide] = useState<'long' | 'short'>('long');
-  const [mode, setMode] = useState<'market' | 'limit'>('market');
+  // Futures are limit-only on-chain; UI uses limit exclusively
   const [price, setPrice] = useState<number>(mid || 0.023);
   const [size, setSize] = useState<number>(0);
   const [leverage, setLeverage] = useState<number>(10);
@@ -20,9 +19,8 @@ export function GasFuturesTradePanel({ mid, provider, baseSymbol = 'MIST', quote
   const [walletTab, setWalletTab] = useState<'assets' | 'staking'>('assets');
   const [usdcBal, setUsdcBal] = useState<number>(0);
   const [mistBal, setMistBal] = useState<number>(0);
-  const [positions, setPositions] = useState<any[]>([]);
-  const [marginRatio, setMarginRatio] = useState<number>(0);
-  const [accountValue, setAccountValue] = useState<number>(0);
+  const [_marginRatio, _setMarginRatio] = useState<number>(0);
+  const [_accountValue, _setAccountValue] = useState<number>(0);
   const [activeStakeUnxv, setActiveStakeUnxv] = useState<number>(0);
   const [takerBps, setTakerBps] = useState<number>(70); // fallback 0.70 bps
   const [unxvDiscBps, setUnxvDiscBps] = useState<number>(3000); // fallback 30%
@@ -31,7 +29,7 @@ export function GasFuturesTradePanel({ mid, provider, baseSymbol = 'MIST', quote
   const s = loadSettings();
   const stakingPoolId = s.staking?.poolId ?? '';
   const feeConfigId = s.dex?.feeConfigId ?? '';
-  const disabled = !acct?.address || submitting;
+  // derived disabled state not used in current UI
 
   // Load balances and positions
   useEffect(() => {
@@ -51,23 +49,13 @@ export function GasFuturesTradePanel({ mid, provider, baseSymbol = 'MIST', quote
         if (provider?.getAccountMetrics) {
           const m = await provider.getAccountMetrics();
           if (!mounted) return;
-          setAccountValue(m.accountValue);
-          setMarginRatio(m.marginRatio);
+          _setAccountValue(m.accountValue);
+          _setMarginRatio(m.marginRatio);
         } else {
-          setAccountValue(27500);
-          setMarginRatio(0.15);
+          _setAccountValue(27500);
+          _setMarginRatio(0.15);
         }
-        setPositions([
-          { 
-            side: 'Long', 
-            size: 150000, 
-            entryPrice: 0.0234, 
-            markPrice: 0.0245, 
-            pnl: 165, 
-            margin: 1250, 
-            leverage: 10 
-          },
-        ]);
+        // positions data is not displayed here; skip populating
       } catch {}
     };
     void load();
@@ -123,7 +111,7 @@ export function GasFuturesTradePanel({ mid, provider, baseSymbol = 'MIST', quote
     setSubmitting(true);
     try {
       if (provider?.submitOrder) {
-        await provider.submitOrder({ side, mode, size, price, leverage });
+        await provider.submitOrder({ side, size, price, leverage });
       } else {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
@@ -133,7 +121,7 @@ export function GasFuturesTradePanel({ mid, provider, baseSymbol = 'MIST', quote
   }
 
   // Derived calculations
-  const effPrice = mode === 'limit' ? (price || mid || 0.023) : (mid || price || 0.023);
+  const effPrice = (price || mid || 0.023);
   const notionalValue = (size || 0) * effPrice;
   const requiredMargin = leverage > 0 ? notionalValue / leverage : notionalValue;
   const feeInput = notionalValue * (takerBps / 10000);
@@ -147,10 +135,7 @@ export function GasFuturesTradePanel({ mid, provider, baseSymbol = 'MIST', quote
   };
 
   // Max position size calculations
-  const maxPositionSize = leverage > 0 
-    ? Math.floor((usdcBal * leverage) / (price || mid || 0.023))
-    : Math.floor(usdcBal / (price || mid || 0.023));
-  const positionSizeRatio = maxPositionSize > 0 ? (size / maxPositionSize) : 0;
+  // Derived inline where needed to avoid unused variable warnings
 
   return (
     <div className={styles.root}>
@@ -178,11 +163,7 @@ export function GasFuturesTradePanel({ mid, provider, baseSymbol = 'MIST', quote
       {/* Order Card */}
       <div className={styles.orderCard}>
         <div className={styles.orderHeader}>
-          <div className={styles.modeToggle}>
-            <button className={mode==='limit'?styles.active:''} onClick={()=>setMode('limit')}>Limit</button>
-            <button className={mode==='market'?styles.active:''} onClick={()=>setMode('market')}>Market</button>
-          </div>
-          
+          {/* Removed Market/Limit toggle; futures are limit-only */}
           <div className={styles.tabs}>
             <button className={side==='long'?styles.active:''} onClick={()=>setSide('long')}>
               Buy / Long
@@ -201,22 +182,20 @@ export function GasFuturesTradePanel({ mid, provider, baseSymbol = 'MIST', quote
             </div>
           </div>
           
-          {mode==='limit' && (
-            <div className={styles.field}>
-              <div className={styles.fieldLabel}>Price</div>
-              <div className={styles.inputGroup}>
-                <input 
-                  type="number" 
-                  value={price || ''} 
-                  onChange={(e)=>setPrice(Number(e.target.value))} 
-                  placeholder="0.023"
-                  className={styles.inputWithLabel}
-                />
-                <div className={styles.tokenSelector}><span>{quoteSymbol}</span></div>
-                <span className={styles.midIndicator}>Mid</span>
-              </div>
+          <div className={styles.field}>
+            <div className={styles.fieldLabel}>Price</div>
+            <div className={styles.inputGroup}>
+              <input 
+                type="number" 
+                value={price || ''} 
+                onChange={(e)=>setPrice(Number(e.target.value))} 
+                placeholder="0.023"
+                className={styles.inputWithLabel}
+              />
+              <div className={styles.tokenSelector}><span>{quoteSymbol}</span></div>
+              <span className={styles.midIndicator}>Mid</span>
             </div>
-          )}
+          </div>
 
           <div className={styles.field}>
             <div className={styles.fieldLabel}>Size</div>

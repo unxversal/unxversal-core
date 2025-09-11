@@ -86,7 +86,7 @@ export interface TradePanelDataProvider {
   getAccountMetrics?: () => Promise<{ accountValue: number; marginRatio: number }>;
   getFeeInfo?: () => Promise<{ takerBps: number; unxvDiscountBps: number }>;
   getActiveStake?: (address: string) => Promise<number>;
-  submitOrder?: (o: { side: 'long' | 'short'; mode: 'market' | 'limit'; size: number; price?: number; leverage: number }) => Promise<void>;
+  submitOrder?: (o: { side: 'long' | 'short'; size: number; price?: number; leverage: number }) => Promise<void>;
 }
 
 export interface TradePanelProps {
