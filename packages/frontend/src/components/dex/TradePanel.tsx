@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import styles from './TradePanel.module.css';
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient, ConnectButton } from '@mysten/dapp-kit';
-import { DexClient } from '../../protocols/dex/dex';
+// DeepBook TS SDK
+import { DeepBookClient } from '@mysten/deepbook-v3';
 import { getContracts } from '../../lib/env';
 import { loadSettings, updateSettings } from '../../lib/settings.config';
 import { createAndShareBalanceManagerTx, depositToBalanceManagerTx, withdrawFromBalanceManagerTx } from '../../protocols/dex';
@@ -14,7 +15,6 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const { pkgUnxversal, pkgDeepbook } = getContracts();
-  const dex = useMemo(() => new DexClient(pkgUnxversal), [pkgUnxversal]);
   const [side, setSide] = useState<'buy' | 'sell'>('buy');
   const [mode, setMode] = useState<'market' | 'limit' | 'margin'>('market');
   const [price, setPrice] = useState<number>(mid || 0);
@@ -24,7 +24,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
   const [baseBal, setBaseBal] = useState<number>(0);
   const [quoteBal, setQuoteBal] = useState<number>(0);
   const [activeStakeUnxv, setActiveStakeUnxv] = useState<number>(0);
-  const [takerBps, setTakerBps] = useState<number>(70); // fallback 0.70 bps
+  // Using makerBps for UI estimates; takerBps omitted
   const [makerBps, setMakerBps] = useState<number>(70);
   const [unxvDiscBps, setUnxvDiscBps] = useState<number>(3000); // fallback 30%
   const [feeType, setFeeType] = useState<'unxv' | 'input'>('unxv');
@@ -137,7 +137,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
         const mbps = Number(f?.dex_maker_fee_bps ?? bps) || bps;
         const disc = Number(f?.unxv_discount_bps ?? 3000);
         if (!mounted) return;
-        setTakerBps(bps);
+        // Use maker bps for UI fee estimate baseline
         setMakerBps(mbps);
         setUnxvDiscBps(disc);
       } catch {}
@@ -145,15 +145,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
     void load();
   }, [feeConfigId, client]);
 
-  function estimateProtocolFee(): number {
-    const priceUsed = mode === 'limit' ? (price || mid || 0) : (mid || price || 0);
-    const maker = makerBps || takerBps || 70;
-    const baseFee = (side === 'buy')
-      ? (qty || 0) * (priceUsed || 0) * (maker / 10000)
-      : (qty || 0) * (maker / 10000);
-    const withDisc = feeType === 'unxv' ? baseFee * (1 - (unxvDiscBps / 10000)) : baseFee;
-    return withDisc * 1.01;
-  }
+  // protocol fee estimation handled by DeepBook; UI estimates remain below
 
   async function onCreateBM(): Promise<void> {
     if (!pkgDeepbook) return;
@@ -179,7 +171,17 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
     if (!id) return;
     setSubmitting(true);
     try {
-      const tx = await depositToBalanceManagerTx(pkgDeepbook, balanceManagerId, id, coinType);
+      const tx = await depositToBalanceManagerTx(
+        pkgDeepbook,
+        pkgUnxversal,
+        balanceManagerId,
+        id,
+        coinType,
+        feeConfigId,
+        feeVaultId,
+        stakingPoolId,
+        feeType === 'unxv' ? selUnxvCoinId || undefined : undefined,
+      );
       await signAndExecute({ transaction: tx });
     } finally { setSubmitting(false); }
   }
@@ -199,37 +201,57 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
     if (qty <= 0) return;
     setSubmitting(true);
     try {
-      let tx: Transaction;
-      const common = { baseType, quoteType, poolId: pool, balanceManagerId, feeConfigId, feeVaultId } as const;
+      if (!acct?.address) throw new Error('Connect wallet');
+      if (!balanceManagerId) throw new Error('Create a BalanceManager first');
+
+      const network = loadSettings().network === 'mainnet' ? 'mainnet' as const : 'testnet' as const;
+      const tx = new Transaction();
+      const balanceManagerKey = 'MANAGER_1';
+      const dbClient = new DeepBookClient({
+        address: acct.address,
+        env: network,
+        client: client as any,
+        balanceManagers: { [balanceManagerKey]: { address: balanceManagerId, tradeCap: undefined } } as any,
+      });
+
       const isBid = side === 'buy';
-      const needFee = estimateProtocolFee();
-      const feeCoinList = isBid ? quoteCoins : baseCoins;
-      const selectedId = selFeeCoinId || feeCoinList[0]?.id;
-      const selectedBal = feeCoinList.find(c => c.id === selectedId)?.balance ?? 0n;
-      if (!selectedId) throw new Error('Select a fee coin');
-      if (selectedBal <= BigInt(Math.floor(needFee))) throw new Error('Insufficient fee coin balance');
-      const maybeUnxv = feeType === 'unxv' && selUnxvCoinId ? selUnxvCoinId : undefined;
+      const clientOrderId = String(Date.now());
+      const payWithDeep = false; // default to input-token fee; toggle later if needed
 
       if (mode === 'market') {
-        if (isBid) {
-          tx = dex.placeMarketOrderWithProtocolFeeBid({ ...common, stakingPoolId, feePaymentQuoteCoinId: selectedId, maybeUnxvCoinId: maybeUnxv, clientOrderId: BigInt(Date.now()), selfMatchingOption: 0, quantity: BigInt(Math.floor(qty)), payWithDeep: false });
-        } else {
-          tx = dex.placeMarketOrderWithProtocolFeeAsk({ ...common, stakingPoolId, feePaymentBaseCoinId: selectedId, maybeUnxvCoinId: maybeUnxv, clientOrderId: BigInt(Date.now()), selfMatchingOption: 0, quantity: BigInt(Math.floor(qty)), payWithDeep: false });
-        }
+        tx.add((ttx: any) => (dbClient.deepBook.placeMarketOrder({
+          poolKey: pool,
+          balanceManagerKey,
+          clientOrderId,
+          quantity: Number(Math.floor(qty)),
+          isBid,
+          payWithDeep,
+        }) as any)(ttx));
       } else if (mode === 'limit') {
         const p = Math.max(1, Math.floor(price));
-        if (isBid) {
-          tx = dex.placeLimitOrderWithProtocolFeeBid({ ...common, stakingPoolId, feePaymentQuoteCoinId: selectedId, maybeUnxvCoinId: maybeUnxv, clientOrderId: BigInt(Date.now()), orderType: 0, selfMatchingOption: 0, price: BigInt(p), quantity: BigInt(Math.floor(qty)), payWithDeep: false, expireTimestamp: BigInt(Math.floor(Date.now()/1000)+120) });
-        } else {
-          tx = dex.placeLimitOrderWithProtocolFeeAsk({ ...common, stakingPoolId, feePaymentBaseCoinId: selectedId, maybeUnxvCoinId: maybeUnxv, clientOrderId: BigInt(Date.now()), orderType: 0, selfMatchingOption: 0, price: BigInt(p), quantity: BigInt(Math.floor(qty)), payWithDeep: false, expireTimestamp: BigInt(Math.floor(Date.now()/1000)+120) });
-        }
+        tx.add((ttx: any) => (dbClient.deepBook.placeLimitOrder({
+          poolKey: pool,
+          balanceManagerKey,
+          clientOrderId,
+          orderType: 0,
+          selfMatchingOption: 0,
+          price: Number(p),
+          quantity: Number(Math.floor(qty)),
+          isBid,
+          payWithDeep,
+          expiration: Math.floor(Date.now() / 1000) + 120,
+        }) as any)(ttx));
       } else {
-        if (isBid) {
-          tx = dex.placeMarketOrderWithProtocolFeeBid({ ...common, stakingPoolId, feePaymentQuoteCoinId: selectedId, maybeUnxvCoinId: maybeUnxv, clientOrderId: BigInt(Date.now()), selfMatchingOption: 0, quantity: BigInt(Math.floor(qty)), payWithDeep: false });
-        } else {
-          tx = dex.placeMarketOrderWithProtocolFeeAsk({ ...common, stakingPoolId, feePaymentBaseCoinId: selectedId, maybeUnxvCoinId: maybeUnxv, clientOrderId: BigInt(Date.now()), selfMatchingOption: 0, quantity: BigInt(Math.floor(qty)), payWithDeep: false });
-        }
+        tx.add((ttx: any) => (dbClient.deepBook.placeMarketOrder({
+          poolKey: pool,
+          balanceManagerKey,
+          clientOrderId,
+          quantity: Number(Math.floor(qty)),
+          isBid,
+          payWithDeep,
+        }) as any)(ttx));
       }
+
       await signAndExecute({ transaction: tx });
     } finally {
       setSubmitting(false);

@@ -4,6 +4,8 @@ import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { logger } from '../utils/logger.js';
 import { deployConfig, type DeployConfig } from './config.js';
 import { writeFile } from 'node:fs/promises';
+import { DeepBookClient } from '@mysten/deepbook-v3';
+import { MAINNET_DERIVATIVE_TYPE_TAGS, TESTNET_DERIVATIVE_TYPE_TAGS } from './markets.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -897,37 +899,85 @@ async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25
   }
 }
 
+function deriveCoinKeys(
+  baseType: string,
+  quoteType: string,
+  network: string,
+): { baseKey: string; quoteKey: string; symbol?: string; baseDecimals?: number; quoteDecimals?: number } {
+  const mapping = network === 'mainnet' ? MAINNET_DERIVATIVE_TYPE_TAGS : TESTNET_DERIVATIVE_TYPE_TAGS;
+  for (const [symbol, v] of Object.entries(mapping)) {
+    if (v.base === baseType && v.quote === quoteType) {
+      const [baseKey, quoteKey] = symbol.split('/');
+      return { baseKey, quoteKey, symbol, baseDecimals: v.baseDecimals, quoteDecimals: v.quoteDecimals };
+    }
+  }
+  // Fallback: last segment of type tag
+  const baseKey = (baseType.split('::')[2] || 'BASE').toUpperCase();
+  const quoteKey = (quoteType.split('::')[2] || 'QUOTE').toUpperCase();
+  // Heuristic decimals
+  const baseName = baseKey;
+  const quoteName = quoteKey;
+  const baseDecimals = baseName === 'SUI' ? 9 : 6;
+  const quoteDecimals = quoteName === 'SUI' ? 9 : 6;
+  return { baseKey, quoteKey, baseDecimals, quoteDecimals };
+}
+
+function buildCustomCoinMap(cfg: DeployConfig): Record<string, { address: string; type: string; scalar: number }> {
+  const coins: Record<string, { address: string; type: string; scalar: number }> = {};
+  for (const d of (cfg.dexPools || [])) {
+    const info = deriveCoinKeys(d.base, d.quote, cfg.network);
+    const entries: Array<{ key: string; type: string; decimals?: number }> = [
+      { key: info.baseKey, type: d.base, decimals: info.baseDecimals },
+      { key: info.quoteKey, type: d.quote, decimals: info.quoteDecimals },
+    ];
+    for (const e of entries) {
+      if (!coins[e.key]) {
+        const addr = e.type.split('::')[0];
+        const decimals = typeof e.decimals === 'number' ? e.decimals : (e.key === 'SUI' ? 9 : 6);
+        const scalar = Math.pow(10, decimals);
+        coins[e.key] = { address: addr, type: e.type, scalar };
+      }
+    }
+  }
+  return coins;
+}
+
 async function deployDexPools(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.dexPools?.length) return;
-  logger.info(`Creating DEX Pools: ${cfg.dexPools.length} spec(s)`);
+  const env = cfg.network === 'mainnet' ? 'mainnet' as const : 'testnet' as const;
+  const address = keypair.toSuiAddress();
+  const customCoins = buildCustomCoinMap(cfg);
+  const db = new DeepBookClient({ client: client as any, address, env, coins: customCoins });
+  logger.info(`Creating ${cfg.dexPools.length} DeepBook pool(s) via SDK`);
   for (const d of cfg.dexPools) {
-    const tx = new Transaction();
-    const adminId = d.adminRegistryId ?? cfg.adminRegistryId;
-    // Prepare DEEP creation fee coin: split exact amount from provided DEEP coin id
+    const { baseKey, quoteKey, symbol } = deriveCoinKeys(d.base, d.quote, cfg.network);
     const deepFeeAmount = (d as any).deepCreationFeeAmount ?? 600;
     const deepFeeCoinId = (d as any).deepCreationFeeCoinId as string | undefined;
     if (!deepFeeCoinId) {
-      throw new Error(`Missing deepCreationFeeCoinId for ${String(d.base)}/${String(d.quote)}. Provide a DEEP coin id via dexPools[*].deepCreationFeeCoinId or env.`);
+      throw new Error(`Missing deepCreationFeeCoinId for ${symbol ?? `${baseKey}/${quoteKey}`}. Provide a DEEP coin id via dexPools[*].deepCreationFeeCoinId.`);
     }
+    const tx = new Transaction();
     const [deepFeeCoin] = tx.splitCoins(tx.object(deepFeeCoinId), [tx.pure.u64(deepFeeAmount)]);
-    tx.moveCall({
-      target: `${cfg.pkgId}::dex::create_pool_admin`,
-      typeArguments: [d.base, d.quote],
-      arguments: [
-        tx.object(adminId),
-        tx.object(d.registryId),
-        tx.pure.u64(d.tickSize),
-        tx.pure.u64(d.lotSize),
-        tx.pure.u64(d.minSize),
-        deepFeeCoin,
-      ],
-    });
-    const res = await execTx(client, tx, keypair, 'dex.create_permissionless_pool');
+    // Add SDK call (bridge generates PTB thunk)
+    tx.add((ttx: any) => (db.deepBook.createPermissionlessPool({
+      baseCoinKey: baseKey,
+      quoteCoinKey: quoteKey,
+      tickSize: d.tickSize,
+      lotSize: d.lotSize,
+      minSize: d.minSize,
+      deepCoin: deepFeeCoin,
+    }) as any)(ttx));
+
+    const res = await execTx(client, tx, keypair, `deepbook.create_permissionless_pool ${symbol ?? `${baseKey}/${quoteKey}`}`);
     accumulateFromRes(res, summary);
-    const poolId = extractCreatedId(res, 'deepbook::pool::Pool<') || '';
-    if (poolId) {
-      summary.dexPools.push({ poolId, base: d.base, quote: d.quote, tickSize: d.tickSize, lotSize: d.lotSize, minSize: d.minSize, registryId: d.registryId });
-    }
+    // Resolve pool id after finality
+    try {
+      const poolId = await db.getPoolIdByAssets(d.base, d.quote);
+      if (poolId) {
+        summary.dexPools.push({ poolId, base: d.base, quote: d.quote, tickSize: d.tickSize, lotSize: d.lotSize, minSize: d.minSize, registryId: d.registryId });
+        logger.info(`  Pool created: ${symbol ?? `${baseKey}/${quoteKey}`} -> ${poolId}`);
+      }
+    } catch {}
   }
 }
 

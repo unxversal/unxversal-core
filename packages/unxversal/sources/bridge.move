@@ -29,16 +29,12 @@ module unxversal::bridge {
         taker_fee_bps_override: Option<u64>, // None → cfg default; Some(x) → override
         clock: &Clock,
         ctx: &mut TxContext
-    ): Coin<Base> {
+    ): (Coin<Base>, Option<Coin<UNXV>>) {
         let amt = coin::value(&base_in);
         let mut unxv_opt = maybe_unxv;
         if (amt == 0) {
-            if (option::is_some(&unxv_opt)) {
-                let unxv = option::extract(&mut unxv_opt);
-                transfer::public_transfer(unxv, ctx.sender());
-            };
-            option::destroy_none(unxv_opt);
-            return base_in
+            // return UNXV unchanged to caller for composability
+            return (base_in, unxv_opt)
         };
 
         let (taker_bps, _maker_bps_eff) = fees::apply_discounts_dex(
@@ -55,12 +51,8 @@ module unxversal::bridge {
             fees::accrue_generic<Base>(vault, fee_coin, clock, ctx);
         };
 
-        if (option::is_some(&unxv_opt)) {
-            let unxv = option::extract(&mut unxv_opt);
-            transfer::public_transfer(unxv, ctx.sender());
-        };
-        option::destroy_none(unxv_opt);
-        base_in
+        // return remaining base coin and maybe UNXV to caller
+        (base_in, unxv_opt)
     }
 
     /// Record spot rewards using quote output; computes USD 1e6 via OracleRegistry with Pyth PriceInfoObject.
