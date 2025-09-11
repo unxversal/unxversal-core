@@ -7,6 +7,8 @@ import { Trades } from './Trades';
 import { TradePanel } from './TradePanel';
 import { Tooltip } from './Tooltip';
 import { loadSettings } from '../../lib/settings.config';
+import { useCurrentAccount, useSuiClient } from '@mysten/dapp-kit';
+import { getUserPointsAndRank } from '../../lib/rewards';
 import { TrendingUp, Minus, BarChart3, Crosshair, Square, LineChart, CandlestickChart, Waves, Eye } from 'lucide-react';
 
 export function DexScreen({ network, protocolStatus }: { 
@@ -24,8 +26,8 @@ export function DexScreen({ network, protocolStatus }: {
 }) {
   const s = loadSettings();
   const deepbookIndexerUrl = s.dex.deepbookIndexerUrl;
-  const pool = s.dex.poolId.replace(/[\/-]/g, '_').toUpperCase();
-  const displayPair = s.dex.poolId.replace(/[\/_]/g, '-').toUpperCase();
+  const [pool, setPool] = useState<string>(s.dex.poolId.replace(/[\/-]/g, '_').toUpperCase());
+  const displayPair = pool.replace(/[\/_]/g, '-').toUpperCase();
   const db = useMemo(() => buildDeepbookPublicIndexer(deepbookIndexerUrl), [deepbookIndexerUrl]);
 
   const [summary, setSummary] = useState<{ last?: number; vol24h?: number; high24h?: number; low24h?: number; change24h?: number }>({});
@@ -42,28 +44,17 @@ export function DexScreen({ network, protocolStatus }: {
   const [showEMA, setShowEMA] = useState<boolean>(false);
   const [showBB, setShowBB] = useState<boolean>(false);
   const [ohlc, setOhlc] = useState<{o: number, h: number, l: number, c: number, v: number} | null>(null);
+  const acct = useCurrentAccount();
+  const sui = useSuiClient();
+  const [rankPoints, setRankPoints] = useState<{rank?: number; points?: number}>({});
+  const [openOrders, setOpenOrders] = useState<any[]>([]);
+  const [orderHistory, setOrderHistory] = useState<any[]>([]);
+  const [userTrades, setUserTrades] = useState<any[]>([]);
   const dataRef = useRef<CandlestickData<UTCTimestamp>[]>([]);
   const drawingsRef = useRef<any[]>([]);
   const indicatorsRef = useRef<{sma?: any, ema?: any, bbUpper?: any, bbLower?: any}>({});
 
-  // Sample data for testing
-  const sampleOrders = [
-    { id: '1', type: 'Limit', side: 'Buy', amount: '1,250.00', price: '1.2345', total: '1,543.13', status: 'Open' },
-    { id: '2', type: 'Limit', side: 'Sell', amount: '800.50', price: '1.2890', total: '1,031.84', status: 'Partial' },
-    { id: '3', type: 'Market', side: 'Buy', amount: '2,100.00', price: '1.2456', total: '2,615.76', status: 'Open' },
-  ];
-
-  const sampleHistory = [
-    { id: '1', type: 'Limit', side: 'Buy', amount: '500.00', price: '1.2234', total: '611.70', status: 'Filled', time: '14:23:45' },
-    { id: '2', type: 'Market', side: 'Sell', amount: '750.25', price: '1.2456', total: '934.81', status: 'Filled', time: '13:45:12' },
-    { id: '3', type: 'Limit', side: 'Buy', amount: '1,000.00', price: '1.2100', total: '1,210.00', status: 'Cancelled', time: '12:30:20' },
-  ];
-
-  const sampleTrades = [
-    { id: '1', side: 'Buy', amount: '500.00', price: '1.2234', total: '611.70', fee: '1.22', time: '14:23:45' },
-    { id: '2', side: 'Sell', amount: '750.25', price: '1.2456', total: '934.81', fee: '1.87', time: '13:45:12' },
-    { id: '3', side: 'Buy', amount: '300.00', price: '1.2190', total: '365.70', fee: '0.73', time: '12:15:30' },
-  ];
+  // Sample data removed; on-chain data wired below
 
   useEffect(() => {
     let mounted = true;
@@ -87,6 +78,80 @@ export function DexScreen({ network, protocolStatus }: {
     const id = setInterval(load, 3000);
     return () => { mounted = false; clearInterval(id); };
   }, [db]);
+
+  // Fetch rank/points from rewards on-chain view via devInspect
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const rid = (s as any).contracts?.rewardsId as string | undefined;
+        const pkg = s.contracts.pkgUnxversal;
+        if (!acct?.address || !rid || !pkg) return;
+        const r = await getUserPointsAndRank(sui, pkg, rid, acct.address);
+        if (!live || !r) return;
+        setRankPoints({ rank: r.rankExact, points: Number(r.allTimePoints ?? 0n) });
+      } catch {}
+    })();
+    return () => { live = false; };
+  }, [acct?.address, s.contracts.pkgUnxversal, (s as any).contracts?.rewardsId, sui]);
+
+  // Fetch per-user order updates and trade history via public indexer (by BalanceManager)
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const bm = s.dex.balanceManagerId;
+        if (!bm) return;
+        // order updates
+        const updates = await db.orderUpdates(pool, { limit: 200, balance_manager_id: bm });
+        if (!active) return;
+        const sorted = updates.slice().sort((a: any, b: any) => a.ts - b.ts);
+        const latestById = new Map<string, any>();
+        for (const u of sorted) latestById.set(u.order_id, u);
+        const latestRows = Array.from(latestById.values()).reverse();
+        const open = latestRows.filter(r => r.status !== 'Canceled' && Number(r.remaining_quantity ?? 0) > 0);
+        setOpenOrders(open);
+        setOrderHistory(latestRows.slice(0, 100));
+      } catch {}
+      try {
+        const bm = s.dex.balanceManagerId;
+        if (!bm) return;
+        const maker = await db.trades(pool, { limit: 100, maker_balance_manager_id: bm });
+        const taker = await db.trades(pool, { limit: 100, taker_balance_manager_id: bm } as any);
+        if (!active) return;
+        const merged = [...maker, ...taker].sort((a: any, b: any) => b.ts - a.ts).slice(0, 100);
+        setUserTrades(merged);
+      } catch {}
+    })();
+    const id = setInterval(() => {
+      // refresh periodically
+      void (async () => {
+        try {
+          const bm = s.dex.balanceManagerId;
+          if (!bm) return;
+          const updates = await db.orderUpdates(pool, { limit: 200, balance_manager_id: bm });
+          if (!active) return;
+          const sorted = updates.slice().sort((a: any, b: any) => a.ts - b.ts);
+          const latestById = new Map<string, any>();
+          for (const u of sorted) latestById.set(u.order_id, u);
+          const latestRows = Array.from(latestById.values()).reverse();
+          const open = latestRows.filter(r => r.status !== 'Canceled' && Number(r.remaining_quantity ?? 0) > 0);
+          setOpenOrders(open);
+          setOrderHistory(latestRows.slice(0, 100));
+        } catch {}
+        try {
+          const bm = s.dex.balanceManagerId;
+          if (!bm) return;
+          const maker = await db.trades(pool, { limit: 100, maker_balance_manager_id: bm });
+          const taker = await db.trades(pool, { limit: 100, taker_balance_manager_id: bm } as any);
+          if (!active) return;
+          const merged = [...maker, ...taker].sort((a: any, b: any) => b.ts - a.ts).slice(0, 100);
+          setUserTrades(merged);
+        } catch {}
+      })();
+    }, 4000);
+    return () => { active = false; clearInterval(id); };
+  }, [db, pool, s.dex.balanceManagerId]);
 
   // Update document title with price and pair info
   useEffect(() => {
@@ -314,6 +379,14 @@ export function DexScreen({ network, protocolStatus }: {
       <div className={styles.priceCard}>
         <div className={styles.pairBar}>
           <div className={styles.pair}>DEX / {displayPair}</div>
+          <div>
+            <select value={pool} onChange={(e)=>setPool(e.target.value)}>
+              {s.markets.watchlist.map((p)=>{
+                const v = p.replace(/[\/-]/g, '_').toUpperCase();
+                return <option key={v} value={v}>{p}</option>;
+              })}
+            </select>
+          </div>
           <div className={styles.metrics}>
             <div className={styles.metricItem}>
               <div className={styles.metricValue}>{summary.last ?? '-'}</div>
@@ -505,7 +578,7 @@ export function DexScreen({ network, protocolStatus }: {
         {centerTab==='orderbook' ? (
           <Orderbook pool={pool} indexer={db} onMidChange={setMid} />
         ) : (
-          <Trades pool={pool} indexer={db} />
+          <Trades pool={pool} indexer={db} balanceManagerId={s.dex.balanceManagerId} />
         )}
       </div>
       
@@ -538,7 +611,7 @@ export function DexScreen({ network, protocolStatus }: {
           <div className={styles.activityContent}>
             {activityTab === 'orders' && (
               <>
-                {sampleOrders.length > 0 ? (
+                {openOrders.length > 0 ? (
                   <table className={styles.ordersTable}>
                     <thead>
                       <tr>
@@ -551,16 +624,16 @@ export function DexScreen({ network, protocolStatus }: {
                       </tr>
                     </thead>
                     <tbody>
-                      {sampleOrders.map(order => (
-                        <tr key={order.id}>
-                          <td>{order.type}</td>
-                          <td className={order.side === 'Buy' ? styles.buyText : styles.sellText}>
-                            {order.side}
+                      {openOrders.map((r: any) => (
+                        <tr key={r.order_id}>
+                          <td>{r.type}</td>
+                          <td className={Number(r.original_quantity ?? 0) < 0 ? styles.sellText : styles.buyText}>
+                            {Number(r.original_quantity ?? 0) < 0 ? 'Sell' : 'Buy'}
                           </td>
-                          <td>{order.amount}</td>
-                          <td>{order.price}</td>
-                          <td>{order.total}</td>
-                          <td>{order.status}</td>
+                          <td>{Number(r.remaining_quantity ?? 0).toLocaleString()}</td>
+                          <td>{Number(r.price ?? 0).toLocaleString()}</td>
+                          <td>-</td>
+                          <td>{r.status}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -573,7 +646,7 @@ export function DexScreen({ network, protocolStatus }: {
             
             {activityTab === 'history' && (
               <>
-                {sampleHistory.length > 0 ? (
+                {orderHistory.length > 0 ? (
                   <table className={styles.ordersTable}>
                     <thead>
                       <tr>
@@ -587,17 +660,17 @@ export function DexScreen({ network, protocolStatus }: {
                       </tr>
                     </thead>
                     <tbody>
-                      {sampleHistory.map(order => (
-                        <tr key={order.id}>
-                          <td>{order.type}</td>
-                          <td className={order.side === 'Buy' ? styles.buyText : styles.sellText}>
-                            {order.side}
+                      {orderHistory.map((r: any) => (
+                        <tr key={r.order_id}>
+                          <td>{r.type}</td>
+                          <td className={Number(r.original_quantity ?? 0) < 0 ? styles.sellText : styles.buyText}>
+                            {Number(r.original_quantity ?? 0) < 0 ? 'Sell' : 'Buy'}
                           </td>
-                          <td>{order.amount}</td>
-                          <td>{order.price}</td>
-                          <td>{order.total}</td>
-                          <td>{order.status}</td>
-                          <td>{order.time}</td>
+                          <td>{Number(r.filled_quantity ?? 0).toLocaleString()}</td>
+                          <td>{Number(r.price ?? 0).toLocaleString()}</td>
+                          <td>-</td>
+                          <td>{r.status}</td>
+                          <td>{new Date((r.ts ?? r.timestamp) * 1000).toLocaleTimeString([], { hour12: false })}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -610,7 +683,7 @@ export function DexScreen({ network, protocolStatus }: {
             
             {activityTab === 'trades' && (
               <>
-                {sampleTrades.length > 0 ? (
+                {userTrades.length > 0 ? (
                   <table className={styles.ordersTable}>
                     <thead>
                       <tr>
@@ -623,16 +696,14 @@ export function DexScreen({ network, protocolStatus }: {
                       </tr>
                     </thead>
                     <tbody>
-                      {sampleTrades.map(trade => (
-                        <tr key={trade.id}>
-                          <td className={trade.side === 'Buy' ? styles.buyText : styles.sellText}>
-                            {trade.side}
-                          </td>
-                          <td>{trade.amount}</td>
-                          <td>{trade.price}</td>
-                          <td>{trade.total}</td>
-                          <td>{trade.fee}</td>
-                          <td>{trade.time}</td>
+                      {userTrades.map((t: any, i: number) => (
+                        <tr key={i}>
+                          <td className={t.side === 'buy' ? styles.buyText : styles.sellText}>{t.side === 'buy' ? 'Buy' : 'Sell'}</td>
+                          <td>{Number(t.qty ?? 0).toLocaleString()}</td>
+                          <td>{Number(t.price ?? 0).toLocaleString()}</td>
+                          <td>-</td>
+                          <td>-</td>
+                          <td>{new Date(t.ts * 1000).toLocaleTimeString([], { hour12: false })}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -650,16 +721,18 @@ export function DexScreen({ network, protocolStatus }: {
           <div className={styles.pointsStats}>
             <div className={styles.pointsStat}>
               <span>Rank:</span>
-              <span>-</span>
+              <span>{rankPoints.rank ?? '-'}</span>
             </div>
             <div className={styles.pointsStat}>
               <span>Points:</span>
-              <span>-</span>
+              <span>{rankPoints.points?.toLocaleString?.() ?? '-'}</span>
             </div>
           </div>
-          <div className={styles.pointsMessage}>
-            Connect your wallet to see your position
-          </div>
+          {!acct?.address && (
+            <div className={styles.pointsMessage}>
+              Connect your wallet to see your position
+            </div>
+          )}
         </div>
       </div>
 

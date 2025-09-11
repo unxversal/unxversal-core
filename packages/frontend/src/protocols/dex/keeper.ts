@@ -9,7 +9,6 @@ export type DexKeeperConfig = {
   quoteType: string;
   poolId: string;
   balanceManagerId: string;
-  tradeProofId: string;
   feeConfigId: string;
   feeVaultId: string;
   // DeepBook public indexer base URL to pull orderbook
@@ -41,13 +40,14 @@ export function createDexKeeper(client: SuiClient, sender: string, exec: TxExecu
     const qty = BigInt(1); // tiny quote
     const expireTs = BigInt(Math.floor(Date.now() / 1000) + 120);
     // place bid
+    const gen1 = tx.moveCall({ target: `${(cfg.baseType.split('::')[0])}::balance_manager::generate_proof_as_owner`, arguments: [tx.object(cfg.balanceManagerId)] });
     tx.moveCall({
       target: `${pkg}::dex::place_limit_order`,
       typeArguments: [cfg.baseType, cfg.quoteType],
       arguments: [
         tx.object(cfg.poolId),
         tx.object(cfg.balanceManagerId),
-        tx.object(cfg.tradeProofId),
+        gen1,
         tx.object(cfg.feeConfigId),
         tx.object(cfg.feeVaultId),
         tx.pure.u64(clientOrderId),
@@ -62,13 +62,14 @@ export function createDexKeeper(client: SuiClient, sender: string, exec: TxExecu
       ],
     });
     // place ask
+    const gen2 = tx.moveCall({ target: `${(cfg.baseType.split('::')[0])}::balance_manager::generate_proof_as_owner`, arguments: [tx.object(cfg.balanceManagerId)] });
     tx.moveCall({
       target: `${pkg}::dex::place_limit_order`,
       typeArguments: [cfg.baseType, cfg.quoteType],
       arguments: [
         tx.object(cfg.poolId),
         tx.object(cfg.balanceManagerId),
-        tx.object(cfg.tradeProofId),
+        gen2,
         tx.object(cfg.feeConfigId),
         tx.object(cfg.feeVaultId),
         tx.pure.u64(clientOrderId + BigInt(1)),

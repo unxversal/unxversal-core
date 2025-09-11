@@ -26,6 +26,7 @@ export type AppSettings = {
   contracts: {
     pkgUnxversal: string;
     pkgDeepbook: string;
+    rewardsId?: string;
   };
   staking?: {
     poolId: string; // UNXV staking pool id

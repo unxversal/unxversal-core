@@ -18,7 +18,23 @@ export const MAINNET_ORACLE_FEEDS: NonNullable<DeployConfig['oracleFeeds']> = [
   { symbol: 'WBNB/USDC', priceId: '0x2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f' },
 ];
 
-export const TESTNET_ORACLE_FEEDS = MAINNET_ORACLE_FEEDS;
+export const TESTNET_ORACLE_FEEDS: NonNullable<DeployConfig['oracleFeeds']> = [
+  { symbol: 'SUI/USDC', priceId: '0x50c67b3fd225db8912a424dd4baed60ffdde625ed2feaaf283724f9608fea266' },
+  { symbol: 'DEEP/USDC', priceId: '0xe18bf5fa857d5ca8af1f6a458b26e853ecdc78fc2f3dc17f4821374ad94d8327' },
+  { symbol: 'ETH/USDC', priceId: '0xca80ba6dc32e08d06f1aa886011eed1d77c77be9eb761cc10d72b7d0a2fd57a6' },
+  { symbol: 'BTC/USDC', priceId: '0xf9c0172ba10dfa4d19088d94f5bf61d3b54d5bd7483a322a982e1373ee8ea31b' },
+  { symbol: 'SOL/USDC', priceId: '0xfe650f0367d4a7ef9815a593ea15d36593f0643aaaf0149bb04be67ab851decd' },
+  { symbol: 'GLMR/USDC', priceId: '0x38f4cd70ed68b449613c0a13dd101141c2bc61a72e284595feb452f6e7e6b0c5' },
+  { symbol: 'MATIC/USDC', priceId: '0xb70baf5be4a7509e962468325ddb952aca04e549bbd8e7744214fde88857ac29' },
+  { symbol: 'APT/USDC', priceId: '0x44a93dddd8effa54ea51076c4e851b6cbbfd938e82eb90197de38fe8876bb66e' },
+  { symbol: 'CELO/USDC', priceId: '0xe75bf4f2cf9e9f6a91d3c3cfc00136e3ba7eaeb162084fdad818c68133dc8a24' },
+  { symbol: 'IKA/USDC', priceId: '0x2816b8747907b457a8480aa29c9049eb3bd7529120c96c1b9a402a9faed04dab' },
+  { symbol: 'NS/USDC', priceId: '0x65aca56071505735c09091deb8733fdeba265bd9723dd4fb326b5ffd6843b3a3' },
+  { symbol: 'SEND/USDC', priceId: '0xa10095ccc2eda27177e6b731fb5d72c876949315cae8075247843f5c1d09be38' },
+  { symbol: 'WAL/USDC', priceId: '0xa6ba0195b5364be116059e401fb71484ed3400d4d9bfbdf46bd11eab4f9b7cea' },
+  { symbol: 'USDT/USDC', priceId: '0x1fc18861232290221461220bd4e2acd1dcdfbc89c84092c93c18bdc7756c1588' },
+  { symbol: 'WBNB/USDC', priceId: '0xecf553770d9b10965f8fb64771e93f5690a182edc32be4a3236e0caaa6e0581a' },
+];
 
 export const ORACLE_MAX_AGE_SEC = 5;
 

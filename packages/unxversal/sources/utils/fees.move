@@ -18,8 +18,6 @@ module unxversal::fees {
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::unxv::UNXV;
     use unxversal::staking::{Self as staking, StakingPool};
-    use deepbook::pool::{Self as db_pool, Pool};
-    use token::deep::DEEP;
 
     /// Errors
     const E_NOT_ADMIN: u64 = 1;
@@ -451,37 +449,6 @@ module unxversal::fees {
 
     public fun kind_spot(): u8 { KIND_SPOT }
     public fun kind_perps(): u8 { KIND_PERPS }
-
-    /***********************
-     * Admin conversion to USDC (generic quote)
-     ***********************/
-    public fun admin_convert_fee_balance_via_pool<Base, Quote>(
-        reg_admin: &AdminRegistry,
-        vault: &mut FeeVault,
-        amount: u64,
-        pool: &mut Pool<Base, Quote>,
-        is_base_to_quote: bool,
-        clock: &sui::clock::Clock,
-        ctx: &mut TxContext,
-    ) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        let key = FeeKey<Base> {};
-        assert!(bag::contains(&vault.store, key), E_ZERO_AMOUNT);
-        let bal: &mut Balance<Base> = &mut vault.store[key];
-        let bal_out = balance::split(bal, amount);
-        let coin_base = coin::from_balance(bal_out, ctx);
-        let deep_zero = coin::zero<DEEP>(ctx);
-        if (is_base_to_quote) {
-            let (base_left, quote_out, deep_left) = db_pool::swap_exact_base_for_quote(pool, coin_base, deep_zero, 0, clock, ctx);
-            // deposit all outputs back to the vault (consume coins): Base change, Quote proceeds, DEEP change
-            deposit_generic<Base>(vault, base_left);
-            deposit_generic<Quote>(vault, quote_out);
-            deposit_generic<DEEP>(vault, deep_left);
-        } else {
-            // If fee asset is actually Quote, we need a different key; keep Base path only for simplicity
-            abort 1338
-        }
-    }
 
     fun deposit_generic<T>(vault: &mut FeeVault, coin_in: Coin<T>) {
         let key = FeeKey<T> {};

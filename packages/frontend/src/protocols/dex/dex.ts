@@ -1,6 +1,7 @@
 import { moveModuleFilter } from '../common';
 import type { IndexerTracker } from '../../lib/indexer';
 import { Transaction } from '@mysten/sui/transactions';
+import { getContracts } from '../../lib/env';
 
 export function dexEventTracker(pkg: string): IndexerTracker {
   return {
@@ -18,7 +19,6 @@ export class DexClient {
     quoteType: string;
     poolId: string;
     balanceManagerId: string;
-    tradeProofId: string;
     feeConfigId: string;
     feeVaultId: string;
     clientOrderId: bigint;
@@ -31,13 +31,19 @@ export class DexClient {
     expireTimestamp: bigint; // u64
   }) {
     const tx = new Transaction();
+    // generate TradeProof as owner inside PTB
+    const { pkgDeepbook } = getContracts();
+    const gen = tx.moveCall({
+      target: `${pkgDeepbook}::balance_manager::generate_proof_as_owner`,
+      arguments: [tx.object(args.balanceManagerId)],
+    });
     tx.moveCall({
       target: `${this.pkg}::dex::place_limit_order`,
       typeArguments: [args.baseType, args.quoteType],
       arguments: [
         tx.object(args.poolId),
         tx.object(args.balanceManagerId),
-        tx.object(args.tradeProofId),
+        gen,
         tx.object(args.feeConfigId),
         tx.object(args.feeVaultId),
         tx.pure.u64(args.clientOrderId),
@@ -59,7 +65,6 @@ export class DexClient {
     quoteType: string;
     poolId: string;
     balanceManagerId: string;
-    tradeProofId: string;
     feeConfigId: string;
     feeVaultId: string;
     clientOrderId: bigint;
@@ -69,13 +74,18 @@ export class DexClient {
     payWithDeep: boolean;
   }) {
     const tx = new Transaction();
+    const { pkgDeepbook } = getContracts();
+    const gen = tx.moveCall({
+      target: `${pkgDeepbook}::balance_manager::generate_proof_as_owner`,
+      arguments: [tx.object(args.balanceManagerId)],
+    });
     tx.moveCall({
       target: `${this.pkg}::dex::place_market_order`,
       typeArguments: [args.baseType, args.quoteType],
       arguments: [
         tx.object(args.poolId),
         tx.object(args.balanceManagerId),
-        tx.object(args.tradeProofId),
+        gen,
         tx.object(args.feeConfigId),
         tx.object(args.feeVaultId),
         tx.pure.u64(args.clientOrderId),
@@ -94,17 +104,21 @@ export class DexClient {
     quoteType: string;
     poolId: string;
     balanceManagerId: string;
-    tradeProofId: string;
     orderId: bigint;
   }) {
     const tx = new Transaction();
+    const { pkgDeepbook } = getContracts();
+    const gen = tx.moveCall({
+      target: `${pkgDeepbook}::balance_manager::generate_proof_as_owner`,
+      arguments: [tx.object(args.balanceManagerId)],
+    });
     tx.moveCall({
       target: `${this.pkg}::dex::cancel_order`,
       typeArguments: [args.baseType, args.quoteType],
       arguments: [
         tx.object(args.poolId),
         tx.object(args.balanceManagerId),
-        tx.object(args.tradeProofId),
+        gen,
         tx.pure.u128(args.orderId),
         tx.object('0x6'),
       ],
@@ -117,18 +131,22 @@ export class DexClient {
     quoteType: string;
     poolId: string;
     balanceManagerId: string;
-    tradeProofId: string;
     orderId: bigint;
     newQuantity: bigint;
   }) {
     const tx = new Transaction();
+    const { pkgDeepbook } = getContracts();
+    const gen = tx.moveCall({
+      target: `${pkgDeepbook}::balance_manager::generate_proof_as_owner`,
+      arguments: [tx.object(args.balanceManagerId)],
+    });
     tx.moveCall({
       target: `${this.pkg}::dex::modify_order`,
       typeArguments: [args.baseType, args.quoteType],
       arguments: [
         tx.object(args.poolId),
         tx.object(args.balanceManagerId),
-        tx.object(args.tradeProofId),
+        gen,
         tx.pure.u128(args.orderId),
         tx.pure.u64(args.newQuantity),
         tx.object('0x6'),
@@ -142,16 +160,211 @@ export class DexClient {
     quoteType: string;
     poolId: string;
     balanceManagerId: string;
-    tradeProofId: string;
   }) {
     const tx = new Transaction();
+    const { pkgDeepbook } = getContracts();
+    const gen = tx.moveCall({
+      target: `${pkgDeepbook}::balance_manager::generate_proof_as_owner`,
+      arguments: [tx.object(args.balanceManagerId)],
+    });
     tx.moveCall({
       target: `${this.pkg}::dex::withdraw_settled_amounts`,
       typeArguments: [args.baseType, args.quoteType],
       arguments: [
         tx.object(args.poolId),
         tx.object(args.balanceManagerId),
-        tx.object(args.tradeProofId),
+        gen,
+      ],
+    });
+    return tx;
+  }
+
+  // Injection-fee variants (prefer_deep_backend = false path)
+  placeLimitOrderWithProtocolFeeBid(args: {
+    baseType: string;
+    quoteType: string;
+    poolId: string;
+    balanceManagerId: string;
+    feeConfigId: string;
+    feeVaultId: string;
+    stakingPoolId: string;
+    feePaymentQuoteCoinId: string; // Coin<Quote>
+    maybeUnxvCoinId?: string; // Coin<UNXV>
+    clientOrderId: bigint;
+    orderType: number;
+    selfMatchingOption: number;
+    price: bigint;
+    quantity: bigint;
+    payWithDeep: boolean;
+    expireTimestamp: bigint;
+  }) {
+    const tx = new Transaction();
+    const { pkgDeepbook } = getContracts();
+    const gen = tx.moveCall({ target: `${pkgDeepbook}::balance_manager::generate_proof_as_owner`, arguments: [tx.object(args.balanceManagerId)] });
+    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const optUnxv = args.maybeUnxvCoinId
+      ? tx.moveCall({ target: `0x1::option::some`, typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
+      : tx.moveCall({ target: `0x1::option::none`, typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
+    tx.moveCall({
+      target: `${this.pkg}::dex::place_limit_order_with_protocol_fee_bid`,
+      typeArguments: [args.baseType, args.quoteType],
+      arguments: [
+        tx.object(args.poolId),
+        tx.object(args.balanceManagerId),
+        gen,
+        tx.object(args.feeConfigId),
+        tx.object(args.feeVaultId),
+        tx.object(args.stakingPoolId),
+        tx.object(args.feePaymentQuoteCoinId),
+        optUnxv,
+        tx.pure.u64(args.clientOrderId),
+        tx.pure.u8(args.orderType),
+        tx.pure.u8(args.selfMatchingOption),
+        tx.pure.u64(args.price),
+        tx.pure.u64(args.quantity),
+        tx.pure.bool(true),
+        tx.pure.bool(args.payWithDeep),
+        tx.pure.u64(args.expireTimestamp),
+        tx.object('0x6'),
+      ],
+    });
+    return tx;
+  }
+
+  placeLimitOrderWithProtocolFeeAsk(args: {
+    baseType: string;
+    quoteType: string;
+    poolId: string;
+    balanceManagerId: string;
+    feeConfigId: string;
+    feeVaultId: string;
+    stakingPoolId: string;
+    feePaymentBaseCoinId: string; // Coin<Base>
+    maybeUnxvCoinId?: string; // Coin<UNXV>
+    clientOrderId: bigint;
+    orderType: number;
+    selfMatchingOption: number;
+    price: bigint;
+    quantity: bigint;
+    payWithDeep: boolean;
+    expireTimestamp: bigint;
+  }) {
+    const tx = new Transaction();
+    const { pkgDeepbook } = getContracts();
+    const gen = tx.moveCall({ target: `${pkgDeepbook}::balance_manager::generate_proof_as_owner`, arguments: [tx.object(args.balanceManagerId)] });
+    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const optUnxv = args.maybeUnxvCoinId
+      ? tx.moveCall({ target: `0x1::option::some`, typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
+      : tx.moveCall({ target: `0x1::option::none`, typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
+    tx.moveCall({
+      target: `${this.pkg}::dex::place_limit_order_with_protocol_fee_ask`,
+      typeArguments: [args.baseType, args.quoteType],
+      arguments: [
+        tx.object(args.poolId),
+        tx.object(args.balanceManagerId),
+        gen,
+        tx.object(args.feeConfigId),
+        tx.object(args.feeVaultId),
+        tx.object(args.stakingPoolId),
+        tx.object(args.feePaymentBaseCoinId),
+        optUnxv,
+        tx.pure.u64(args.clientOrderId),
+        tx.pure.u8(args.orderType),
+        tx.pure.u8(args.selfMatchingOption),
+        tx.pure.u64(args.price),
+        tx.pure.u64(args.quantity),
+        tx.pure.bool(false),
+        tx.pure.bool(args.payWithDeep),
+        tx.pure.u64(args.expireTimestamp),
+        tx.object('0x6'),
+      ],
+    });
+    return tx;
+  }
+
+  placeMarketOrderWithProtocolFeeBid(args: {
+    baseType: string;
+    quoteType: string;
+    poolId: string;
+    balanceManagerId: string;
+    feeConfigId: string;
+    feeVaultId: string;
+    stakingPoolId: string;
+    feePaymentQuoteCoinId: string;
+    maybeUnxvCoinId?: string;
+    clientOrderId: bigint;
+    selfMatchingOption: number;
+    quantity: bigint;
+    payWithDeep: boolean;
+  }) {
+    const tx = new Transaction();
+    const { pkgDeepbook } = getContracts();
+    const gen = tx.moveCall({ target: `${pkgDeepbook}::balance_manager::generate_proof_as_owner`, arguments: [tx.object(args.balanceManagerId)] });
+    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const optUnxv = args.maybeUnxvCoinId
+      ? tx.moveCall({ target: `0x1::option::some`, typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
+      : tx.moveCall({ target: `0x1::option::none`, typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
+    tx.moveCall({
+      target: `${this.pkg}::dex::place_market_order_with_protocol_fee_bid`,
+      typeArguments: [args.baseType, args.quoteType],
+      arguments: [
+        tx.object(args.poolId),
+        tx.object(args.balanceManagerId),
+        gen,
+        tx.object(args.feeConfigId),
+        tx.object(args.feeVaultId),
+        tx.object(args.stakingPoolId),
+        tx.object(args.feePaymentQuoteCoinId),
+        optUnxv,
+        tx.pure.u64(args.clientOrderId),
+        tx.pure.u8(args.selfMatchingOption),
+        tx.pure.u64(args.quantity),
+        tx.pure.bool(args.payWithDeep),
+        tx.object('0x6'),
+      ],
+    });
+    return tx;
+  }
+
+  placeMarketOrderWithProtocolFeeAsk(args: {
+    baseType: string;
+    quoteType: string;
+    poolId: string;
+    balanceManagerId: string;
+    feeConfigId: string;
+    feeVaultId: string;
+    stakingPoolId: string;
+    feePaymentBaseCoinId: string;
+    maybeUnxvCoinId?: string;
+    clientOrderId: bigint;
+    selfMatchingOption: number;
+    quantity: bigint;
+    payWithDeep: boolean;
+  }) {
+    const tx = new Transaction();
+    const { pkgDeepbook } = getContracts();
+    const gen = tx.moveCall({ target: `${pkgDeepbook}::balance_manager::generate_proof_as_owner`, arguments: [tx.object(args.balanceManagerId)] });
+    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const optUnxv = args.maybeUnxvCoinId
+      ? tx.moveCall({ target: `0x1::option::some`, typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
+      : tx.moveCall({ target: `0x1::option::none`, typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
+    tx.moveCall({
+      target: `${this.pkg}::dex::place_market_order_with_protocol_fee_ask`,
+      typeArguments: [args.baseType, args.quoteType],
+      arguments: [
+        tx.object(args.poolId),
+        tx.object(args.balanceManagerId),
+        gen,
+        tx.object(args.feeConfigId),
+        tx.object(args.feeVaultId),
+        tx.object(args.stakingPoolId),
+        tx.object(args.feePaymentBaseCoinId),
+        optUnxv,
+        tx.pure.u64(args.clientOrderId),
+        tx.pure.u8(args.selfMatchingOption),
+        tx.pure.u64(args.quantity),
+        tx.pure.bool(args.payWithDeep),
+        tx.object('0x6'),
       ],
     });
     return tx;

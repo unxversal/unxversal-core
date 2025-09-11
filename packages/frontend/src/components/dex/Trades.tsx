@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import styles from './Trades.module.css';
 
-export function Trades({ pool, indexer }: { pool: string; indexer: ReturnType<typeof import('../../lib/indexer').buildDeepbookPublicIndexer> }) {
+export function Trades({ pool, indexer, balanceManagerId }: { pool: string; indexer: ReturnType<typeof import('../../lib/indexer').buildDeepbookPublicIndexer>; balanceManagerId?: string }) {
   const [rows, setRows] = useState<Array<{ price: number; qty: number; ts: number; side: 'buy' | 'sell' }>>([]);
   
   useEffect(() => {
@@ -38,7 +38,7 @@ export function Trades({ pool, indexer }: { pool: string; indexer: ReturnType<ty
     void load();
     const id = setInterval(load, 2000);
     return () => { mounted = false; clearInterval(id); };
-  }, [pool, indexer]);
+  }, [pool, indexer, balanceManagerId]);
 
   return (
     <div className={styles.root}>

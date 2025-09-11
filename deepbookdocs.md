@@ -2419,3 +2419,1122 @@ Documentation
 Typescript SDK - published, latest version seen here https://www.npmjs.com/package/@mysten/deepbook-v3 
 Typescript SDK Docs
 Mainnet RPC URL - https://fullnode.mainnet.sui.io:443
+
+
+---
+title: DeepBookV3 SDK
+description: Use the DeepBook TypeScript SDK to interact directly with the DeepBook package. 
+keywords: [ deepbook, deep book, deepbook v3, typescript, typescript SDK, mysten/deepbook, deepbookV3 SDK, Coin, Pool, Manager ] 
+---
+
+The DeepBookV3 TypeScript SDK abstracts away the transaction calls, allowing for direct interactions with the `DeepBook` package.
+
+- [SDK repository](https://github.com/MystenLabs/ts-sdks/tree/main/packages/deepbook-v3)
+- [NPM version](https://www.npmjs.com/package/@mysten/deepbook-v3)
+
+## Install
+
+To use the SDK in your projects, install the `@mysten/deepbook` package.
+
+```sh npm2yarn
+npm install @mysten/deepbook-v3
+```
+
+## Constants
+
+The DeepBookV3 SDK includes a constants file (`/utils/constants.ts`) that maintains the latest deployed addresses for DeepBookV3, as well as a few staple coins and pools.
+
+<details>
+<summary>
+`constants.ts`
+</summary>
+
+```ts reference
+https://github.com/MystenLabs/ts-sdks/blob/main/packages/deepbook-v3/src/utils/constants.ts
+```
+
+</details>
+
+## DeepBookClient
+
+To work with DeepBookV3, you must create a `DeepBookClient`. To construct the `DeepBookClient`, pass in a `SuiClient`, the sender address, and environment. The [Sui TypeScript SDK](https://sdk.mystenlabs.com/typescript) provides the `SuiClient` and key functionality necessary to process transactions. The following example imports those libraries, as well.
+
+```tsx
+import { DeepBookClient } from '@mysten/deepbook-v3';
+import { getFullnodeUrl, SuiClient } from '@mysten/sui/client';
+import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+
+class DeepBookMarketMaker {
+	dbClient: DeepBookClient; // For building transactions
+	suiClient: SuiClient; // For executing transactions
+	keypair: Ed25519Keypair; // For signing transactions
+
+	constructor(privateKey: string, env: 'testnet' | 'mainnet') {
+		this.keypair = this.getSignerFromPK(privateKey);
+		this.suiClient = new SuiClient({
+			url: getFullnodeUrl(env),
+		});
+		this.dbClient = new DeepBookClient({
+			address: this.getActiveAddress(),
+			env: env,
+			client: this.suiClient,
+		});
+	}
+
+	getSignerFromPK = (privateKey: string): Ed25519Keypair => {
+		const { schema, secretKey } = decodeSuiPrivateKey(privateKey);
+		if (schema === 'ED25519') return Ed25519Keypair.fromSecretKey(secretKey);
+
+		throw new Error(`Unsupported schema: ${schema}`);
+	};
+
+	getActiveAddress() {
+		return this.keypair.toSuiAddress();
+	}
+}
+```
+
+## Keys: Coin, Pool, and Manager {#keys}
+
+Functions that require the input of a coin, pool, or a manager require the key of any such object as the parameter. The SDK manages a `key:value` relationship of this data in memory. Some default data comes with the SDK (as seen in `utils/constants.ts`). Coins are stored in a `CoinMap` and pools in a `PoolMap` in the config.
+
+### Balance manager
+
+Before placing any trade, you must supply a balance manager address to the client. The manager key points to an object defined by the `BalanceManager` interface in the client. [BalanceManager docs](./deepbookv3/balance-manager.mdx). Initialize the balance manager with the client. If you don't create a balance manager, you can rely on the client to create one, but then the user must reinitialize the client.
+
+Example using an existing balance manager:
+
+```tsx
+import { getFullnodeUrl, SuiClient } from '@mysten/sui/client';
+import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { config } from 'dotenv';
+
+import { DeepBookClient } from '../src';
+import { BalanceManager } from './types';
+
+config();
+
+// Used wherever balance manager key is required
+const BALANCE_MANAGER_KEY = 'MANAGER_1';
+
+class DeepBookMarketMaker {
+	dbClient: DeepBookClient; // For building transactions
+	suiClient: SuiClient; // For executing transactions
+	keypair: Ed25519Keypair; // For signing transactions
+	env: 'testnet' | 'mainnet';
+
+	constructor(privateKey: string, env: 'testnet' | 'mainnet') {
+		this.env = env;
+		this.keypair = this.getSignerFromPK(privateKey);
+		this.suiClient = new SuiClient({
+			url: getFullnodeUrl(env),
+		});
+		this.dbClient = new DeepBookClient({
+			address: this.getActiveAddress(),
+			env: env,
+			client: this.suiClient,
+			balanceManagers: this.getBalanceManagers(),
+		});
+	}
+
+	getSignerFromPK = (privateKey: string): Ed25519Keypair => {
+		const { schema, secretKey } = decodeSuiPrivateKey(privateKey);
+		if (schema === 'ED25519') return Ed25519Keypair.fromSecretKey(secretKey);
+
+		throw new Error(`Unsupported schema: ${schema}`);
+	};
+
+	getActiveAddress() {
+		return this.keypair.toSuiAddress();
+	}
+
+	getBalanceManagers(): { [key: string]: BalanceManager } {
+		// Used wherever balance manager key is required
+		const balanceManagerAddress = process.env.BALANCE_MANAGER_ADDRESS;
+		const balanceManagerTradeCap = process.env.BALANCE_MANAGER_TRADE_CAP;
+		if (!balanceManagerAddress) {
+			throw new Error('No balance manager address found');
+		}
+		return {
+			[BALANCE_MANAGER_KEY]: {
+				address: balanceManagerAddress,
+				tradeCap: balanceManagerTradeCap,
+			},
+		};
+	}
+}
+```
+
+Example creating a balance manager:
+
+```tsx
+import { getFullnodeUrl, SuiClient } from '@mysten/sui/client';
+import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { Transaction } from '@mysten/sui/transactions';
+
+import { DeepBookClient } from '../src';
+import { BalanceManager } from './types';
+
+// Used wherever balance manager key is required
+const BALANCE_MANAGER_KEY = 'MANAGER_1';
+
+class DeepBookMarketMaker {
+	dbClient: DeepBookClient; // For building transactions
+	suiClient: SuiClient; // For executing transactions
+	keypair: Ed25519Keypair; // For signing transactions
+	env: 'testnet' | 'mainnet';
+
+	constructor(privateKey: string, env: 'testnet' | 'mainnet') {
+		this.env = env;
+		this.keypair = this.getSignerFromPK(privateKey);
+		this.suiClient = new SuiClient({
+			url: getFullnodeUrl(env),
+		});
+		this.dbClient = new DeepBookClient({
+			address: this.getActiveAddress(),
+			env: env,
+			client: this.suiClient,
+		});
+	}
+
+	getSignerFromPK = (privateKey: string): Ed25519Keypair => {
+		const { schema, secretKey } = decodeSuiPrivateKey(privateKey);
+		if (schema === 'ED25519') return Ed25519Keypair.fromSecretKey(secretKey);
+
+		throw new Error(`Unsupported schema: ${schema}`);
+	};
+
+	getActiveAddress() {
+		return this.keypair.toSuiAddress();
+	}
+
+	async createBalanceManagerAndReinitialize() {
+		let tx = new Transaction();
+		tx.add(this.dbClient.balanceManager.createAndShareBalanceManager());
+
+		const res = await this.suiClient.signAndExecuteTransaction({
+			transaction: tx,
+			signer: this.keypair,
+			options: {
+				showEffects: true,
+				showObjectChanges: true,
+			},
+		});
+
+		// @ts-ignore
+		const balanceManagerAddress = res.objectChanges?.find((change) => {
+			return change.type === 'created' && change.objectType.includes('BalanceManager');
+		})?.['objectId'];
+
+		const balanceManagers: { [key: string]: BalanceManager } = {
+			[BALANCE_MANAGER_KEY]: {
+				address: balanceManagerAddress,
+				tradeCap: undefined,
+			},
+		};
+
+		this.dbClient = new DeepBookClient({
+			address: this.getActiveAddress(),
+			env: this.env,
+			client: this.suiClient,
+			balanceManagers: balanceManagers,
+		});
+	}
+}
+```
+
+### Coin
+
+The SDK comes with four default coins on Testnet and five default coins on Mainnet.
+
+**Default Testnet coins**
+
+- DEEP
+- SUI
+- DBUSDC
+- DBUSDT
+
+**Default Mainnet coins**
+
+- DEEP
+- SUI
+- USDC
+- USDT
+- WETH
+
+You can also initialize the SDK with custom coins to interact with pools that are not supported by default. To do this, create a `CoinMap` object and pass it to the constructor of the client.
+
+### Pool
+
+Similar to coins, the SDK comes with default pools. You can provide a `PoolMap` during construction to override this behavior.
+
+```tsx
+import { decodeSuiPrivateKey } from '@mysten/sui.js/cryptography';
+import { getFullnodeUrl, SuiClient } from '@mysten/sui/client';
+import type { Keypair } from '@mysten/sui/cryptography';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import type { Transaction } from '@mysten/sui/transactions';
+
+import { DeepBookClient } from '../src/index.js'; // Adjust path according to new structure
+import type { BalanceManager } from '../src/types/index.js';
+
+export class DeepBookMarketMaker extends DeepBookClient {
+	keypair: Keypair;
+	suiClient: SuiClient;
+
+	constructor(
+		keypair: string | Keypair,
+		env: 'testnet' | 'mainnet',
+		balanceManagers?: { [key: string]: BalanceManager },
+		adminCap?: string,
+	) {
+		let resolvedKeypair: Keypair;
+
+		if (typeof keypair === 'string') {
+			resolvedKeypair = DeepBookMarketMaker.#getSignerFromPK(keypair);
+		} else {
+			resolvedKeypair = keypair;
+		}
+
+		const address = resolvedKeypair.toSuiAddress();
+
+		super({
+			address: address,
+			env: env,
+			client: new SuiClient({
+				url: getFullnodeUrl(env),
+			}),
+			balanceManagers: balanceManagers,
+			adminCap: adminCap,
+		});
+
+		this.keypair = resolvedKeypair;
+		this.suiClient = new SuiClient({
+			url: getFullnodeUrl(env),
+		});
+	}
+
+	static #getSignerFromPK = (privateKey: string) => {
+		const { schema, secretKey } = decodeSuiPrivateKey(privateKey);
+		if (schema === 'ED25519') return Ed25519Keypair.fromSecretKey(secretKey);
+
+		throw new Error(`Unsupported schema: ${schema}`);
+	};
+
+	signAndExecute = async (tx: Transaction) => {
+		// remove arguments
+		return this.suiClient.signAndExecuteTransaction({
+			transaction: tx,
+			signer: this.keypair,
+			options: {
+				showEffects: true,
+				showObjectChanges: true,
+			},
+		});
+	};
+
+	getActiveAddress() {
+		return this.keypair.getPublicKey().toSuiAddress();
+	}
+}
+```
+
+### Example setup
+
+The following example uses the default pools and coins provided.
+
+```tsx
+import { Transaction } from '@mysten/sui/transactions';
+
+import { DeepBookMarketMaker } from './deepbookMarketMaker.js';
+
+(async () => {
+	const privateKey = ''; // Can encapsulate this in a .env file
+
+	// Initialize with balance managers if created
+	const balanceManagers = {
+		MANAGER_1: {
+			address: '',
+			tradeCap: '',
+		},
+	};
+	const mmClient = new DeepBookMarketMaker(privateKey, 'testnet', balanceManagers);
+
+	const tx = new Transaction();
+
+	// Read only call
+	console.log(await mmClient.checkManagerBalance('MANAGER_1', 'SUI'));
+	console.log(await mmClient.getLevel2Range('SUI_DBUSDC', 0.1, 100, true));
+
+	// Balance manager contract call
+	mmClient.balanceManager.depositIntoManager('MANAGER_1', 'DBUSDT', 10000)(tx);
+	mmClient.balanceManager.withdrawAllFromManager(
+		'MANAGER_1',
+		'DBUSDT',
+		mmClient.getActiveAddress(),
+	)(tx);
+
+	// Example custom PTB call in DeepBookMarketMaker class
+	mmClient.placeLimitOrderExample(tx);
+	mmClient.flashLoanExample(tx);
+
+	let res = await mmClient.signAndExecute(tx);
+
+	console.dir(res, { depth: null });
+})();
+```
+
+## Related links
+
+<RelatedLink href="https://github.com/MystenLabs/ts-sdks/tree/main/packages/deepbook-v3" label="DeepBookV3 Indexer repository" desc="The DeepBookV3 SDK repository on GitHub." />
+<RelatedLink href="https://www.npmjs.com/package/@mysten/deepbook-v3" label="DeepBookV3 SDK node package" desc="The DeepBookV3 SDK node package on NPM." />
+<RelatedLink href="https://github.com/MystenLabs/deepbookv3" label="DeepBookV3 repository" desc="The DeepBookV3 repository on GitHub." />
+
+---
+title: Flash Loans SDK
+sidebar_label: Flash Loans
+description: Learn how to use the DeepBookV3 SDK to execute functions relating to flash loans.
+keywords: [ uncollaterized, flash loans, loans, uncollaterized loans, programmable transaction blocks, ptbs, borrow flash loan base, borrow flash loan quote, retrieve flash loan base, retrieve flash loan quote ]
+---
+
+A flash loan is one where the borrowing and returning of loans from pools is performed within a single programmable transaction block. The SDK exposes functions that allow you to implement this functionality. See [Flash Loans](https://docs.sui.io/standards/deepbookv3/flash-loans) for more details on the API.
+
+## Flash loan functions
+
+The DeepBookV3 SDK provides the following flash loan related functions. 
+
+### borrowBaseAsset
+
+Use `borrowBaseAsset` to borrow a base asset from the pool identified by the `poolKey` value you provide. The call returns a function that takes a `Transaction` object
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool from which to borrow.
+- `borrowAmount`: Number that represents the amount to borrow from the pool.
+
+```tsx
+borrowBaseAsset(poolKey: string, borrowAmount: number);
+```
+
+### returnBaseAsset
+
+Use `returnBaseAsset` to return the base asset to the pool identified by the `poolKey` value you provide. The call returns a function that takes a `Transaction` object.
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool from which to borrow.
+- `borrowAmount`: Number that represents the amount to borrow from the pool.
+- `baseCoinInput`: Coin object representing the base asset to be returned.
+- `flashLoan`: Flash loan object representing the loan to be settled.
+
+```tsx
+returnBaseAsset(
+  {
+    poolKey: string,
+    borrowAmount: number,
+    baseCoinInput: TransactionObjectArgument,
+    flashLoan: TransactionObjectArgument,
+  }
+)
+```
+
+### borrowQuoteAsset
+
+Use `borrowQuoteAsset` to borrow a quote asset from the pool identified by the `poolKey` value you provide. The call returns a function that takes a `Transaction` object.
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool from which to borrow.
+- `borrowAmount`: Number that represents the amount to borrow from the pool.
+
+```tsx
+borrowQuoteAsset(poolKey: string, borrowAmount: number);
+```
+
+### returnQuoteAsset
+
+Use `returnQuoteAsset` to return a quote asset to the pool identified by the `poolKey` you provide. The call returns a function that takes a `Transaction` object.
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool from which to borrow.
+- `borrowAmount`: Number that represents the amount to borrow from the pool.
+- `baseCoinInput`: Coin object representing the quote asset to be returned.
+- `flashLoan`: Flash loan object representing the loan to be settled.
+
+```tsx
+returnQuoteAsset(
+  poolKey: string,
+  borrowAmount: number,
+  quoteCoinInput: TransactionObjectArgument,
+  flashLoan: TransactionObjectArgument,
+);
+```
+
+## Flash loan example
+
+The following example demonstrates flash loan usage in `DeepBookMarketMaker` class.
+    
+```tsx
+// Example of a flash loan transaction
+// Borrow 1 DEEP from DEEP_SUI pool
+// Swap 0.5 DBUSDC for SUI in SUI_DBUSDC pool, pay with deep borrowed
+// Swap SUI back to DEEP
+// Return 1 DEEP to DEEP_SUI pool
+flashLoanExample = async (tx: Transaction) => {
+  const borrowAmount = 1;
+  const [deepCoin, flashLoan] = tx.add(this.flashLoans.borrowBaseAsset('DEEP_SUI', borrowAmount));
+
+  // Execute trade using borrowed DEEP
+  const [baseOut, quoteOut, deepOut] = tx.add(
+    this.deepBook.swapExactQuoteForBase({
+      poolKey: 'SUI_DBUSDC',
+      amount: 0.5,
+      deepAmount: 1,
+      minOut: 0,
+      deepCoin: deepCoin,
+    }),
+  );
+
+  tx.transferObjects([baseOut, quoteOut, deepOut], this.getActiveAddress());
+
+  // Execute second trade to get back DEEP for repayment
+  const [baseOut2, quoteOut2, deepOut2] = tx.add(
+    this.deepBook.swapExactQuoteForBase({
+      poolKey: 'DEEP_SUI',
+      amount: 10,
+      deepAmount: 0,
+      minOut: 0,
+    }),
+  );
+
+  tx.transferObjects([quoteOut2, deepOut2], this.getActiveAddress());
+
+  // Return borrowed DEEP
+  const loanRemain = tx.add(
+    this.flashLoans.returnBaseAsset('DEEP_SUI', borrowAmount, baseOut2, flashLoan),
+  );
+  
+  // Send the remaining coin to user's address
+  tx.transferObjects([loanRemain], this.getActiveAddress());
+};
+```
+
+## Related links
+
+<RelatedLink href="https://github.com/MystenLabs/ts-sdks/tree/main/packages/deepbook-v3" label="DeepBookV3 Indexer repository" desc="The DeepBookV3 SDK repository on GitHub." />
+<RelatedLink href="https://www.npmjs.com/package/@mysten/deepbook-v3" label="DeepBookV3 SDK node package" desc="The DeepBookV3 SDK node package on NPM." />
+<RelatedLink href="https://github.com/MystenLabs/deepbookv3" label="DeepBookV3 repository" desc="The DeepBookV3 repository on GitHub." />
+
+---
+title: Orders SDK
+sidebar_label: Orders
+description: Learn how to use the DeepBookV3 SDK to leverage orders against pools.
+keywords: [ limit orders, market orders, modify orders, cancel orders, balancemanager, deepbookv3, pay_with_deep, DEEP token, reduce order size, lower expiration time, order options, self-matching options, orderinfo, orderdeepprice, fill, events, place market order, withdraw amount, withdraw settled amount ]
+---
+
+Placing orders is a main function of any DeepBook integration. Before you can place orders, though, you must first set up a balance manager. See [DeepBookV3 SDK](../deepbookv3-sdk.mdx) for information on setting up a balance manager.
+
+## Order functions
+
+The DeepBookV3 SDK provides the following functions for leveraging orders against pools.
+
+### placeLimitOrder
+
+Use `placeLimitOrder` to place limit orders. The call returns a function that takes a `Transaction` object.
+
+**Parameters**
+
+- `params`: `SwapParams` object that represents the parameters for the swap.
+
+```tsx
+placeLimitOrder({ params: PlaceLimitOrderParams });
+```
+
+### placeMarketOrder
+
+Use `placeMarketOrder` to place market orders. The call returns a function that takes a `Transaction` object.
+
+**Parameters**
+
+- `params`: `SwapParams` object that represents the parameters for the swap.
+
+```tsx
+placeMarketOrder({ params: PlaceMarketOrderParams });
+```
+
+### cancelOrder
+
+Use `cancelOrder` to cancel an existing order that is identified by the `orderId` that you provide. The call returns a function that takes a `Transaction` object.
+
+:::warning
+The `orderId` is the protocol `orderId` generated during order placement, which is different from the client `orderId`.
+:::
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool from which to borrow.
+- `balanceManagerKey`: String that identifies the `BalanceManager`.
+- `orderId`: String of the protocol order ID that identifies the order to cancel. 
+
+```tsx
+cancelOrder(poolKey: string, balanceManagerKey: string, orderId: string);
+```
+
+### cancelAllOrders
+
+Use `cancelAllOrders` to cancel every order for the balance manager whose key you provide. The call returns a function that takes a `Transaction` object.
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool from which to borrow.
+- `balanceManagerKey`: String that identifies the `BalanceManager`.
+
+```tsx
+cancelAllOrders(poolKey: string, balanceManagerKey: string);
+```
+
+## Examples
+
+The following examples demonstrate some custom functions for DeepBookV3 orders.
+
+### Limit orders
+
+See the [Order API](../deepbookv3/orders) for the different order types and self matching options.
+    
+```tsx
+// Params for limit order
+interface PlaceLimitOrderParams {
+    poolKey: string;
+    balanceManagerKey: string;
+    clientOrderId: string;
+    price: number;
+    quantity: number;
+    isBid: boolean;
+    expiration?: number | bigint; // Default no expiration
+    orderType?: OrderType; // Default no restrictions
+    selfMatchingOption?: SelfMatchingOptions; // Default self matching allowed
+    payWithDeep?: boolean; // Default true
+}
+
+/**
+  * @description Place a limit order
+  * @param {PlaceLimitOrderParams} params Parameters for placing a limit order
+  * @returns A function that takes a Transaction object
+  */
+placeLimitOrder = (params: PlaceLimitOrderParams) => (tx: Transaction) => {}
+
+// Example usage in DeepBookMarketMaker class
+// Place a bid of 10 DEEP at $0.1
+customPlaceLimitOrder = (tx: Transaction) => {
+  const poolKey = 'DEEP_DBUSDC'; // Pool key, check constants.ts for more
+  const managerKey = 'MANAGER_1'; // Balance manager key, initialized during client creation by user
+  tx.add(
+    this.deepBook.placeLimitOrder({
+      poolKey: poolKey,
+      balanceManagerKey: managerKey,
+      clientOrderId: '1',
+      price: 0.1,
+      quantity: 10,
+      isBid: true,
+      payWithDeep: true,
+    }),
+  );
+};
+```
+
+### Place market order
+
+Example of placing a market order.
+
+```tsx
+// Params for market order
+interface PlaceMarketOrderParams {
+    poolKey: string;
+    balanceManagerKey: string;
+    clientOrderId: string;
+    quantity: number;
+    isBid: boolean;
+    selfMatchingOption?: SelfMatchingOptions;
+    payWithDeep?: boolean;
+}
+
+// Example usage in DeepBookMarketMaker class
+// Place a market sell of 10 SUI in the SUI_DBUSDC pool
+customPlaceMarketOrder = (tx: Transaction) => {
+  const poolKey = 'SUI_DBUSDC'; // Pool key, check constants.ts for more
+  const managerKey = 'MANAGER_1'; // Balance manager key, initialized during client creation by user
+  tx.add(
+    this.deepBook.placeMarketOrder({
+      poolKey: poolKey,
+      balanceManagerKey: managerKey,
+      clientOrderId: '2',
+      quantity: 10,
+      isBid: true,
+      payWithDeep: true,
+    }),
+  );
+};
+```
+    
+### Cancel an order
+
+Example of canceling a single order in a pool for a balance manager. 
+    
+```tsx
+/**
+  * @description Cancel an existing order
+  * @param {string} poolKey The key to identify the pool
+  * @param {string} balanceManagerKey The key to identify the BalanceManager
+  * @param {number} orderId Order ID to cancel
+  * @returns A function that takes a Transaction object
+  */
+cancelOrder = (
+  poolKey: string, 
+  balanceManagerKey: string, 
+  orderId: number
+) => (tx: Transaction) => {}
+
+// Example usage in DeepBookMarketMaker class
+// Cancel order 12345678 in SUI_DBUSDC pool
+cancelOrder = (tx: Transaction) => {
+  const poolKey = 'SUI_DBUSDC'; // Pool key, check constants.ts for more
+  const managerKey = 'MANAGER_1'; // Balance manager key, initialized during client creation by user
+  tx.add(this.deepBook.cancelOrder(poolKey, managerKey, 12345678));
+};
+```
+
+### Cancel all orders
+
+Example of canceling all orders in a pool for a balance manager.
+    
+```tsx
+/**
+  * @description Cancel all open orders for a balance manager
+  * @param {string} poolKey The key to identify the pool
+  * @param {string} balanceManagerKey The key to identify the BalanceManager
+  * @returns A function that takes a Transaction object
+  */
+cancelAllOrders = (
+  poolKey: string, 
+  balanceManagerKey: string
+) => (tx: Transaction) => {}
+
+// Example usage in DeepBookMarketMaker class
+// Cancel order 12345678 in SUI_DBUSDC pool
+cancelOrder = (tx: Transaction) => {
+  const poolKey = 'SUI_DBUSDC'; // Pool key, check constants.ts for more
+  const managerKey = 'MANAGER_1'; // Balance manager key, initialized during client creation by user
+  tx.add(this.deepBook.cancelAllOrders(poolKey, managerKey));
+};
+```
+
+## Related links
+
+<RelatedLink href="https://github.com/MystenLabs/ts-sdks/tree/main/packages/deepbook-v3" label="DeepBookV3 Indexer repository" desc="The DeepBookV3 SDK repository on GitHub." />
+<RelatedLink href="https://www.npmjs.com/package/@mysten/deepbook-v3" label="DeepBookV3 SDK node package" desc="The DeepBookV3 SDK node package on NPM." />
+<RelatedLink href="https://github.com/MystenLabs/deepbookv3" label="DeepBookV3 repository" desc="The DeepBookV3 repository on GitHub." />
+
+---
+title: Pools SDK
+sidebar_label: Pools
+description: Learn how to use the DeepBookV3 SDK to read the state of a pool.
+keywords: [ deepbook design, deepbookv3, deep book, pool, poolregistry, balancemanager, pool shared object, poolregister shared object, balancemanager shared object, book, state, vault, governance, history, account, bigvector ]
+---
+
+Pools are shared objects that represent a market. See [Query the Pool](../deepbookv3/query-the-pool.mdx) for more information on pools.
+
+## Pool functions
+
+The DeepBookV3 SDK exposes functions that you can call to read the state of a pool. These functions typically require a `managerKey`, `coinKey`, `poolKey`, or a combination of these. For details on these keys, see [DeepBookV3 SDK](../deepbookv3-sdk.mdx#keys). The SDK includes some default keys that you can view in the `constants.ts` file.
+
+:::tip SDK Unit Handling
+Input amounts, quantities, and prices should be provided in standard decimal format (e.g., `10.5` SUI, `0.00001` nBTC). The SDK handles conversion to base units internally. Returned amounts are also in standard decimal format.
+:::
+
+
+### account
+
+Use `account` to retrieve the account information for a `BalanceManager` in a pool, which has the following form:
+
+```tsx
+{
+  epoch: '511',
+  open_orders: {
+    constants: [
+      '170141211130585342296014727715884105730',
+      '18446744092156295689709543266',
+      '18446744092156295689709543265'
+    ]
+  },
+  taker_volume: 0,
+  maker_volume: 0,
+  active_stake: 0,
+  inactive_stake: 0,
+  created_proposal: false,
+  voted_proposal: null,
+  unclaimed_rebates: { base: 0, quote: 0, deep: 0 },
+  settled_balances: { base: 0, quote: 0, deep: 0 },
+  owed_balances: { base: 0, quote: 0, deep: 0 }
+}
+```
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool to query. 
+- `balanceManagerKey`: key of the balance manager defined in the SDK.
+
+```tsx
+async account(poolKey: string, managerKey: string) {}
+```
+
+### accountOpenOrders
+
+Use `accountOpenOrders` to retrieve open orders for the balance manager and pool with the IDs you provide. The call returns a `Promise` that contains an array of open order IDs.
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool to query.
+- `managerKey`: String that identifies the balance manager to query.
+
+```tsx
+async accountOpenOrders(poolKey: string, managerKey: string) {}
+```
+
+### checkManagerBalance
+
+Use `checkManagerBalance` to check the balance manager for a specific coin. The call returns a `Promise` in the form:
+
+```
+{ 
+  coinType: string,
+  balance: number 
+}
+```
+
+**Parameters**
+
+- `managerKey`: String that identifies the balance manager to query.
+- `coinKey`: String that identifies the coin to query the balance of.
+
+```tsx
+async checkManagerBalance(managerKey: string, coinKey: string) {}
+```
+
+### getOrder
+
+Use `getOrder` to retrieve an order's information. The call returns a `Promise` in the `Order` struct, which has the following form:
+
+```tsx
+{
+  balance_manager_id: {
+    bytes: '0x6149bfe6808f0d6a9db1c766552b7ae1df477f5885493436214ed4228e842393'
+  },
+  order_id: '9223372036873222552073709551614',
+  client_order_id: '888',
+  quantity: '50000000',
+  filled_quantity: '0',
+  fee_is_deep: true,
+  order_deep_price: { asset_is_base: false, deep_per_asset: '0' },
+  epoch: '440',
+  status: 0,
+  expire_timestamp: '1844674407370955161'
+}
+```
+
+**Parameters**
+
+`poolKey`: String that identifies the pool to query.
+`orderId`: ID of the order to query.
+
+```tsx
+async getOrder(poolKey: string, orderId: string) {}
+```
+
+### getQuoteQuantityOut
+
+Use `getQuoteQuantityOut` to retrieve the quote quantity out for the base quantity you provide. The call returns a `Promise` in the form:
+```
+{ 
+  baseQuantity: number,
+  baseOut: number,
+  quoteOut: number,
+  deepRequired: number 
+}
+```
+where `deepRequired` is the amount of DEEP required for the dry run.
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool to query.
+- `baseQuantity`: Number that defines the base quantity you want to convert.
+
+ ```tsx
+async getQuoteQuantityOut(poolKey: string, baseQuantity: number) {}
+```
+
+### getBaseQuantityOut
+
+Use `getBaseQuantityOut` to retrieve the base quantity out for the quote quantity that you provide. The call returns a `Promise` in the form:
+```
+{
+  quoteQuantity: number,
+  baseOut: number,
+  quoteOut: number,
+  deepRequired: number
+}
+```
+where `deepRequired` is the amount of DEEP required for the dry run.
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool to query.
+- `quoteQuantity`: Number that defines the quote quantity you want to convert.
+
+```tsx
+async getBaseQuantityOut(poolKey: string, quoteQuantity: number) {}
+```
+
+### getQuantityOut
+
+Use `getQuantityOut` to retrieve the output quantities for the base or quote quantity you provide. You provide values for both quantities, but only one of them can be non-zero. The call returns a `Promise` with the form:
+```
+{
+  baseQuantity: number,
+  quoteQuantity: number,
+  baseOut: number,
+  quoteOut: number,
+  deepRequired: number
+}
+```
+where `deepRequired` is the amount of DEEP required for the dry run.
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool to query.
+- `baseQuantity`: Number that defines the base quantity you want to convert. Set to `0` if using quote quantity.
+- `quoteQuantity`: Number that defines the quote quantity you want to convert. Set to `0` if using base quantity.
+
+```tsx
+async getQuantityOut(poolKey: string, baseQuantity: number, quoteQuantity: number) {}
+```
+
+### getLevel2Range
+
+Use `getLevel2Range` to retrieve level 2 order book within the boundary price range you provide. The call returns a `Promise` in the form:
+```
+{
+  prices: Array<number>,
+  quantities: Array<number>
+}
+```
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool to query.
+- `priceLow`: Number for lower bound of price range.
+- `priceHigh`: Number for upper bound of price range.
+- `isBid`: Boolean when set to `true` gets bid orders, else retrieve ask orders.
+
+ ```tsx
+async getLevel2Range(poolKey: string, priceLow: number, priceHigh: number, isBid: boolean) {}
+```
+
+### getLevel2TicksFromMid
+
+Use `getLevel2TicksFromMid` to retrieve level 2 order book ticks from mid-price for a pool with the ID you provide. The call returns a `Promise` in the form:
+```
+{
+  bid_prices: Array<number>,
+  bid_quantities: Array<number>,
+  ask_prices: Array<number>,
+  ask_quantities: Array<number>
+}
+```
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool to query.
+- `ticks`: Number of ticks from mid-price.
+
+ ```tsx
+async getLevel2TicksFromMid(poolKey: string, ticks: number) {}
+```
+
+### lockedBalance
+
+Use `lockedBalance` to retrieve a `BalanceManager` locked balance in the pool. The call returns a `Promise` in the `Order` struct, which has the following form:
+
+```tsx
+{
+  base: 5.5,
+	quote: 2,
+	deep: 0.15,
+}
+```
+
+**Parameters**
+
+`poolKey`: String that identifies the pool to query. `balanceManagerKey`: key of the balance manager defined in the SDK.
+
+```tsx
+async lockedBalance(poolKey: string, balanceManagerKey: string) {}
+```
+
+### poolTradeParams
+
+Use `poolTradeParams` to retrieve the trade params for the pool, which has the following form:
+
+```tsx
+{
+  takerFee: 0.001,
+	makerFee: 0.0005,
+	stakeRequired: 100,
+}
+```
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool to query.
+
+```tsx
+async poolTradeParams(poolKey: string) {}
+```
+
+### vaultBalances
+
+Use `vaultBalances` to get the vault balances for a pool with the ID you provide. The call returns a `Promise` in the form:
+
+```tsx
+{
+  base: number, 
+  quote: number, 
+  deep: number
+} 
+```
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool to query.
+
+```tsx
+async vaultBalances(poolKey: string) {}
+```
+
+### getPoolIdByAssets
+
+Use `getPoolIdByAssets` to retrieve the pool ID for the asset types you provide. The call returns a `Promise` with the address of the pool if it's found.
+
+**Parameters**
+
+- `baseType`: String of the type of base asset.
+- `quoteType`: String of the type of quote asset.
+
+```tsx
+async getPoolIdByAssets(baseType: string, quoteType: string) {}
+```
+
+### midPrice
+
+Use `midPrice` to retrieve the mid price for a pool with the ID that you provide. The call returns a `Promise` with the mid price.
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool to query.
+
+```tsx
+async midPrice(poolKey: string) {}
+```
+
+### whitelisted
+
+Use `whitelisted` to check if the pool with the ID you provide is whitelisted. The call returns a `Promise` as a boolean indicating whether the pool is whitelisted.
+
+**Parameters**
+
+- `poolKey`: String that identifies the pool to query.
+
+```tsx
+async whitelisted(poolKey: string) {}
+```
+
+## Related links
+
+<RelatedLink href="https://github.com/MystenLabs/ts-sdks/tree/main/packages/deepbook-v3" label="DeepBookV3 Indexer repository" desc="The DeepBookV3 SDK repository on GitHub." />
+<RelatedLink href="https://www.npmjs.com/package/@mysten/deepbook-v3" label="DeepBookV3 SDK node package" desc="The DeepBookV3 SDK node package on NPM." />
+<RelatedLink href="https://github.com/MystenLabs/deepbookv3" label="DeepBookV3 repository" desc="The DeepBookV3 repository on GitHub." />
+
+---
+title: Swaps
+description: Learn how to use the DeepBookV3 SDK to interact a swap-like interface.
+keywords: [ automatic market makers, amms, swap_exact_amount, balancemanager, base_in, quote_in, deep_in, swaps, swap base quantity, deep quantity, DEEP, swap exact quantity, deepbook, deepbookv3  ]
+---
+
+DeepBookV3 provides a swap-like interface commonly seen in automatic market makers (AMMs). The DeepBookV3 SDK provides functions to leverage the features of this interface. See [Swaps](../deepbookv3/swaps.mdx) in the API section for more details.
+
+## Swap functions
+
+The SDK provides the following functions to perform swaps between the base and quote asset.
+
+### swapExactBaseForQuote
+
+Use `swapExactBaseForQuote` to swap exact base amount for quote amount. The call returns a function that takes a `Transaction` object.
+
+**Parameters**
+
+- `params`: `SwapParams` object that represents the parameters for the swap.
+
+```tsx
+swapExactBaseForQuote({ params: SwapParams });
+```
+
+### swapExactQuoteForBase
+
+Use `swapExactQuoteForBase` to swap exact quote amount for base amount. The call returns a function that takes a `Transaction` object. 
+
+**Parameters**
+
+- `params`: `SwapParams` object that represents the parameters for the swap.
+
+```tsx
+swapExactQuoteForBase({ params: SwapParams });
+```
+
+### Examples
+
+The following examples demonstrate custom swap functions that you can place into the `DeepBookMarketMaker` class. Base coin, quote coin, and deep coin are automatically determined by the coin available in the user address unless you explicitly pass one in as an argument. You can transfer the coin outputs to their address or execute other operations using the outputs.
+
+```tsx
+swapExactBaseForQuote = (tx: Transaction) => {
+  const [baseOut, quoteOut, deepOut] = this.deepBook.swapExactBaseForQuote({
+    poolKey: 'SUI_DBUSDC',
+    amount: 1, // amount of SUI to swap
+    deepAmount: 1, // amount of DEEP to pay as fees, excess is returned
+    minOut: 0.1, // minimum amount of DBUSDC to receive or transaction fails
+  })(tx);
+
+  // Transfer received coins to own address
+  tx.transferObjects([baseOut, quoteOut, deepOut], this.getActiveAddress());
+};
+
+swapExactQuoteForBase = (tx: Transaction) => {
+  const [baseOut, quoteOut, deepOut] = this.deepBook.swapExactQuoteForBase({
+    poolKey: 'SUI_DBUSDC',
+    amount: 1, // amount of DBUSDC to swap
+    deepAmount: 1, // amount of DEEP to pay as fees, excess is returned
+    minOut: 0.1, // minimum amount of SUI to receive or transaction fails
+  })(tx);
+
+  // Transfer received coins to own address
+  tx.transferObjects([baseOut, quoteOut, deepOut], this.getActiveAddress());
+};
+```
+
+## Related links
+
+<RelatedLink href="https://github.com/MystenLabs/ts-sdks/tree/main/packages/deepbook-v3" label="DeepBookV3 Indexer repository" desc="The DeepBookV3 SDK repository on GitHub." />
+<RelatedLink href="https://www.npmjs.com/package/@mysten/deepbook-v3" label="DeepBookV3 SDK node package" desc="The DeepBookV3 SDK node package on NPM." />
+<RelatedLink href="https://github.com/MystenLabs/deepbookv3" label="DeepBookV3 repository" desc="The DeepBookV3 repository on GitHub." />
