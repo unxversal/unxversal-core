@@ -25,6 +25,7 @@ export interface StakingUserState {
   };
   claimableRewards: bigint;
   claimedToWeek?: number;
+  claimedRewardsTotal?: bigint;
   tier?: { tier: number; name: string; discountPct: number };
 }
 

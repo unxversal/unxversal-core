@@ -1,4 +1,4 @@
-import { StakingComponentProps } from './types';
+import type { StakingComponentProps } from './types';
 
 export const stakingSampleData: StakingComponentProps = {
   // Pool summary
@@ -31,6 +31,7 @@ export const stakingSampleData: StakingComponentProps = {
   },
   claimableRewards: 347_850_000n,
   claimedToWeek: 1232,
+  claimedRewardsTotal: 1_234_560_000n,
   tier: { tier: 3, name: 'Teal Harbor', discountPct: 15 },
 
   // UI controls default

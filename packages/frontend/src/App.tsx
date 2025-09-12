@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import './App.css'
-import { ConnectButton } from '@mysten/dapp-kit'
 import { createSuiClient, defaultRpc } from './lib/network'
 import { startTrackers } from './lib/indexer'
 import { loadSettings } from './lib/settings.config'
@@ -9,6 +8,8 @@ import { startPriceFeeds } from './lib/switchboard'
 import { startDefaultMarketWatcher } from './lib/marketWatcher'
 import { useCurrentAccount } from '@mysten/dapp-kit'
 import styles from './components/AppShell.module.css'
+import Navbar from './components/Layout/Navbar'
+import { StakingWrapper } from './newui/staking'
 import { DexScreen } from './components/dex/DexScreen'
 import { GasFuturesScreen } from './components/gas-futures/GasFuturesScreen'
 import { FuturesScreen } from './components/futures/FuturesScreen'
@@ -29,6 +30,8 @@ function App() {
   const [surgeReady, setSurgeReady] = useState(false)
   const [view, setView] = useState<View>('options')
   const account = useCurrentAccount()
+  const [useNewUi, setUseNewUi] = useState(false)
+  const [useSampleData, setUseSampleData] = useState(true)
 
   // Protocol status tracking
   const [protocolStatus, setProtocolStatus] = useState({
@@ -141,32 +144,23 @@ function App() {
   
   return (
     <div className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'bridge' || view === 'swap' ? styles.appRootDex : styles.appRoot}>
-      <header className={styles.header}>
-        <div className={styles.brand}>
-          <img src="/whitetransparentunxvdolphin.png" alt="Unxversal" style={{ width: 32, height: 32 }} />
-          <span>Unxversal</span>
-        </div>
-        <nav className={styles.nav}>
-          <span className={view==='options'?styles.active:''} onClick={() => setView('options')}>Options</span>
-          <span className={view==='gas'?styles.active:''} onClick={() => setView('gas')}>MIST Futures</span>
-          <span className={view==='futures'?styles.active:''} onClick={() => setView('futures')}>Futures</span>
-          <span className={view==='perps'?styles.active:''} onClick={() => setView('perps')}>Perps</span>
-          <span className={view==='lending'?styles.active:''} onClick={() => setView('lending')}>Lending</span>
-          <span className={view==='dex'?styles.active:''} onClick={() => setView('dex')}>DEX</span>
-          <span className={view==='swap'?styles.active:''} onClick={() => setView('swap')}>Swap</span>
-          <span className={view==='bridge'?styles.active:''} onClick={() => setView('bridge')}>Bridge</span>
-          <span className={view==='staking'?styles.active:''} onClick={() => setView('staking')}>Staking</span>
-          <span className={view==='settings'?styles.active:''} onClick={() => setView('settings')}>Settings</span>
-        </nav>
-        <div className={styles.tools}>
-          <ConnectButton />
-        </div>
-      </header>
+      <Navbar
+        view={view}
+        setView={setView}
+        useNewUi={useNewUi}
+        setUseNewUi={setUseNewUi}
+        useSampleData={useSampleData}
+        setUseSampleData={setUseSampleData}
+      />
       <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'lending' || view === 'staking' || view === 'swap' ? styles.mainDex : styles.main}>
         {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'gas' && <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'lending' && <LendingScreen started={started} network={network} protocolStatus={protocolStatus} />}
-        {view === 'staking' && <StakingScreen started={started} network={network} protocolStatus={protocolStatus} />}
+        {view === 'staking' && (
+          useNewUi
+            ? <StakingWrapper useSampleData={useSampleData} />
+            : <StakingScreen started={started} network={network} protocolStatus={protocolStatus} />
+        )}
         {view === 'futures' && <FuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'perps' && <PerpsScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'bridge' && <BridgeScreen network={network} protocolStatus={protocolStatus} />}

@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
-import styles from './StakingComponent.module.css';
+import { useEffect, useRef, useState } from 'react';
+import styles from '../../components/staking/StakingScreen.module.css';
+import { HelpCircle } from 'lucide-react';
 import type { StakingAction, StakingComponentProps } from './types';
 
 function formatUnits(amount: bigint, decimals: number, maxFrac = 4): string {
@@ -16,13 +17,10 @@ export function StakingComponent(props: StakingComponentProps) {
   const {
     symbol,
     decimals,
-    currentWeek,
-    totalActiveStake,
-    rewardThisWeek,
-    nextWeekStartMs,
     walletUnxvBalance,
     staker,
     claimableRewards,
+    claimedRewardsTotal,
     tier,
     selectedAction,
     submitting,
@@ -33,20 +31,24 @@ export function StakingComponent(props: StakingComponentProps) {
     onUnstake,
     onClaim,
     renderConnect,
+    address,
   } = props;
 
-  const now = Date.now();
-  const timeToNextWeekMs = Math.max(0, nextWeekStartMs - now);
-  const countdown = useMemo(() => {
-    const s = Math.floor(timeToNextWeekMs / 1000);
-    const d = Math.floor(s / 86400);
-    const h = Math.floor((s % 86400) / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const ss = s % 60;
-    return `${d}d ${h}h ${m}m ${ss}s`;
-  }, [timeToNextWeekMs]);
+  const [showTierTooltip, setShowTierTooltip] = useState(false);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  // no-op: preserve semantic parity with old screen's disabled logic handled inline
 
-  const disabled = submitting;
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (tooltipRef.current && !tooltipRef.current.contains(event.target as Node)) {
+        setShowTierTooltip(false);
+      }
+    }
+    if (showTierTooltip) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => { document.removeEventListener('mousedown', handleClickOutside); };
+    }
+  }, [showTierTooltip]);
 
   async function handleExecute() {
     if (selectedAction === 'claim') {
@@ -80,71 +82,144 @@ export function StakingComponent(props: StakingComponentProps) {
     return 'Execute';
   }
 
+  const badgeCls = (base: string, action: StakingAction) => `${styles.actionBadge} ${base} ${selectedAction === action ? styles.active : ''}`;
+
+  const stakedAmountDisplay = `${formatUnits(staker.activeStake, decimals)} ${symbol}`;
+  const claimableDisplay = `${formatUnits(claimableRewards, decimals, 2)} ${symbol}`;
+  const claimedDisplay = `${formatUnits(claimedRewardsTotal ?? 0n, decimals, 2)} ${symbol}`;
+  const tierName = tier ? tier.name : 'Frost Shore';
+  const tierDiscount = tier ? `${tier.discountPct}%` : '0%';
+
   return (
     <div className={styles.root}>
-      <div className={styles.titleRow}>
+      <div className={styles.stakingContainer}>
         <div className={styles.title}>Staking</div>
-        <div className={styles.badgesRow}>
-          {(['stake', 'unstake', 'claim'] as StakingAction[]).map((action) => (
-            <button
-              key={action || 'none'}
-              className={`${styles.badge} ${selectedAction === action ? styles.badgeActive : ''}`}
-              onClick={() => onSelectAction && onSelectAction(selectedAction === action ? null : action)}
-            >
-              {action?.slice(0, 1).toUpperCase()}{action?.slice(1)}
-            </button>
-          ))}
-        </div>
-      </div>
 
-      <div className={styles.grid}>
-        <div className={styles.card}>
-          <div className={styles.cardTitle}>Total Active</div>
-          <div className={styles.cardValue}>{formatUnits(totalActiveStake, decimals)} {symbol}</div>
+        <div className={styles.actionBadgesRow}>
+          <div className={styles.actionBadges}>
+            <button className={badgeCls(styles.stakeBadge, 'stake')} onClick={() => onSelectAction && onSelectAction(selectedAction === 'stake' ? null : 'stake')}>Stake</button>
+            <button className={badgeCls(styles.unstakeBadge, 'unstake')} onClick={() => onSelectAction && onSelectAction(selectedAction === 'unstake' ? null : 'unstake')}>Unstake</button>
+            <button className={badgeCls(styles.claimBadge, 'claim')} onClick={() => onSelectAction && onSelectAction(selectedAction === 'claim' ? null : 'claim')}>Claim</button>
+          </div>
         </div>
-        <div className={styles.card}>
-          <div className={styles.cardTitle}>Reward (This Week)</div>
-          <div className={styles.cardValue}>{formatUnits(rewardThisWeek, decimals)} {symbol}</div>
-        </div>
-        <div className={styles.card}>
-          <div className={styles.cardTitle}>Week / Next rollover</div>
-          <div className={styles.cardValue}>#{currentWeek} / {countdown}</div>
-        </div>
-        <div className={styles.card}>
-          <div className={styles.cardTitle}>Your Active</div>
-          <div className={styles.cardValue}>{formatUnits(staker.activeStake, decimals)} {symbol}</div>
-        </div>
-        <div className={styles.card}>
-          <div className={styles.cardTitle}>Pending Stake</div>
-          <div className={styles.cardValue}>{formatUnits(staker.pendingStake, decimals)} {symbol}</div>
-        </div>
-        <div className={styles.card}>
-          <div className={styles.cardTitle}>Claimable Rewards</div>
-          <div className={styles.cardValue}>{formatUnits(claimableRewards, decimals)} {symbol}</div>
-        </div>
-      </div>
 
-      <div className={styles.actionArea}>
-        {renderConnect}
-        {selectedAction !== 'claim' && (
-          <div className={styles.inputRow}>
-            <input
-              className={styles.amountInput}
-              value={inputAmount}
-              onChange={(e) => onChangeInputAmount(e.target.value)}
-              placeholder={`0.0 ${symbol}`}
-              type="number"
-              min="0"
-            />
+        <div className={styles.description}>
+          Stake your UNXV to get fee discounts across all protocols and earn a share of protocol fees.
+        </div>
+
+        <div className={styles.statsSection}>
+          <div className={styles.statItem}>
+            <div className={styles.statLabel}>Your Staked</div>
+            <div className={styles.statValue}>{stakedAmountDisplay}</div>
+          </div>
+          <div className={styles.statItem}>
+            <div className={styles.statLabel}>Claimable Rewards</div>
+            <div className={`${styles.statValue} ${styles.claimableRewardsValue}`}>{claimableDisplay}</div>
+          </div>
+          <div className={styles.statItem}>
+            <div className={styles.tierSection}>
+              <div className={styles.statLabel}>
+                Current Tier
+                <button
+                  type="button"
+                  className={styles.helpButton}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowTierTooltip(!showTierTooltip); }}
+                >
+                  <HelpCircle size={14} />
+                </button>
+              </div>
+              <div className={styles.tierValue}>{tierName} ({tierDiscount} discount)</div>
+              {showTierTooltip && (
+                <div ref={tooltipRef} className={styles.tooltip}>
+                  <div className={styles.tooltipContent}>
+                    <div className={styles.tooltipTitle}>Staking Tiers</div>
+                    <div className={styles.tierList}>
+                      <div className={styles.tierItem}><span className={styles.tierName}>Midnight Ocean</span><span className={styles.tierRequirement}>500K+ UNXV: 40% discount</span></div>
+                      <div className={styles.tierItem}><span className={styles.tierName}>Cobalt Trench</span><span className={styles.tierRequirement}>100K+ UNXV: 30% discount</span></div>
+                      <div className={styles.tierItem}><span className={styles.tierName}>Indigo Waves</span><span className={styles.tierRequirement}>10K+ UNXV: 20% discount</span></div>
+                      <div className={styles.tierItem}><span className={styles.tierName}>Teal Harbor</span><span className={styles.tierRequirement}>1K+ UNXV: 15% discount</span></div>
+                      <div className={styles.tierItem}><span className={styles.tierName}>Silver Stream</span><span className={styles.tierRequirement}>100+ UNXV: 10% discount</span></div>
+                      <div className={styles.tierItem}><span className={styles.tierName}>Crystal Pool</span><span className={styles.tierRequirement}>10+ UNXV: 5% discount</span></div>
+                      <div className={styles.tierItem}><span className={styles.tierName}>Frost Shore</span><span className={styles.tierRequirement}>0 UNXV: No discount</span></div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className={styles.statItem}>
+            <div className={styles.statLabel}>Claimed Rewards</div>
+            <div className={`${styles.statValue} ${styles.rewardsValue}`}>{claimedDisplay}</div>
+          </div>
+        </div>
+
+        {selectedAction === 'stake' && (
+          <div className={styles.actionContent}>
+            <div className={styles.stakeSection}>
+              <div className={styles.sectionLabel}>Stake UNXV</div>
+              <div className={styles.inputContainer}>
+                <input
+                  type="number"
+                  placeholder="0"
+                  value={inputAmount}
+                  onChange={(e) => onChangeInputAmount(e.target.value)}
+                  className={styles.amountInput}
+                />
+                <div className={styles.balanceLabel}>Balance: {formatUnits(walletUnxvBalance, decimals)} {symbol}</div>
+              </div>
+            </div>
+            {address ? (
+              <button className={styles.executeButton} onClick={handleExecute} disabled={submitting || !inputAmount || Number(inputAmount) <= 0}>
+                {actionCtaLabel('stake')}
+              </button>
+            ) : (
+              <div className={styles.connectWalletContainer}>{renderConnect}</div>
+            )}
           </div>
         )}
-        <div className={styles.hint}>
-          Wallet: {formatUnits(walletUnxvBalance, decimals)} {symbol} · Tier: {tier ? `${tier.name} (${tier.discountPct}%)` : '—'}
-        </div>
-        {selectedAction && (
-          <button className={styles.cta} disabled={disabled} onClick={handleExecute}>
-            {actionCtaLabel(selectedAction)}
-          </button>
+
+        {selectedAction === 'unstake' && (
+          <div className={styles.actionContent}>
+            <div className={styles.unstakeSection}>
+              <div className={styles.sectionLabel}>Unstake UNXV</div>
+              <div className={styles.inputContainer}>
+                <input
+                  type="number"
+                  placeholder="0"
+                  value={inputAmount}
+                  onChange={(e) => onChangeInputAmount(e.target.value)}
+                  className={styles.amountInput}
+                />
+                <div className={styles.balanceLabel}>Staked: {formatUnits(staker.activeStake, decimals)} {symbol}</div>
+              </div>
+            </div>
+            {address ? (
+              <button className={styles.executeButton} onClick={handleExecute} disabled={submitting || !inputAmount || Number(inputAmount) <= 0}>
+                {actionCtaLabel('unstake')}
+              </button>
+            ) : (
+              <div className={styles.connectWalletContainer}>{renderConnect}</div>
+            )}
+          </div>
+        )}
+
+        {selectedAction === 'claim' && (
+          <div className={styles.actionContent}>
+            <div className={styles.claimSection}>
+              <div className={styles.sectionLabel}>Claim Rewards</div>
+              <div className={styles.claimInfo}>
+                <div className={styles.claimAmount}>{claimableDisplay}</div>
+                <div className={styles.claimLabel}>Available to claim</div>
+              </div>
+            </div>
+            {address ? (
+              <button className={styles.executeButton} onClick={handleExecute} disabled={submitting || claimableRewards <= 0n}>
+                {actionCtaLabel('claim')}
+              </button>
+            ) : (
+              <div className={styles.connectWalletContainer}>{renderConnect}</div>
+            )}
+          </div>
         )}
       </div>
     </div>
