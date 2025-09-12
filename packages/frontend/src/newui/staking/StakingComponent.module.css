@@ -1,0 +1,101 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.titleRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.badgesRow {
+  display: flex;
+  gap: 8px;
+}
+
+.badge {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid #444;
+  background: #101014;
+  color: #eaeaea;
+  cursor: pointer;
+}
+
+.badgeActive {
+  border-color: #6b8afd;
+  background: #1a2140;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.card {
+  border: 1px solid #2a2a2f;
+  border-radius: 12px;
+  background: #0c0c10;
+  padding: 12px;
+}
+
+.cardTitle {
+  font-size: 12px;
+  color: #9a9aa0;
+}
+
+.cardValue {
+  margin-top: 6px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.actionArea {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.inputRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.amountInput {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #2a2a2f;
+  background: #111116;
+  color: #fafafa;
+}
+
+.hint {
+  font-size: 12px;
+  color: #8b8b92;
+}
+
+.cta {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #2a2a2f;
+  background: #1a2140;
+  color: #e0e6ff;
+  cursor: pointer;
+}
+
+.cta[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+
