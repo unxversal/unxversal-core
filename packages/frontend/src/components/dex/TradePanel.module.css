@@ -90,6 +90,8 @@ select:focus {
 .modeToggle > button.active { background: #ffffff; color: #000000; }
 .modeToggle > button:hover:not(.active) { background: #1a1d29; color: #e5e7eb; }
 
+.flashButtons { display: flex; gap: 8px; }
+
 .tabs { 
   display: grid; 
   grid-template-columns: 1fr 1fr; 
@@ -612,5 +614,237 @@ select:focus {
 .submit:disabled { 
   opacity: 0.5; 
   cursor: not-allowed; 
+}
+
+/* Remove number input arrows */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Flash Loan Flow Styles */
+.flashLoanFlow {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.flashStep {
+  background: #0f131a;
+  border-radius: 8px;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 12px 20px;
+  min-height: 80px;
+}
+
+.flashStepTopLeft {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 8px;
+  align-self: start;
+}
+
+.flashStepNumber {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #00d4aa;
+  color: #0a0c12;
+  font-weight: 600;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.flashStepTitle {
+  color: #e5e7eb;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.flashStepBottomLeft {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  align-self: end;
+  gap: 4px;
+}
+
+.flashStepAmountLabel {
+  color: #9ca3af;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.flashStepAmountInput {
+  background: #1a1d29;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: #e5e7eb;
+  font-size: 12px;
+  width: 100px;
+  text-align: left;
+}
+
+.flashStepAmountDisplay {
+  color: #e5e7eb;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.flashStepTopRight {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-start;
+  align-self: start;
+  gap: 4px;
+}
+
+.flashStepAssetLabel {
+  color: #9ca3af;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  text-align: right;
+}
+
+.flashStepAsset {
+  color: #e5e7eb;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: right;
+}
+
+.flashStepBottomRight {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-end;
+  align-self: end;
+  gap: 4px;
+}
+
+.flashStepPriceLabel {
+  color: #9ca3af;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  text-align: right;
+}
+
+.flashStepPriceInput {
+  background: #1a1d29;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: #e5e7eb;
+  font-size: 12px;
+  width: 100px;
+  text-align: right;
+}
+
+.flashStepPriceDisplay {
+  color: #e5e7eb;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: right;
+}
+
+.flashStepAssetInput {
+  background: #1a1d29;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: #e5e7eb;
+  font-size: 12px;
+  width: 100px;
+  text-align: right;
+}
+
+
+.flashSummary {
+  background: #12141a;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 8px;
+}
+
+.flashSummaryTitle {
+  color: #e5e7eb;
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.flashSummaryContent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.flashSummaryRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.flashSummaryRow > span:last-child {
+  color: #e5e7eb;
+  font-weight: 500;
+}
+
+.flashProfitLoss {
+  padding-top: 6px;
+  margin-top: 6px;
+  font-weight: 600;
+}
+
+.flashProfitLoss > span {
+  color: #e5e7eb !important;
+  font-weight: 600;
+}
+
+.flashSummaryPlaceholder {
+  color: #6b7280;
+  font-size: 12px;
+  text-align: center;
+  font-style: italic;
+  padding: 8px;
+}
+
+.positive {
+  color: #10b981 !important;
+}
+
+.negative {
+  color: #ef4444 !important;
 }
 

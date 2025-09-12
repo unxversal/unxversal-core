@@ -7,6 +7,7 @@ import { getContracts } from '../../lib/env';
 import { loadSettings, updateSettings } from '../../lib/settings.config';
 import { createAndShareBalanceManagerTx, depositToBalanceManagerTx, withdrawFromBalanceManagerTx } from '../../protocols/dex';
 import { Transaction } from '@mysten/sui/transactions';
+import { DexClient } from '../../clients';
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
 
@@ -16,7 +17,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const { pkgUnxversal, pkgDeepbook } = getContracts();
   const [side, setSide] = useState<'buy' | 'sell'>('buy');
-  const [mode, setMode] = useState<'market' | 'limit' | 'margin'>('market');
+  const [mode, setMode] = useState<'market' | 'limit' | 'margin' | 'flash'>('market');
   const [price, setPrice] = useState<number>(mid || 0);
   const [qty, setQty] = useState<number>(0);
   const [submitting, setSubmitting] = useState(false);
@@ -35,8 +36,17 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
   const [unxvCoins, setUnxvCoins] = useState<Array<{ id: string; balance: bigint }>>([]);
   const [selFeeCoinId, setSelFeeCoinId] = useState<string>('');
   const [selUnxvCoinId, setSelUnxvCoinId] = useState<string>('');
-
+  const [flashSrc, setFlashSrc] = useState<'deepbook' | 'lending'>('deepbook');
   const s = loadSettings();
+  
+  // Flash loan four-step process state
+  const [flashBorrowAsset, setFlashBorrowAsset] = useState<string>('');
+  const [flashBorrowAmount, setFlashBorrowAmount] = useState<number>(0);
+  const [flashBuyAmount, setFlashBuyAmount] = useState<number>(0);
+  const [flashBuyPrice, setFlashBuyPrice] = useState<number>(0);
+  const [flashSellAmount, setFlashSellAmount] = useState<number>(0);
+  const [flashSellPrice, setFlashSellPrice] = useState<number>(0);
+
   const baseType = s.dex.baseType;
   const quoteType = s.dex.quoteType;
   const balanceManagerId = bmId || s.dex.balanceManagerId;
@@ -44,7 +54,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
   const feeVaultId = s.dex.feeVaultId;
   const stakingPoolId = s.staking?.poolId ?? '';
 
-  const disabled = !acct?.address || !balanceManagerId || !feeConfigId || !feeVaultId || submitting;
+  const buttonDisabled = submitting || !acct?.address || (!feeConfigId || !feeVaultId) || (mode !== 'flash' && !balanceManagerId) || (mode === 'flash' && !selFeeCoinId);
 
   const [baseSym, quoteSym] = ((): [string, string] => {
     const src = pool.includes('-') ? pool : pool.replace(/_/g, '-');
@@ -258,6 +268,115 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
     }
   }
 
+
+  async function onFlashLoanExecute(): Promise<void> {
+    if (!flashBorrowAmount || flashBorrowAmount <= 0) return;
+    if (flashSrc === 'deepbook') {
+      await onFlashLoanDeepBookNew();
+    } else {
+      await onFlashLoanLendingNew();
+    }
+  }
+
+  async function onFlashLoanDeepBookNew(): Promise<void> {
+    if (!acct?.address) return;
+    setSubmitting(true);
+    try {
+      const network = loadSettings().network === 'mainnet' ? 'mainnet' as const : 'testnet' as const;
+      const tx = new Transaction();
+      const dex = new DexClient({ env: network, client: client as any, address: acct.address, pkgUnxversal });
+      const borrowPoolKey = flashBorrowAsset || (flashSrc === 'deepbook' ? 'DEEP_SUI' : pool);
+      const borrowAmount = Math.max(1, Math.floor(flashBorrowAmount || 1));
+      const feePaymentCoinType = side === 'buy' ? quoteType : baseType;
+      dex.flashLoanDeepBook(tx as any, {
+        feeConfigId,
+        feeVaultId,
+        stakingPoolId,
+        feePaymentCoinId: selFeeCoinId,
+        feePaymentCoinType,
+        maybeUnxvCoinId: feeType === 'unxv' ? selUnxvCoinId || undefined : undefined,
+        borrowPoolKey,
+        borrowAmount,
+        tradePoolKey: pool,
+        tradeDirection: side === 'buy' ? 'quote->base' : 'base->quote',
+        tradeAmount: Math.max(0.000001, flashBuyAmount || flashSellAmount || 0.000001),
+        minOut: 0,
+      });
+      await signAndExecute({ transaction: tx });
+    } finally { setSubmitting(false); }
+  }
+
+  async function onFlashLoanLendingNew(): Promise<void> {
+    if (!acct?.address) return;
+    const s = loadSettings();
+    const pkg = s.contracts.pkgUnxversal;
+    if (!pkg) return;
+    setSubmitting(true);
+    try {
+      const network = s.network === 'mainnet' ? 'mainnet' as const : 'testnet' as const;
+      const tx = new Transaction();
+      const dex = new DexClient({ env: network, client: client as any, address: acct.address, pkgUnxversal: pkg });
+      const marketId = flashBorrowAsset || ((s as any).lending?.marketId as string);
+      const collatType = s.dex.baseType;
+      const debtType = s.dex.quoteType;
+      if (!marketId) throw new Error('Configure lending marketId in settings or enter asset type');
+      dex.flashLoanLending(tx as any, {
+        feeConfigId,
+        feeVaultId,
+        stakingPoolId,
+        feePaymentCoinId: selFeeCoinId,
+        feePaymentCoinType: side === 'buy' ? quoteType : baseType,
+        maybeUnxvCoinId: feeType === 'unxv' ? selUnxvCoinId || undefined : undefined,
+        marketId,
+        collatType,
+        debtType,
+        amount: Math.max(1, Math.floor(flashBorrowAmount || 1)),
+        tradePoolKey: pool,
+        tradeDirection: side === 'buy' ? 'quote->base' : 'base->quote',
+        tradeAmount: Math.max(0.000001, flashBuyAmount || flashSellAmount || 0.000001),
+        minOut: 0,
+      });
+      await signAndExecute({ transaction: tx });
+    } finally { setSubmitting(false); }
+  }
+
+
+  // Calculate repay amount for flash loan (borrow amount + fees)
+  function calculateFlashRepayAmount(): number {
+    const borrowAmt = flashBorrowAmount || 0;
+    const flashFeeRate = 0.0009; // 0.09% flash loan fee (typical rate)
+    return borrowAmt * (1 + flashFeeRate);
+  }
+
+  // Get symbol from asset string
+  function getAssetSymbol(asset: string): string {
+    if (asset === baseType) return baseSym;
+    if (asset === quoteType) return quoteSym;
+    return asset.split('::').pop()?.toUpperCase() || 'ASSET';
+  }
+
+  // Flash loan asset logic based on trading pair and side
+  function getFlashBorrowAsset(): string {
+    // If buying: borrow quote asset (USDC) to buy base asset (SUI)
+    // If selling: borrow base asset (SUI) to sell for quote asset (USDC)
+    return side === 'buy' ? quoteSym : baseSym;
+  }
+
+  function getFlashBuyAsset(): string {
+    // Always buying the base asset
+    return baseSym;
+  }
+
+  function getFlashSellAsset(): string {
+    // Always selling for the quote asset
+    return quoteSym;
+  }
+
+  function getFlashRepayAsset(): string {
+    // Repay the same asset that was borrowed
+    return getFlashBorrowAsset();
+  }
+
   // Derived estimates
   const effPrice = mode === 'limit' ? (price || mid || 0) : (mid || price || 0);
   const notionalQuote = (qty || 0) * (effPrice || 0);
@@ -330,6 +449,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
             <button className={mode==='limit'?styles.active:''} onClick={()=>setMode('limit')}>Limit</button>
             <button className={mode==='market'?styles.active:''} onClick={()=>setMode('market')}>Market</button>
             <button className={mode==='margin'?styles.active:''} onClick={()=>setMode('margin')}>Margin</button>
+            <button className={mode==='flash'?styles.active:''} onClick={()=>setMode('flash')}>Flash</button>
           </div>
           
           <div className={styles.tabs}>
@@ -373,7 +493,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
                 type="number" 
                 value={qty || ''} 
                 onChange={(e)=>setQty(Number(e.target.value))} 
-                placeholder={mode==='market' ? 'Amount (Input)' : mode==='margin' ? 'Position Size' : 'Size'} 
+                placeholder={mode==='market' ? 'Amount (Input)' : mode==='margin' ? 'Position Size' : mode==='flash' ? 'Trade Amount' : 'Size'} 
                 className={styles.inputWithLabel}
               />
               <div className={styles.tokenSelector}>
@@ -383,7 +503,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
                 </svg>
               </div>
             </div>
-            {mode !== 'margin' && (
+            {mode !== 'margin' && mode !== 'flash' && (
               <div className={styles.sliderContainer}>
                 <div className={styles.sliderWrapper}>
                   <Slider
@@ -543,6 +663,181 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
             </>
           )}
 
+          {mode==='flash' && (
+            <>
+              <div className={styles.field}>
+                <div className={styles.inputGroup}>
+                  <div className={styles.tabs}>
+                    <button className={flashSrc==='deepbook'?styles.active:''} onClick={()=>setFlashSrc('deepbook')}>DeepBook</button>
+                    <button className={flashSrc==='lending'?styles.active:''} onClick={()=>setFlashSrc('lending')}>Lending</button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Flash Loan Four-Step Process */}
+              <div className={styles.flashLoanFlow}>
+                {/* Step 1: Borrow */}
+                <div className={styles.flashStep}>
+                  <div className={styles.flashStepTopLeft}>
+                    <span className={styles.flashStepNumber}>1</span>
+                    <span className={styles.flashStepTitle}>Borrow</span>
+                  </div>
+                  <div className={styles.flashStepTopRight}>
+                    <div className={styles.flashStepAssetLabel}>
+                      {flashSrc === 'deepbook' ? 'Pool' : 'Asset'}
+                    </div>
+                    {flashSrc === 'deepbook' ? (
+                      <div className={styles.flashStepAsset}>{getFlashBorrowAsset()}</div>
+                    ) : (
+                      <input
+                        type="text"
+                        value={flashBorrowAsset || getFlashBorrowAsset()}
+                        onChange={(e) => setFlashBorrowAsset(e.target.value)}
+                        placeholder="Asset Type"
+                        className={styles.flashStepAssetInput}
+                      />
+                    )}
+                  </div>
+                  <div className={styles.flashStepBottomLeft}>
+                    <div className={styles.flashStepAmountLabel}>Borrow Amount</div>
+                    <input
+                      type="number"
+                      value={flashBorrowAmount || ''}
+                      onChange={(e) => setFlashBorrowAmount(Number(e.target.value))}
+                      placeholder="Amount"
+                      className={styles.flashStepAmountInput}
+                    />
+                  </div>
+                  <div className={styles.flashStepBottomRight}>
+                    <div className={styles.flashStepPriceLabel}>Fee Rate</div>
+                    <div className={styles.flashStepPriceDisplay}>0.09%</div>
+                  </div>
+                </div>
+
+                {/* Step 2: Buy */}
+                <div className={styles.flashStep}>
+                  <div className={styles.flashStepTopLeft}>
+                    <span className={styles.flashStepNumber}>2</span>
+                    <span className={styles.flashStepTitle}>Buy</span>
+                  </div>
+                  <div className={styles.flashStepTopRight}>
+                    <div className={styles.flashStepAssetLabel}>Asset</div>
+                    <div className={styles.flashStepAsset}>{getFlashBuyAsset()}</div>
+                  </div>
+                  <div className={styles.flashStepBottomLeft}>
+                    <div className={styles.flashStepAmountLabel}>Buy Amount</div>
+                    <input
+                      type="number"
+                      value={flashBuyAmount || ''}
+                      onChange={(e) => setFlashBuyAmount(Number(e.target.value))}
+                      placeholder="Amount"
+                      className={styles.flashStepAmountInput}
+                    />
+                  </div>
+                  <div className={styles.flashStepBottomRight}>
+                    <div className={styles.flashStepPriceLabel}>Buy Price</div>
+                    <input
+                      type="number"
+                      value={flashBuyPrice || ''}
+                      onChange={(e) => setFlashBuyPrice(Number(e.target.value))}
+                      placeholder="Price"
+                      className={styles.flashStepPriceInput}
+                    />
+                  </div>
+                </div>
+
+                {/* Step 3: Sell */}
+                <div className={styles.flashStep}>
+                  <div className={styles.flashStepTopLeft}>
+                    <span className={styles.flashStepNumber}>3</span>
+                    <span className={styles.flashStepTitle}>Sell</span>
+                  </div>
+                  <div className={styles.flashStepTopRight}>
+                    <div className={styles.flashStepAssetLabel}>Sell For</div>
+                    <div className={styles.flashStepAsset}>{getFlashSellAsset()}</div>
+                  </div>
+                  <div className={styles.flashStepBottomLeft}>
+                    <div className={styles.flashStepAmountLabel}>Sell Amount</div>
+                    <input
+                      type="number"
+                      value={flashSellAmount || flashBuyAmount}
+                      onChange={(e) => setFlashSellAmount(Number(e.target.value))}
+                      placeholder="Amount"
+                      className={styles.flashStepAmountInput}
+                    />
+                  </div>
+                  <div className={styles.flashStepBottomRight}>
+                    <div className={styles.flashStepPriceLabel}>Sell Price</div>
+                    <input
+                      type="number"
+                      value={flashSellPrice || ''}
+                      onChange={(e) => setFlashSellPrice(Number(e.target.value))}
+                      placeholder="Price"
+                      className={styles.flashStepPriceInput}
+                    />
+                  </div>
+                </div>
+
+                {/* Step 4: Repay (Auto-calculated) */}
+                <div className={styles.flashStep}>
+                  <div className={styles.flashStepTopLeft}>
+                    <span className={styles.flashStepNumber}>4</span>
+                    <span className={styles.flashStepTitle}>Repay (Auto)</span>
+                  </div>
+                  <div className={styles.flashStepTopRight}>
+                    <div className={styles.flashStepAssetLabel}>Asset</div>
+                    <div className={styles.flashStepAsset}>{getFlashRepayAsset()}</div>
+                  </div>
+                  <div className={styles.flashStepBottomLeft}>
+                    <div className={styles.flashStepAmountLabel}>Repay Amount</div>
+                    <div className={styles.flashStepAmountDisplay}>{calculateFlashRepayAmount().toFixed(6)}</div>
+                  </div>
+                  <div className={styles.flashStepBottomRight}>
+                    <div className={styles.flashStepPriceLabel}>Fee Amount</div>
+                    <div className={styles.flashStepPriceDisplay}>{((flashBorrowAmount || 0) * 0.0009).toFixed(6)}</div>
+                  </div>
+                </div>
+
+                {/* Flash Loan Summary */}
+                <div className={styles.flashSummary}>
+                  <div className={styles.flashSummaryTitle}>Expected Profit/Loss</div>
+                  <div className={styles.flashSummaryContent}>
+                    {flashBuyPrice > 0 && flashSellPrice > 0 && flashBuyAmount > 0 && flashSellAmount > 0 ? (
+                      <>
+                        <div className={styles.flashSummaryRow}>
+                          <span>Buy Cost:</span>
+                          <span>{(flashBuyAmount * flashBuyPrice).toFixed(6)} {getFlashBorrowAsset()}</span>
+                        </div>
+                        <div className={styles.flashSummaryRow}>
+                          <span>Sell Revenue:</span>
+                          <span>{(flashSellAmount * flashSellPrice).toFixed(6)} {getFlashBorrowAsset()}</span>
+                        </div>
+                        <div className={styles.flashSummaryRow}>
+                          <span>Repay Amount:</span>
+                          <span>-{calculateFlashRepayAmount().toFixed(6)} {getFlashBorrowAsset()}</span>
+                        </div>
+                        <div className={`${styles.flashSummaryRow} ${styles.flashProfitLoss}`}>
+                          <span>Net Profit/Loss:</span>
+                          <span className={
+                            ((flashSellAmount * flashSellPrice) - (flashBuyAmount * flashBuyPrice) - calculateFlashRepayAmount()) >= 0 
+                              ? styles.positive 
+                              : styles.negative
+                          }>
+                            {((flashSellAmount * flashSellPrice) - (flashBuyAmount * flashBuyPrice) - calculateFlashRepayAmount()).toFixed(6)} {getFlashBorrowAsset()}
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <div className={styles.flashSummaryPlaceholder}>
+                        Enter buy and sell prices to see profit estimation
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
           <div className={styles.feeSection}>
             <div className={styles.feeSelector}>
               <span className={styles.feeLabel}>Fee Payment</span>
@@ -618,16 +913,23 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
             </div>
           ) : (
             <button 
-              disabled={disabled} 
+              disabled={buttonDisabled} 
               className={`${styles.submit} ${side==='buy'?styles.buyButton:styles.sellButton}`} 
-              onClick={() => void submit()}
-              title={!qty || qty <= 0 ? 'Enter a quantity to continue' : ''}
+              onClick={() => mode === 'flash' ? void onFlashLoanExecute() : void submit()}
+              title={mode === 'flash' 
+                ? (!flashBorrowAmount || flashBorrowAmount <= 0 ? 'Enter borrow amount to continue' : '') 
+                : (!qty || qty <= 0 ? 'Enter a quantity to continue' : '')
+              }
             >
               {submitting 
                 ? 'Submitting...' 
-                : !qty || qty <= 0 
-                  ? `Enter ${mode === 'margin' ? 'Position' : 'Amount'} to ${side === 'buy' ? 'Buy' : 'Sell'}` 
-                  : `${side === 'buy' ? 'Buy' : 'Sell'} ${qty.toLocaleString()}`
+                : mode === 'flash'
+                  ? (!flashBorrowAmount || flashBorrowAmount <= 0 
+                    ? 'Enter Flash Loan Details'
+                    : `Execute Flash Loan (${flashBorrowAmount.toLocaleString()} ${getAssetSymbol(flashBorrowAsset)})`)
+                  : (!qty || qty <= 0 
+                    ? `Enter ${mode === 'margin' ? 'Position' : 'Amount'} to ${side === 'buy' ? 'Buy' : 'Sell'}` 
+                    : `${side === 'buy' ? 'Buy' : 'Sell'} ${qty.toLocaleString()}`)
               }
             </button>
           )}

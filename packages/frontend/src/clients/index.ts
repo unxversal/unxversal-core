@@ -5,5 +5,7 @@ export { FuturesClient } from './futures';
 export { GasFuturesClient } from './gasFutures';
 export { PerpetualsClient } from './perpetuals';
 export { LendingClient } from './lending';
+export { DexClient, type DexClientConfig } from './dex';
+export { BridgeClient } from './bridge';
 
 
