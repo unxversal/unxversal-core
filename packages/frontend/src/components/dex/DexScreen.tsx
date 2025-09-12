@@ -29,6 +29,16 @@ export function DexScreen({ network, protocolStatus }: {
   const [pool, setPool] = useState<string>(s.dex.poolId.replace(/[\/-]/g, '_').toUpperCase());
   const displayPair = pool.replace(/[\/_]/g, '-').toUpperCase();
   const db = useMemo(() => buildDeepbookPublicIndexer(deepbookIndexerUrl), [deepbookIndexerUrl]);
+  const enableDeepbook = useMemo(() => Boolean(deepbookIndexerUrl) && !/naviprotocol\.io/i.test(deepbookIndexerUrl), [deepbookIndexerUrl]);
+  const uniqWatchlist = useMemo(() => {
+    const seen = new Set<string>();
+    return s.markets.watchlist.filter((p) => {
+      const v = p.replace(/[\/-]/g, '_').toUpperCase();
+      if (seen.has(v)) return false;
+      seen.add(v);
+      return true;
+    });
+  }, [s.markets.watchlist]);
 
   const [summary, setSummary] = useState<{ last?: number; vol24h?: number; high24h?: number; low24h?: number; change24h?: number }>({});
   const [mid, setMid] = useState<number>(0);
@@ -61,10 +71,12 @@ export function DexScreen({ network, protocolStatus }: {
     const load = async () => {
       try {
         let m: any | undefined;
-        try {
-          const tick = await db.ticker();
-          m = Object.values(tick)[0] as any;
-        } catch {}
+        if (enableDeepbook) {
+          try {
+            const tick = await db.ticker();
+            m = Object.values(tick)[0] as any;
+          } catch {}
+        }
         if (!mounted) return;
         if (!m) {
           setSummary({ last: 1.2345, vol24h: 123456, high24h: 1.45, low24h: 1.12, change24h: 3.2 });
@@ -77,7 +89,7 @@ export function DexScreen({ network, protocolStatus }: {
     void load();
     const id = setInterval(load, 3000);
     return () => { mounted = false; clearInterval(id); };
-  }, [db]);
+  }, [db, enableDeepbook]);
 
   // Fetch rank/points from rewards on-chain view via devInspect
   useEffect(() => {
@@ -100,6 +112,7 @@ export function DexScreen({ network, protocolStatus }: {
     let active = true;
     (async () => {
       try {
+        if (!enableDeepbook) return;
         const bm = s.dex.balanceManagerId;
         if (!bm) return;
         // order updates
@@ -114,6 +127,7 @@ export function DexScreen({ network, protocolStatus }: {
         setOrderHistory(latestRows.slice(0, 100));
       } catch {}
       try {
+        if (!enableDeepbook) return;
         const bm = s.dex.balanceManagerId;
         if (!bm) return;
         const maker = await db.trades(pool, { limit: 100, maker_balance_manager_id: bm });
@@ -127,6 +141,7 @@ export function DexScreen({ network, protocolStatus }: {
       // refresh periodically
       void (async () => {
         try {
+          if (!enableDeepbook) return;
           const bm = s.dex.balanceManagerId;
           if (!bm) return;
           const updates = await db.orderUpdates(pool, { limit: 200, balance_manager_id: bm });
@@ -140,6 +155,7 @@ export function DexScreen({ network, protocolStatus }: {
           setOrderHistory(latestRows.slice(0, 100));
         } catch {}
         try {
+          if (!enableDeepbook) return;
           const bm = s.dex.balanceManagerId;
           if (!bm) return;
           const maker = await db.trades(pool, { limit: 100, maker_balance_manager_id: bm });
@@ -151,7 +167,7 @@ export function DexScreen({ network, protocolStatus }: {
       })();
     }, 4000);
     return () => { active = false; clearInterval(id); };
-  }, [db, pool, s.dex.balanceManagerId]);
+  }, [db, pool, s.dex.balanceManagerId, enableDeepbook]);
 
   // Update document title with price and pair info
   useEffect(() => {
@@ -218,19 +234,21 @@ export function DexScreen({ network, protocolStatus }: {
       try {
         // Try live trades; fallback to synthetic sample OHLC + volume
         let data: CandlestickData<UTCTimestamp>[] | undefined;
-        try {
-          const trades = await db.trades(pool, { limit: 400 });
-          const bucket = new Map<number, { o: number; h: number; l: number; c: number; v: number }>();
-          const step = tf === '1m' ? 60 : tf === '5m' ? 300 : tf === '15m' ? 900 : tf === '1h' ? 3600 : tf === '1d' ? 86400 : 604800;
-          for (const t of trades) {
-            const bucketed = (Math.floor(t.ts / step) * step) as UTCTimestamp;
-            const b = bucket.get(bucketed) ?? { o: t.price, h: t.price, l: t.price, c: t.price, v: 0 };
-            b.h = Math.max(b.h, t.price); b.l = Math.min(b.l, t.price); b.c = t.price; b.v += t.qty ?? 0; bucket.set(bucketed, b);
-          }
-          data = Array.from(bucket.entries()).sort((a,b)=>a[0]-b[0]).map(([time, v]) => ({ time: time as UTCTimestamp, open: v.o, high: v.h, low: v.l, close: v.c }));
-          const volData = Array.from(bucket.entries()).sort((a,b)=>a[0]-b[0]).map(([time, v]) => ({ time: time as UTCTimestamp, value: v.v }));
-          if (vol) vol.setData(showVolume ? volData : []);
-        } catch {}
+        if (enableDeepbook) {
+          try {
+            const trades = await db.trades(pool, { limit: 400 });
+            const bucket = new Map<number, { o: number; h: number; l: number; c: number; v: number }>();
+            const step = tf === '1m' ? 60 : tf === '5m' ? 300 : tf === '15m' ? 900 : tf === '1h' ? 3600 : tf === '1d' ? 86400 : 604800;
+            for (const t of trades) {
+              const bucketed = (Math.floor(t.ts / step) * step) as UTCTimestamp;
+              const b = bucket.get(bucketed) ?? { o: t.price, h: t.price, l: t.price, c: t.price, v: 0 };
+              b.h = Math.max(b.h, t.price); b.l = Math.min(b.l, t.price); b.c = t.price; b.v += t.qty ?? 0; bucket.set(bucketed, b);
+            }
+            data = Array.from(bucket.entries()).sort((a,b)=>a[0]-b[0]).map(([time, v]) => ({ time: time as UTCTimestamp, open: v.o, high: v.h, low: v.l, close: v.c }));
+            const volData = Array.from(bucket.entries()).sort((a,b)=>a[0]-b[0]).map(([time, v]) => ({ time: time as UTCTimestamp, value: v.v }));
+            if (vol) vol.setData(showVolume ? volData : []);
+          } catch {}
+        }
         if (!data) {
           // synthetic sample data - sine wave + noise
           const now = Math.floor(Date.now()/1000);
@@ -381,7 +399,7 @@ export function DexScreen({ network, protocolStatus }: {
           <div className={styles.pair}>DEX / {displayPair}</div>
           <div>
             <select value={pool} onChange={(e)=>setPool(e.target.value)}>
-              {s.markets.watchlist.map((p)=>{
+              {uniqWatchlist.map((p)=>{
                 const v = p.replace(/[\/-]/g, '_').toUpperCase();
                 return <option key={v} value={v}>{p}</option>;
               })}
