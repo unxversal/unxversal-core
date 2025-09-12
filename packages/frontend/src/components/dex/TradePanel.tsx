@@ -34,8 +34,6 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
   const [baseCoins, setBaseCoins] = useState<Array<{ id: string; balance: bigint }>>([]);
   const [quoteCoins, setQuoteCoins] = useState<Array<{ id: string; balance: bigint }>>([]);
   const [unxvCoins, setUnxvCoins] = useState<Array<{ id: string; balance: bigint }>>([]);
-  const [selFeeCoinId, setSelFeeCoinId] = useState<string>('');
-  const [selUnxvCoinId, setSelUnxvCoinId] = useState<string>('');
   const [flashSrc, setFlashSrc] = useState<'deepbook' | 'lending'>('deepbook');
   const s = loadSettings();
   
@@ -54,7 +52,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
   const feeVaultId = s.dex.feeVaultId;
   const stakingPoolId = s.staking?.poolId ?? '';
 
-  const buttonDisabled = submitting || !acct?.address || (!feeConfigId || !feeVaultId) || (mode !== 'flash' && !balanceManagerId) || (mode === 'flash' && !selFeeCoinId);
+  const buttonDisabled = submitting || !acct?.address || (!feeConfigId || !feeVaultId) || (mode !== 'flash' && !balanceManagerId);
 
   const [baseSym, quoteSym] = ((): [string, string] => {
     const src = pool.includes('-') ? pool : pool.replace(/_/g, '-');
@@ -103,7 +101,6 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
         const q = (qc.data ?? []).map((c: any) => ({ id: c.coinObjectId, balance: BigInt(c.balance ?? '0') }));
         setBaseCoins(b.sort((a,b)=> Number(b.balance - a.balance)));
         setQuoteCoins(q.sort((a,b)=> Number(b.balance - a.balance)));
-        if (!selFeeCoinId) setSelFeeCoinId((side==='buy'?q:b)[0]?.id ?? '');
       } catch {}
       try {
         const unxvType = `${pkgUnxversal}::unxv::UNXV`;
@@ -111,11 +108,10 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
         if (!live) return;
         const u = (uc.data ?? []).map((c: any) => ({ id: c.coinObjectId, balance: BigInt(c.balance ?? '0') }));
         setUnxvCoins(u.sort((a,b)=> Number(b.balance - a.balance)));
-        if (!selUnxvCoinId && u.length) setSelUnxvCoinId(u[0].id);
       } catch {}
     })();
     return () => { live = false; };
-  }, [acct?.address, client, baseType, quoteType, side, pkgUnxversal, selFeeCoinId, selUnxvCoinId]);
+  }, [acct?.address, client, baseType, quoteType, side, pkgUnxversal]);
 
   // Load staking active stake (via dynamic field on staking pool)
   useEffect(() => {
@@ -181,7 +177,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
     if (!id) return;
     setSubmitting(true);
     try {
-      const tx = await depositToBalanceManagerTx(
+      const tx = await         depositToBalanceManagerTx(
         pkgDeepbook,
         pkgUnxversal,
         balanceManagerId,
@@ -190,7 +186,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
         feeConfigId,
         feeVaultId,
         stakingPoolId,
-        feeType === 'unxv' ? selUnxvCoinId || undefined : undefined,
+        feeType === 'unxv' ? unxvCoins[0]?.id || undefined : undefined,
       );
       await signAndExecute({ transaction: tx });
     } finally { setSubmitting(false); }
@@ -292,9 +288,9 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
         feeConfigId,
         feeVaultId,
         stakingPoolId,
-        feePaymentCoinId: selFeeCoinId,
+        feePaymentCoinId: (side === 'buy' ? quoteCoins : baseCoins)[0]?.id || '',
         feePaymentCoinType,
-        maybeUnxvCoinId: feeType === 'unxv' ? selUnxvCoinId || undefined : undefined,
+        maybeUnxvCoinId: feeType === 'unxv' ? unxvCoins[0]?.id || undefined : undefined,
         borrowPoolKey,
         borrowAmount,
         tradePoolKey: pool,
@@ -324,9 +320,9 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
         feeConfigId,
         feeVaultId,
         stakingPoolId,
-        feePaymentCoinId: selFeeCoinId,
+        feePaymentCoinId: (side === 'buy' ? quoteCoins : baseCoins)[0]?.id || '',
         feePaymentCoinType: side === 'buy' ? quoteType : baseType,
-        maybeUnxvCoinId: feeType === 'unxv' ? selUnxvCoinId || undefined : undefined,
+        maybeUnxvCoinId: feeType === 'unxv' ? unxvCoins[0]?.id || undefined : undefined,
         marketId,
         collatType,
         debtType,
@@ -848,25 +844,6 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
                 {feeType === 'unxv' ? 'UNXV' : inputFeeSym}
               </button>
             </div>
-            <div className={styles.feeRow}>
-              <span>Fee coin</span>
-              <select value={selFeeCoinId} onChange={(e)=>setSelFeeCoinId(e.target.value)}>
-                {(side==='buy'?quoteCoins:baseCoins).map(c => (
-                  <option key={c.id} value={c.id}>{c.id.slice(0,6)}…{c.id.slice(-4)} ({Number(c.balance).toLocaleString()})</option>
-                ))}
-              </select>
-            </div>
-            {feeType === 'unxv' && (
-              <div className={styles.feeRow}>
-                <span>UNXV coin (optional)</span>
-                <select value={selUnxvCoinId} onChange={(e)=>setSelUnxvCoinId(e.target.value)}>
-                  <option value="">None</option>
-                  {unxvCoins.map(c => (
-                    <option key={c.id} value={c.id}>{c.id.slice(0,6)}…{c.id.slice(-4)} ({Number(c.balance).toLocaleString()})</option>
-                  ))}
-                </select>
-              </div>
-            )}
             
             <div className={styles.feeDisplay}>
               <div className={styles.feeRow}>

@@ -644,6 +644,8 @@ input[type="number"] {
   grid-template-rows: auto auto;
   gap: 12px 20px;
   min-height: 80px;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .flashStepTopLeft {
@@ -685,6 +687,7 @@ input[type="number"] {
   justify-content: flex-end;
   align-self: end;
   gap: 4px;
+  min-width: 0;
 }
 
 .flashStepAmountLabel {
@@ -702,8 +705,10 @@ input[type="number"] {
   padding: 6px 8px;
   color: #e5e7eb;
   font-size: 12px;
-  width: 100px;
+  width: 100%;
+  max-width: 120px;
   text-align: left;
+  box-sizing: border-box;
 }
 
 .flashStepAmountDisplay {
@@ -711,6 +716,10 @@ input[type="number"] {
   font-size: 12px;
   font-weight: 500;
   text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
 }
 
 .flashStepTopRight {
@@ -722,6 +731,7 @@ input[type="number"] {
   justify-content: flex-start;
   align-self: start;
   gap: 4px;
+  min-width: 0;
 }
 
 .flashStepAssetLabel {
@@ -737,6 +747,10 @@ input[type="number"] {
   font-size: 12px;
   font-weight: 500;
   text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
 }
 
 .flashStepBottomRight {
@@ -748,6 +762,7 @@ input[type="number"] {
   justify-content: flex-end;
   align-self: end;
   gap: 4px;
+  min-width: 0;
 }
 
 .flashStepPriceLabel {
@@ -765,8 +780,10 @@ input[type="number"] {
   padding: 6px 8px;
   color: #e5e7eb;
   font-size: 12px;
-  width: 100px;
+  width: 100%;
+  max-width: 120px;
   text-align: right;
+  box-sizing: border-box;
 }
 
 .flashStepPriceDisplay {
@@ -774,6 +791,10 @@ input[type="number"] {
   font-size: 12px;
   font-weight: 500;
   text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
 }
 
 .flashStepAssetInput {
@@ -783,8 +804,10 @@ input[type="number"] {
   padding: 6px 8px;
   color: #e5e7eb;
   font-size: 12px;
-  width: 100px;
+  width: 100%;
+  max-width: 120px;
   text-align: right;
+  box-sizing: border-box;
 }
 
 
