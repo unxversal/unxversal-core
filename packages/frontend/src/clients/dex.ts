@@ -1,4 +1,5 @@
 import { DeepBookClient } from '@mysten/deepbook-v3';
+import type { Transaction } from '@mysten/sui/transactions';
 
 export type DeepBookEnv = 'mainnet' | 'testnet';
 
@@ -85,7 +86,7 @@ export class DexClient {
   /**
    * Util: build a DeepBook flash loan flow around an optional single swap and repay.
    */
-  flashLoanDeepBook(tx: any, params: {
+  flashLoanDeepBook(tx: Transaction, params: {
     // Fee config
     feeConfigId: string;
     feeVaultId: string;
@@ -112,31 +113,31 @@ export class DexClient {
     // Take protocol fee from user-provided coin first
     const unxvType = `${this.pkgUnxversal}::unxv::UNXV`;
     const optUnxv = params.maybeUnxvCoinId
-      ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [(tx as any).object(params.maybeUnxvCoinId)] })
-      : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
+      ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(params.maybeUnxvCoinId)] })
+      : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
     const optOverride = typeof params.takerFeeBpsOverride !== 'undefined'
-      ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [(tx as any).pure.u64(params.takerFeeBpsOverride as bigint)] })
-      : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
-    const [reduced, _maybeBack] = (tx as any).moveCall({
+      ? tx.moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [tx.pure.u64(params.takerFeeBpsOverride as bigint)] })
+      : tx.moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
+    const [reduced, _maybeBack] = tx.moveCall({
       target: `${this.pkgUnxversal}::bridge::take_protocol_fee_in_base<${params.feePaymentCoinType}>`,
       arguments: [
-        (tx as any).object(params.feeConfigId),
-        (tx as any).object(params.feeVaultId),
-        (tx as any).object(params.stakingPoolId),
-        (tx as any).object(params.feePaymentCoinId),
+        tx.object(params.feeConfigId),
+        tx.object(params.feeVaultId),
+        tx.object(params.stakingPoolId),
+        tx.object(params.feePaymentCoinId),
         optUnxv,
         optOverride,
-        (tx as any).object('0x6'),
+        tx.object('0x6'),
       ],
     });
-    (tx as any).transferObjects([reduced], this.address);
+    tx.transferObjects([reduced], this.address);
 
-    const [borrowedBase, flashLoan] = (tx as any).add((this.borrowBaseAsset(params.borrowPoolKey, params.borrowAmount) as any));
+    const [borrowedBase, flashLoan] = tx.add((this.borrowBaseAsset(params.borrowPoolKey, params.borrowAmount) as any));
 
     // Optional one hop trade using borrowed coin as DEEP fee coin (if direction is quote->base)
     if (params.tradePoolKey && params.tradeAmount && params.tradeDirection) {
       if (params.tradeDirection === 'quote->base') {
-        (tx as any).add(
+        tx.add(
           this.swapExactQuoteForBase({
             poolKey: params.tradePoolKey,
             amount: params.tradeAmount,
@@ -146,7 +147,7 @@ export class DexClient {
           }) as any,
         );
       } else {
-        (tx as any).add(
+        tx.add(
           this.swapExactBaseForQuote({
             poolKey: params.tradePoolKey,
             amount: params.tradeAmount,
@@ -161,7 +162,7 @@ export class DexClient {
     // Optional reacquire step to obtain DEEP for repayment
     if (params.reacquirePoolKey && params.reacquireAmount && params.reacquireDirection) {
       if (params.reacquireDirection === 'quote->base') {
-        (tx as any).add(
+        tx.add(
           this.swapExactQuoteForBase({
             poolKey: params.reacquirePoolKey,
             amount: params.reacquireAmount,
@@ -170,7 +171,7 @@ export class DexClient {
           }) as any,
         );
       } else {
-        (tx as any).add(
+        tx.add(
           this.swapExactBaseForQuote({
             poolKey: params.reacquirePoolKey,
             amount: params.reacquireAmount,
@@ -181,7 +182,7 @@ export class DexClient {
       }
     }
 
-    const loanRemain = (tx as any).add((this.returnBaseAsset(params.borrowPoolKey, params.borrowAmount, borrowedBase, flashLoan) as any));
+    const loanRemain = tx.add((this.returnBaseAsset(params.borrowPoolKey, params.borrowAmount, borrowedBase, flashLoan) as any));
     return loanRemain; // Transaction object for any leftover to transfer if desired
   }
 
@@ -190,7 +191,7 @@ export class DexClient {
    * Build a lending-module flash loan around optional DeepBook swap.
    * Caller must provide correct type tags and market id.
    */
-  flashLoanLending(tx: any, params: {
+  flashLoanLending(tx: Transaction, params: {
     // Fee config
     feeConfigId: string;
     feeVaultId: string;
@@ -213,32 +214,32 @@ export class DexClient {
     // Take protocol fee from user-provided coin
     const unxvType = `${this.pkgUnxversal}::unxv::UNXV`;
     const optUnxv = params.maybeUnxvCoinId
-      ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [(tx as any).object(params.maybeUnxvCoinId)] })
-      : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
+      ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(params.maybeUnxvCoinId)] })
+      : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
     const optOverride = typeof params.takerFeeBpsOverride !== 'undefined'
-      ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [(tx as any).pure.u64(params.takerFeeBpsOverride as bigint)] })
-      : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
-    const [reduced, _maybeBack] = (tx as any).moveCall({
+      ? tx.moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [tx.pure.u64(params.takerFeeBpsOverride as bigint)] })
+      : tx.moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
+    const [reduced, _maybeBack] = tx.moveCall({
       target: `${this.pkgUnxversal}::bridge::take_protocol_fee_in_base<${params.feePaymentCoinType}>`,
       arguments: [
-        (tx as any).object(params.feeConfigId),
-        (tx as any).object(params.feeVaultId),
-        (tx as any).object(params.stakingPoolId),
-        (tx as any).object(params.feePaymentCoinId),
+        tx.object(params.feeConfigId),
+        tx.object(params.feeVaultId),
+        tx.object(params.stakingPoolId),
+        tx.object(params.feePaymentCoinId),
         optUnxv,
         optOverride,
-        (tx as any).object('0x6'),
+        tx.object('0x6'),
       ],
     });
-    (tx as any).transferObjects([reduced], this.address);
+    tx.transferObjects([reduced], this.address);
 
-    const loanCall = (tx as any).moveCall({
+    const loanCall = tx.moveCall({
       target: `${this.pkgUnxversal}::lending::flash_loan_debt<${params.collatType}, ${params.debtType}>`,
       arguments: [
-        (tx as any).object(params.marketId),
-        (tx as any).pure.u64(params.amount as bigint),
-        (tx as any).object('0x6'),
-        (tx as any).object('0x6'),
+        tx.object(params.marketId),
+        tx.pure.u64(params.amount as bigint),
+        tx.object('0x6'),
+        tx.object('0x6'),
       ],
     });
     const borrowedDebt = loanCall[0];
@@ -246,20 +247,20 @@ export class DexClient {
 
     if (params.tradePoolKey && params.tradeAmount && params.tradeDirection) {
       if (params.tradeDirection === 'quote->base') {
-        (tx as any).add(this.swapExactQuoteForBase({ poolKey: params.tradePoolKey, amount: params.tradeAmount, deepAmount: 0, minOut: params.minOut ?? 0 }) as any);
+        tx.add(this.swapExactQuoteForBase({ poolKey: params.tradePoolKey, amount: params.tradeAmount, deepAmount: 0, minOut: params.minOut ?? 0 }) as any);
       } else {
-        (tx as any).add(this.swapExactBaseForQuote({ poolKey: params.tradePoolKey, amount: params.tradeAmount, deepAmount: 0, minOut: params.minOut ?? 0 }) as any);
+        tx.add(this.swapExactBaseForQuote({ poolKey: params.tradePoolKey, amount: params.tradeAmount, deepAmount: 0, minOut: params.minOut ?? 0 }) as any);
       }
     }
 
-    const repayRemain = (tx as any).moveCall({
+    const repayRemain = tx.moveCall({
       target: `${this.pkgUnxversal}::lending::flash_repay_debt<${params.collatType}, ${params.debtType}>`,
       arguments: [
-        (tx as any).object(params.marketId),
+        tx.object(params.marketId),
         borrowedDebt,
         cap,
-        (tx as any).object('0x6'),
-        (tx as any).object('0x6'),
+        tx.object('0x6'),
+        tx.object('0x6'),
       ],
     });
     return repayRemain;
@@ -296,29 +297,29 @@ export class DexClient {
     expiration?: number | bigint;
   }) {
     if (!this.pkgUnxversal) throw new Error('pkgUnxversal required for protocol fee');
-    return (tx: any) => {
+    return (tx: Transaction) => {
       // Charge protocol fee from provided coin
       const unxvType = `${this.pkgUnxversal}::unxv::UNXV`;
       const optUnxv = args.maybeUnxvCoinId
-        ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [(tx as any).object(args.maybeUnxvCoinId)] })
-        : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
+        ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
+        : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
       const optOverride = typeof args.takerFeeBpsOverride !== 'undefined'
-        ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [(tx as any).pure.u64(args.takerFeeBpsOverride as bigint)] })
-        : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
-      const [reduced, _maybeBack] = (tx as any).moveCall({
+        ? tx.moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [tx.pure.u64(args.takerFeeBpsOverride as bigint)] })
+        : tx.moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
+      const [reduced, _maybeBack] = tx.moveCall({
         target: `${this.pkgUnxversal}::bridge::take_protocol_fee_in_base<${args.feePaymentCoinType}>`,
         arguments: [
-          (tx as any).object(args.feeConfigId),
-          (tx as any).object(args.feeVaultId),
-          (tx as any).object(args.stakingPoolId),
-          (tx as any).object(args.feePaymentCoinId),
+          tx.object(args.feeConfigId),
+          tx.object(args.feeVaultId),
+          tx.object(args.stakingPoolId),
+          tx.object(args.feePaymentCoinId),
           optUnxv,
           optOverride,
-          (tx as any).object('0x6'),
+          tx.object('0x6'),
         ],
       });
       // Return remaining fee coin
-      (tx as any).transferObjects([reduced], this.address);
+      tx.transferObjects([reduced], this.address);
 
       // Place DeepBook order
       const dbParams: any = {
@@ -359,27 +360,27 @@ export class DexClient {
     selfMatchingOption?: number;
   }) {
     if (!this.pkgUnxversal) throw new Error('pkgUnxversal required for protocol fee');
-    return (tx: any) => {
+    return (tx: Transaction) => {
       const unxvType = `${this.pkgUnxversal}::unxv::UNXV`;
       const optUnxv = args.maybeUnxvCoinId
-        ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [(tx as any).object(args.maybeUnxvCoinId)] })
-        : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
+        ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
+        : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
       const optOverride = typeof args.takerFeeBpsOverride !== 'undefined'
-        ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [(tx as any).pure.u64(args.takerFeeBpsOverride as bigint)] })
-        : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
-      const [reduced, _maybeBack] = (tx as any).moveCall({
+        ? tx.moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [tx.pure.u64(args.takerFeeBpsOverride as bigint)] })
+        : tx.moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
+      const [reduced, _maybeBack] = tx.moveCall({
         target: `${this.pkgUnxversal}::bridge::take_protocol_fee_in_base<${args.feePaymentCoinType}>`,
         arguments: [
-          (tx as any).object(args.feeConfigId),
-          (tx as any).object(args.feeVaultId),
-          (tx as any).object(args.stakingPoolId),
-          (tx as any).object(args.feePaymentCoinId),
+          tx.object(args.feeConfigId),
+          tx.object(args.feeVaultId),
+          tx.object(args.stakingPoolId),
+          tx.object(args.feePaymentCoinId),
           optUnxv,
           optOverride,
-          (tx as any).object('0x6'),
+          tx.object('0x6'),
         ],
       });
-      (tx as any).transferObjects([reduced], this.address);
+      tx.transferObjects([reduced], this.address);
 
       const dbParams: any = {
         poolKey: args.poolKey,
@@ -414,27 +415,27 @@ export class DexClient {
     deepCoin?: any;
   }) {
     if (!this.pkgUnxversal) throw new Error('pkgUnxversal required for protocol fee');
-    return (tx: any) => {
+    return (tx: Transaction) => {
       const unxvType = `${this.pkgUnxversal}::unxv::UNXV`;
       const optUnxv = args.maybeUnxvCoinId
-        ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [(tx as any).object(args.maybeUnxvCoinId)] })
-        : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
+        ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
+        : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
       const optOverride = typeof args.takerFeeBpsOverride !== 'undefined'
-        ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [(tx as any).pure.u64(args.takerFeeBpsOverride as bigint)] })
-        : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
-      const [reduced, _maybeBack] = (tx as any).moveCall({
+        ? tx.moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [tx.pure.u64(args.takerFeeBpsOverride as bigint)] })
+        : tx.moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
+      const [reduced, _maybeBack] = tx.moveCall({
         target: `${this.pkgUnxversal}::bridge::take_protocol_fee_in_base<${args.feePaymentCoinType}>`,
         arguments: [
-          (tx as any).object(args.feeConfigId),
-          (tx as any).object(args.feeVaultId),
-          (tx as any).object(args.stakingPoolId),
-          (tx as any).object(args.feePaymentCoinId),
+          tx.object(args.feeConfigId),
+          tx.object(args.feeVaultId),
+          tx.object(args.stakingPoolId),
+          tx.object(args.feePaymentCoinId),
           optUnxv,
           optOverride,
-          (tx as any).object('0x6'),
+          tx.object('0x6'),
         ],
       });
-      (tx as any).transferObjects([reduced], this.address);
+      tx.transferObjects([reduced], this.address);
 
       (this.db.deepBook.swapExactBaseForQuote({
         poolKey: args.poolKey,
@@ -461,27 +462,27 @@ export class DexClient {
     deepCoin?: any;
   }) {
     if (!this.pkgUnxversal) throw new Error('pkgUnxversal required for protocol fee');
-    return (tx: any) => {
+    return (tx: Transaction) => {
       const unxvType = `${this.pkgUnxversal}::unxv::UNXV`;
       const optUnxv = args.maybeUnxvCoinId
-        ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [(tx as any).object(args.maybeUnxvCoinId)] })
-        : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
+        ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
+        : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
       const optOverride = typeof args.takerFeeBpsOverride !== 'undefined'
-        ? (tx as any).moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [(tx as any).pure.u64(args.takerFeeBpsOverride as bigint)] })
-        : (tx as any).moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
-      const [reduced, _maybeBack] = (tx as any).moveCall({
+        ? tx.moveCall({ target: '0x1::option::some', typeArguments: ['u64'], arguments: [tx.pure.u64(args.takerFeeBpsOverride as bigint)] })
+        : tx.moveCall({ target: '0x1::option::none', typeArguments: ['u64'], arguments: [] });
+      const [reduced, _maybeBack] = tx.moveCall({
         target: `${this.pkgUnxversal}::bridge::take_protocol_fee_in_base<${args.feePaymentCoinType}>`,
         arguments: [
-          (tx as any).object(args.feeConfigId),
-          (tx as any).object(args.feeVaultId),
-          (tx as any).object(args.stakingPoolId),
-          (tx as any).object(args.feePaymentCoinId),
+          tx.object(args.feeConfigId),
+          tx.object(args.feeVaultId),
+          tx.object(args.stakingPoolId),
+          tx.object(args.feePaymentCoinId),
           optUnxv,
           optOverride,
-          (tx as any).object('0x6'),
+          tx.object('0x6'),
         ],
       });
-      (tx as any).transferObjects([reduced], this.address);
+      tx.transferObjects([reduced], this.address);
 
       (this.db.deepBook.swapExactQuoteForBase({
         poolKey: args.poolKey,
