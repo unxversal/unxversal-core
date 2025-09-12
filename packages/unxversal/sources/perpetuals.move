@@ -33,6 +33,7 @@ module unxversal::perpetuals {
     const E_UNDER_MM: u64 = 6;
     const E_EXPOSURE_CAP: u64 = 7;
     const E_INVALID_TIERS: u64 = 8;
+    const E_NO_REWARDS: u64 = 9;
 
     /// Market parameters
     public struct PerpParams has copy, drop, store {
@@ -52,6 +53,10 @@ module unxversal::perpetuals {
         last_cum_short_pay_1e6: u128,
         funding_credit: u64,
         locked_im: u64,
+        /// Trader rewards accounting
+        trader_reward_debt_1e18: u128,
+        trader_pending_unxv: u64,
+        trader_last_eligible: u64,
     }
 
     /// Perp market shared object
@@ -82,6 +87,11 @@ module unxversal::perpetuals {
         total_short_qty: u64,
         book: Book,
         owners: Table<u128, address>,
+        /// Trader rewards state
+        trader_acc_per_eligible_1e18: u128,
+        trader_total_eligible: u128,
+        trader_rewards_pot: Balance<UNXV>,
+        trader_buffer_unxv: u64,
     }
 
     // Events
@@ -91,6 +101,8 @@ module unxversal::perpetuals {
     public struct PositionChanged has copy, drop { market_id: ID, who: address, is_long: bool, qty_delta: u64, exec_price_1e6: u64, realized_gain: u64, realized_loss: u64, new_long: u64, new_short: u64, timestamp_ms: u64 }
     public struct FeeCharged has copy, drop { market_id: ID, who: address, notional_1e6: u128, fee_paid: u64, paid_in_unxv: bool, timestamp_ms: u64 }
     public struct FundingIndexUpdated has copy, drop { market_id: ID, longs_pay: bool, delta_1e6: u64, cum_long_pay_1e6: u128, cum_short_pay_1e6: u128, timestamp_ms: u64 }
+    public struct TraderRewardsDeposited has copy, drop { market_id: ID, amount_unxv: u64, total_eligible: u128, acc_1e18: u128, timestamp_ms: u64 }
+    public struct TraderRewardsClaimed has copy, drop { market_id: ID, who: address, amount_unxv: u64, pending_left: u64, timestamp_ms: u64 }
     public struct FundingSettled has copy, drop { market_id: ID, who: address, amount_paid: u64, amount_credited: u64, credit_left: u64, timestamp_ms: u64 }
     public struct Liquidated has copy, drop { market_id: ID, who: address, qty_closed: u64, exec_price_1e6: u64, penalty_collat: u64, timestamp_ms: u64 }
 
@@ -146,6 +158,10 @@ module unxversal::perpetuals {
             total_short_qty: 0,
             book: ubk::empty(tick_size, lot_size, min_size, ctx),
             owners: table::new<u128, address>(ctx),
+            trader_acc_per_eligible_1e18: 0,
+            trader_total_eligible: 0,
+            trader_rewards_pot: balance::zero<UNXV>(),
+            trader_buffer_unxv: 0,
         };
         event::emit(PerpInitialized { market_id: object::id(&m), symbol: clone_string(&m.params.symbol), contract_size, funding_interval_ms, initial_margin_bps, maintenance_margin_bps, liquidation_fee_bps, keeper_incentive_bps });
         transfer::share_object(m);
@@ -214,6 +230,8 @@ module unxversal::perpetuals {
         let amt = coin::value(&c);
         assert!(amt > 0, E_ZERO);
         let mut acc = load_or_new_account<Collat>(market, ctx.sender());
+        // Settle trader rewards using current accumulator before changing balances
+        settle_trader_rewards_eligible<Collat>(market, &mut acc);
         let (_paid0, _cred0) = settle_funding_user_internal<Collat>(market, &mut acc, clock, ctx);
         acc.collat.join(coin::into_balance(c));
         store_account<Collat>(market, ctx.sender(), acc);
@@ -407,14 +425,24 @@ module unxversal::perpetuals {
         let fee_amt = ((total_notional_1e6 * (t_eff as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64;
         if (pay_with_unxv) {
             let u = option::extract(maybe_unxv);
-            let (stakers_coin, treasury_coin, _burn) = fees::accrue_unxv_and_split(cfg, vault, u, clock, ctx);
+            let (stakers_coin, traders_coin, treasury_coin, _burn) = fees::accrue_unxv_and_split_with_traders(cfg, vault, u, clock, ctx);
             staking::add_weekly_reward(staking_pool, stakers_coin, clock);
+            let traders_amt = coin::value(&traders_coin);
+            if (traders_amt > 0) {
+                let bal = coin::into_balance(traders_coin);
+                market.trader_rewards_pot.join(bal);
+                if (market.trader_total_eligible > 0) {
+                    let delta: u128 = ((traders_amt as u128) * 1_000_000_000_000_000_000u128) / market.trader_total_eligible;
+                    market.trader_acc_per_eligible_1e18 = market.trader_acc_per_eligible_1e18 + delta;
+                } else { market.trader_buffer_unxv = market.trader_buffer_unxv + traders_amt; };
+                event::emit(TraderRewardsDeposited { market_id: object::id(market), amount_unxv: traders_amt, total_eligible: market.trader_total_eligible, acc_1e18: market.trader_acc_per_eligible_1e18, timestamp_ms: clock.timestamp_ms() });
+            } else { coin::destroy_zero(traders_coin); };
             transfer::public_transfer(treasury_coin, fees::treasury_address(cfg));
             event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_1e6: total_notional_1e6, fee_paid: 0, paid_in_unxv: true, timestamp_ms: clock.timestamp_ms() });
         } else {
             assert!(balance::value(&acc.collat) >= fee_amt, E_INSUFFICIENT);
             let part = balance::split(&mut acc.collat, fee_amt);
-            fees::accrue_generic<Collat>(vault, coin::from_balance(part, ctx), clock, ctx);
+            fees::route_fee<Collat>(vault, coin::from_balance(part, ctx), clock, ctx);
             event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_1e6: total_notional_1e6, fee_paid: fee_amt, paid_in_unxv: false, timestamp_ms: clock.timestamp_ms() });
         };
 
@@ -584,6 +612,76 @@ module unxversal::perpetuals {
         required_margin_bps<Collat>(acc, px_1e6, market.params.contract_size, base)
     }
 
+    // ===== Trader rewards helpers (perps) =====
+    fun eligible_amount_usd_approx<Collat>(market: &PerpMarket<Collat>, acc: &PerpAccount<Collat>, index_1e6: u64): u64 {
+        let eq = equity_collat(acc, index_1e6, market.params.contract_size);
+        let req = required_margin_effective<Collat>(market, acc, index_1e6);
+        if (eq <= req) { eq } else { req }
+    }
+
+    fun settle_trader_rewards_eligible<Collat>(market: &mut PerpMarket<Collat>, acc: &mut PerpAccount<Collat>) {
+        let eligible_prev = (acc.trader_last_eligible as u128);
+        if (eligible_prev > 0) {
+            let accu = market.trader_acc_per_eligible_1e18;
+            let debt = acc.trader_reward_debt_1e18;
+            if (accu > debt) {
+                let delta_1e18: u128 = accu - debt;
+                let earn_u128: u128 = (eligible_prev * delta_1e18) / 1_000_000_000_000_000_000u128;
+                let max_u64: u128 = 18_446_744_073_709_551_615u128;
+                let add: u64 = if (earn_u128 > max_u64) { 18_446_744_073_709_551_615u64 } else { earn_u128 as u64 };
+                acc.trader_pending_unxv = acc.trader_pending_unxv + add;
+            };
+        };
+    }
+
+    fun update_trader_rewards_after_change<Collat>(market: &mut PerpMarket<Collat>, acc: &mut PerpAccount<Collat>, index_1e6: u64) {
+        // remove old eligible from total
+        let old_el = acc.trader_last_eligible as u128;
+        if (old_el > 0 && market.trader_total_eligible >= old_el) { market.trader_total_eligible = market.trader_total_eligible - old_el; };
+        let new_el_u64 = eligible_amount_usd_approx<Collat>(market, acc, index_1e6);
+        let new_el = new_el_u64 as u128;
+        if (new_el > 0) { market.trader_total_eligible = market.trader_total_eligible + new_el; acc.trader_reward_debt_1e18 = market.trader_acc_per_eligible_1e18; } else { acc.trader_reward_debt_1e18 = market.trader_acc_per_eligible_1e18; };
+        if (market.trader_buffer_unxv > 0 && market.trader_total_eligible > 0) {
+            let buf = market.trader_buffer_unxv as u128;
+            let delta = (buf * 1_000_000_000_000_000_000u128) / market.trader_total_eligible;
+            market.trader_acc_per_eligible_1e18 = market.trader_acc_per_eligible_1e18 + delta;
+            market.trader_buffer_unxv = 0;
+        };
+        acc.trader_last_eligible = new_el_u64;
+    }
+
+    /// Claim trader rewards in UNXV up to `max_amount` (0 = all)
+    public fun claim_trader_rewards<Collat>(market: &mut PerpMarket<Collat>, clock: &Clock, ctx: &mut TxContext, max_amount: u64): Coin<UNXV> {
+        assert!(table::contains(&market.accounts, ctx.sender()), E_NO_ACCOUNT);
+        let mut acc = table::remove(&mut market.accounts, ctx.sender());
+        settle_trader_rewards_eligible<Collat>(market, &mut acc);
+        let want = if (max_amount == 0 || max_amount > acc.trader_pending_unxv) { acc.trader_pending_unxv } else { max_amount };
+        assert!(want > 0, E_NO_REWARDS);
+        let pot_avail = balance::value(&market.trader_rewards_pot);
+        let pay = if (want <= pot_avail) { want } else { pot_avail };
+        if (pay > 0) {
+            let part = balance::split(&mut market.trader_rewards_pot, pay);
+            let out = coin::from_balance(part, ctx);
+            acc.trader_pending_unxv = acc.trader_pending_unxv - pay;
+            event::emit(TraderRewardsClaimed { market_id: object::id(market), who: ctx.sender(), amount_unxv: pay, pending_left: acc.trader_pending_unxv, timestamp_ms: clock.timestamp_ms() });
+            store_account<Collat>(market, ctx.sender(), acc);
+            out
+        } else { store_account<Collat>(market, ctx.sender(), acc); coin::zero<UNXV>(ctx) }
+    }
+
+    /// Keeper/public: deposit UNXV into trader rewards pot
+    public fun deposit_trader_rewards<Collat>(market: &mut PerpMarket<Collat>, mut unxv: Coin<UNXV>, clock: &Clock, ctx: &mut TxContext) {
+        let amt = coin::value(&unxv);
+        assert!(amt > 0, E_ZERO);
+        let bal = coin::into_balance(unxv);
+        market.trader_rewards_pot.join(bal);
+        if (market.trader_total_eligible > 0) {
+            let delta: u128 = ((amt as u128) * 1_000_000_000_000_000_000u128) / market.trader_total_eligible;
+            market.trader_acc_per_eligible_1e18 = market.trader_acc_per_eligible_1e18 + delta;
+        } else { market.trader_buffer_unxv = market.trader_buffer_unxv + amt; };
+        event::emit(TraderRewardsDeposited { market_id: object::id(market), amount_unxv: amt, total_eligible: market.trader_total_eligible, acc_1e18: market.trader_acc_per_eligible_1e18, timestamp_ms: clock.timestamp_ms() });
+    }
+
     fun tier_bps_for_notional<Collat>(market: &PerpMarket<Collat>, notional_1e6: u128): u64 {
         let n = vector::length(&market.tier_thresholds_notional_1e6);
         if (n == 0) return market.initial_margin_bps;
@@ -640,7 +738,7 @@ module unxversal::perpetuals {
     }
 
     fun load_or_new_account<Collat>(market: &mut PerpMarket<Collat>, who: address): PerpAccount<Collat> {
-        if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { PerpAccount { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0, last_cum_long_pay_1e6: market.cum_long_pay_1e6, last_cum_short_pay_1e6: market.cum_short_pay_1e6, funding_credit: 0, locked_im: 0 } }
+        if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { PerpAccount { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0, last_cum_long_pay_1e6: market.cum_long_pay_1e6, last_cum_short_pay_1e6: market.cum_short_pay_1e6, funding_credit: 0, locked_im: 0, trader_reward_debt_1e18: 0, trader_pending_unxv: 0, trader_last_eligible: 0 } }
     }
 
     fun store_account<Collat>(market: &mut PerpMarket<Collat>, who: address, acc: PerpAccount<Collat>) { table::add(&mut market.accounts, who, acc) }

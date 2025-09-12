@@ -46,6 +46,7 @@ module unxversal::futures {
     const E_EXPOSURE_CAP: u64 = 10;
     const E_ALREADY_SETTLED: u64 = 11;
     const E_INVALID_TIERS: u64 = 12;
+    const E_NO_REWARDS: u64 = 13;
 
     // Settlement anchoring parameters
     const TWAP_MAX_SAMPLES: u64 = 64;
@@ -70,6 +71,10 @@ module unxversal::futures {
         pending_credit: u64,
         /// Margin locked for resting limit orders (not usable for IM/MM checks)
         locked_im: u64,
+        /// Trader rewards accounting (UNXV-funded)
+        trader_reward_debt_1e18: u128,
+        trader_pending_unxv: u64,
+        trader_last_eligible: u64,
     }
 
     /// Market shared object
@@ -120,6 +125,15 @@ module unxversal::futures {
         /// Pre-expiry samples for TWAP (timestamps and prices)
         twap_ts_ms: vector<u64>,
         twap_px_1e6: vector<u64>,
+        /// ===== Trader rewards state (UNXV-funded, fee-sourced) =====
+        /// Accumulator of UNXV per eligible unit (1e18 scale)
+        trader_acc_per_eligible_1e18: u128,
+        /// Sum of current eligibles across all accounts (Collat units)
+        trader_total_eligible: u128,
+        /// Trader rewards pot in UNXV from which claims are paid
+        trader_rewards_pot: Balance<UNXV>,
+        /// UNXV received when no one was eligible; applied when eligibility appears
+        trader_buffer_unxv: u64,
     }
 
     // Events
@@ -134,6 +148,9 @@ module unxversal::futures {
     public struct PnlCreditAccrued<phantom Collat> has copy, drop { market_id: ID, who: address, credited: u64, remaining_credit: u64, timestamp_ms: u64 }
     /// Emitted when realized gain is paid from the PnL vault to user collateral (either during trade/liq or via claim)
     public struct PnlCreditPaid<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, remaining_credit: u64, timestamp_ms: u64 }
+    /// Trader rewards events
+    public struct TraderRewardsDeposited has copy, drop { market_id: ID, amount_unxv: u64, total_eligible: u128, acc_1e18: u128, timestamp_ms: u64 }
+    public struct TraderRewardsClaimed has copy, drop { market_id: ID, who: address, amount_unxv: u64, pending_left: u64, timestamp_ms: u64 }
     /// Order lifecycle events for matched engine
     public struct OrderPlaced has copy, drop { market_id: ID, order_id: u128, maker: address, is_bid: bool, price_1e6: u64, quantity: u64, expire_ts: u64 }
     public struct OrderCanceled has copy, drop { market_id: ID, order_id: u128, maker: address, remaining_qty: u64, timestamp_ms: u64 }
@@ -200,6 +217,10 @@ module unxversal::futures {
             lvp_ts_ms: 0,
             twap_ts_ms: vector::empty<u64>(),
             twap_px_1e6: vector::empty<u64>(),
+            trader_acc_per_eligible_1e18: 0,
+            trader_total_eligible: 0,
+            trader_rewards_pot: balance::zero<UNXV>(),
+            trader_buffer_unxv: 0,
         };
         event::emit(MarketInitialized { market_id: object::id(&m), symbol: clone_string(&m.series.symbol), expiry_ms, contract_size, initial_margin_bps, maintenance_margin_bps, liquidation_fee_bps, keeper_incentive_bps });
         transfer::share_object(m);
@@ -292,6 +313,8 @@ module unxversal::futures {
         assert!(amt > 0, E_ZERO);
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         let bal = coin::into_balance(c);
+        // Settle trader rewards before state change
+        settle_trader_rewards_eligible<Collat>(market, &mut acc);
         acc.collat.join(bal);
         store_account<Collat>(market, ctx.sender(), acc);
         event::emit(CollateralDeposited<Collat> { market_id: object::id(market), who: ctx.sender(), amount: amt, timestamp_ms: sui::tx_context::epoch_timestamp_ms(ctx) });
@@ -308,6 +331,8 @@ module unxversal::futures {
         assert!(amount > 0, E_ZERO);
         let price_1e6 = if (market.is_settled) { market.settlement_price_1e6 } else { gated_price_and_update<Collat>(market, reg, price_info_object, clock) };
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
+        // Settle trader rewards before computing equity change
+        settle_trader_rewards_eligible<Collat>(market, &mut acc);
         // compute equity and required initial margin after withdrawal
         let equity_before = equity_collat(&acc, price_1e6, market.series.contract_size);
         assert!(equity_before >= amount, E_INSUFFICIENT_BALANCE);
@@ -426,6 +451,8 @@ module unxversal::futures {
         let plan = ubk::compute_fill_plan(&market.book, is_buy, limit_price_1e6, qty, /*client_order_id*/0, expire_ts, now);
         // Taker account
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
+        // Settle trader rewards eligibility pre-trade
+        settle_trader_rewards_eligible<Collat>(market, &mut acc);
         let index_px = current_price_1e6(&market.series, reg, price_info_object, clock);
         let mut total_notional_1e6: u128 = 0u128;
         let fills_len = ubk::fillplan_num_fills(&plan);
@@ -444,6 +471,8 @@ module unxversal::futures {
             ubk::commit_maker_fill(&mut market.book, maker_id, is_buy, limit_price_1e6, fqty, now);
             let maker_addr = *table::borrow(&market.owners, maker_id);
             let mut maker_acc = take_or_new_account<Collat>(market, maker_addr);
+            // Settle maker before mutating their exposure
+            settle_trader_rewards_eligible<Collat>(market, &mut maker_acc);
             if (is_buy) {
                 // Taker: reduce short then add long
                 let r = if (acc.short_qty > 0) { if (fqty <= acc.short_qty) { fqty } else { acc.short_qty } } else { 0 };
@@ -480,6 +509,8 @@ module unxversal::futures {
             rewards::on_perp_fill(rewards_obj, ctx.sender(), maker_addr, f_notional_1e6, false, 0, clock);
             rewards::on_perp_fill(rewards_obj, maker_addr, ctx.sender(), f_notional_1e6, true, improve_bps, clock);
             // Persist maker
+            // Update maker eligible after changes
+            update_trader_rewards_after_change<Collat>(market, &mut maker_acc, index_px);
             store_account<Collat>(market, maker_addr, maker_acc);
             // If maker order fully filled, remove owner mapping
             if (!ubk::has_order(&market.book, maker_id)) { let _ = table::remove(&mut market.owners, maker_id); };
@@ -509,8 +540,25 @@ module unxversal::futures {
         let fee_amt: u64 = ((total_notional_1e6 * (t_eff as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64;
         if (pay_with_unxv) {
             let u = option::extract(maybe_unxv_fee);
-            let (stakers_coin, treasury_coin, _burn_amt) = fees::accrue_unxv_and_split(cfg, vault, u, clock, ctx);
+            // Split UNXV fees into stakers/treasury/burn plus optional traders share
+            let (stakers_coin, traders_coin, treasury_coin, _burn_amt) = fees::accrue_unxv_and_split_with_traders(cfg, vault, u, clock, ctx);
+            // Route stakers share
             staking::add_weekly_reward(staking_pool, stakers_coin, clock);
+            // Route traders share into market rewards pot
+            let traders_amt = coin::value(&traders_coin);
+            if (traders_amt > 0) {
+                let bal = coin::into_balance(traders_coin);
+                market.trader_rewards_pot.join(bal);
+                // If some users are eligible, distribute by bumping accumulator; else buffer
+                if (market.trader_total_eligible > 0) {
+                    let delta: u128 = ((traders_amt as u128) * 1_000_000_000_000_000_000u128) / market.trader_total_eligible;
+                    market.trader_acc_per_eligible_1e18 = market.trader_acc_per_eligible_1e18 + delta;
+                } else {
+                    // Keep as buffer in pot but mark buffered amount for future eligibility events
+                    market.trader_buffer_unxv = market.trader_buffer_unxv + traders_amt;
+                };
+                event::emit(TraderRewardsDeposited { market_id: object::id(market), amount_unxv: traders_amt, total_eligible: market.trader_total_eligible, acc_1e18: market.trader_acc_per_eligible_1e18, timestamp_ms: clock.timestamp_ms() });
+            } else { coin::destroy_zero(traders_coin); };
             transfer::public_transfer(treasury_coin, fees::treasury_address(cfg));
             event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_units: (total_notional_1e6 / 1_000_000u128) as u64, fee_paid: 0, paid_in_unxv: true, timestamp_ms: clock.timestamp_ms() });
         } else {
@@ -523,14 +571,14 @@ module unxversal::futures {
                 if (share_amt > 0 && share_amt < fee_amt) {
                     let pnl_part = coin::split(&mut c, share_amt, ctx);
                     fees::pnl_deposit<Collat>(vault, pnl_part);
-                    fees::accrue_generic<Collat>(vault, c, clock, ctx);
+                    fees::route_fee<Collat>(vault, c, clock, ctx);
                 } else if (share_amt >= fee_amt) {
                     fees::pnl_deposit<Collat>(vault, c);
                 } else {
-                    fees::accrue_generic<Collat>(vault, c, clock, ctx);
+                    fees::route_fee<Collat>(vault, c, clock, ctx);
                 };
             } else {
-                fees::accrue_generic<Collat>(vault, c, clock, ctx);
+                fees::route_fee<Collat>(vault, c, clock, ctx);
             };
             event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_units: (total_notional_1e6 / 1_000_000u128) as u64, fee_paid: fee_amt, paid_in_unxv: false, timestamp_ms: clock.timestamp_ms() });
         };
@@ -540,7 +588,8 @@ module unxversal::futures {
         let req = required_initial_margin_effective<Collat>(market, &acc, index_px);
         let free = if (eq > acc.locked_im) { eq - acc.locked_im } else { 0 };
         assert!(free >= req, E_UNDER_INITIAL_MARGIN);
-
+        // Update taker eligible after changes
+        update_trader_rewards_after_change<Collat>(market, &mut acc, index_px);
         store_account<Collat>(market, ctx.sender(), acc);
     }
 
@@ -817,7 +866,7 @@ module unxversal::futures {
     }
 
     fun take_or_new_account<Collat>(market: &mut FuturesMarket<Collat>, who: address): Account<Collat> {
-        if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { Account { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0, pending_credit: 0, locked_im: 0 } }
+        if (table::contains(&market.accounts, who)) { table::remove(&mut market.accounts, who) } else { Account { collat: balance::zero<Collat>(), long_qty: 0, short_qty: 0, avg_long_1e6: 0, avg_short_1e6: 0, pending_credit: 0, locked_im: 0, trader_reward_debt_1e18: 0, trader_pending_unxv: 0, trader_last_eligible: 0 } }
     }
 
     fun store_account<Collat>(market: &mut FuturesMarket<Collat>, who: address, acc: Account<Collat>) {
@@ -1014,9 +1063,11 @@ module unxversal::futures {
         let idx = if (market.is_settled) { market.settlement_price_1e6 } else { current_price_1e6(&market.series, reg, price_info_object, clock) };
         let unlock = im_for_qty(&market.series, remaining, idx, market.initial_margin_bps);
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
+        settle_trader_rewards_eligible<Collat>(market, &mut acc);
         if (acc.locked_im >= unlock) { acc.locked_im = acc.locked_im - unlock; } else { acc.locked_im = 0; };
         let _ord = ubk::cancel_order(&mut market.book, order_id);
         table::remove(&mut market.owners, order_id);
+        update_trader_rewards_after_change<Collat>(market, &mut acc, idx);
         store_account<Collat>(market, ctx.sender(), acc);
         event::emit(OrderCanceled { market_id: object::id(market), order_id, maker: owner, remaining_qty: remaining, timestamp_ms: clock.timestamp_ms() });
     }
@@ -1041,6 +1092,93 @@ module unxversal::futures {
         if (added_qty == 0) return;
         let im = im_for_qty(&market.series, added_qty, price_1e6, market.initial_margin_bps);
         if (acc.locked_im >= im) { acc.locked_im = acc.locked_im - im; } else { acc.locked_im = 0; };
+    }
+
+    // ===== Trader rewards helpers =====
+    fun eligible_amount_usd_approx<Collat>(market: &FuturesMarket<Collat>, acc: &Account<Collat>, index_1e6: u64): u64 {
+        let eq = equity_collat(acc, index_1e6, market.series.contract_size);
+        let req = required_initial_margin_effective<Collat>(market, acc, index_1e6);
+        if (eq <= req) { eq } else { req }
+    }
+
+    fun settle_trader_rewards_eligible<Collat>(market: &mut FuturesMarket<Collat>, acc: &mut Account<Collat>) {
+        let eligible_prev = (acc.trader_last_eligible as u128);
+        if (eligible_prev > 0) {
+            let accu = market.trader_acc_per_eligible_1e18;
+            let debt = acc.trader_reward_debt_1e18;
+            if (accu > debt) {
+                let delta_1e18: u128 = accu - debt;
+                let earn_u128: u128 = (eligible_prev * delta_1e18) / 1_000_000_000_000_000_000u128;
+                let max_u64: u128 = 18_446_744_073_709_551_615u128;
+                let add: u64 = if (earn_u128 > max_u64) { 18_446_744_073_709_551_615u64 } else { earn_u128 as u64 };
+                acc.trader_pending_unxv = acc.trader_pending_unxv + add;
+            };
+        };
+    }
+
+    fun update_trader_rewards_after_change<Collat>(market: &mut FuturesMarket<Collat>, acc: &mut Account<Collat>, index_1e6: u64) {
+        // remove old eligible from total
+        let old_el = acc.trader_last_eligible as u128;
+        if (old_el > 0 && market.trader_total_eligible >= old_el) {
+            market.trader_total_eligible = market.trader_total_eligible - old_el;
+        };
+        // compute new eligible and add
+        let new_el_u64 = eligible_amount_usd_approx<Collat>(market, acc, index_1e6);
+        let new_el = new_el_u64 as u128;
+        if (new_el > 0) {
+            market.trader_total_eligible = market.trader_total_eligible + new_el;
+            acc.trader_reward_debt_1e18 = market.trader_acc_per_eligible_1e18;
+        } else {
+            acc.trader_reward_debt_1e18 = market.trader_acc_per_eligible_1e18;
+        };
+        // If previously buffered UNXV exists and now there is eligibility, fold into accumulator
+        if (market.trader_buffer_unxv > 0 && market.trader_total_eligible > 0) {
+            let buf = market.trader_buffer_unxv as u128;
+            let delta = (buf * 1_000_000_000_000_000_000u128) / market.trader_total_eligible;
+            market.trader_acc_per_eligible_1e18 = market.trader_acc_per_eligible_1e18 + delta;
+            market.trader_buffer_unxv = 0;
+            // note: UNXV already in pot
+        };
+        acc.trader_last_eligible = new_el_u64;
+    }
+
+    /// Claim trader rewards in UNXV up to `max_amount` (0 = all)
+    public fun claim_trader_rewards<Collat>(market: &mut FuturesMarket<Collat>, clock: &Clock, ctx: &mut TxContext, max_amount: u64): Coin<UNXV> {
+        assert!(table::contains(&market.accounts, ctx.sender()), E_NO_ACCOUNT);
+        let mut acc = table::remove(&mut market.accounts, ctx.sender());
+        // settle with current accumulator
+        settle_trader_rewards_eligible<Collat>(market, &mut acc);
+        let want = if (max_amount == 0 || max_amount > acc.trader_pending_unxv) { acc.trader_pending_unxv } else { max_amount };
+        assert!(want > 0, E_NO_REWARDS);
+        let pot_avail = balance::value(&market.trader_rewards_pot);
+        let pay = if (want <= pot_avail) { want } else { pot_avail };
+        if (pay > 0) {
+            let part = balance::split(&mut market.trader_rewards_pot, pay);
+            let out = coin::from_balance(part, ctx);
+            acc.trader_pending_unxv = acc.trader_pending_unxv - pay;
+            event::emit(TraderRewardsClaimed { market_id: object::id(market), who: ctx.sender(), amount_unxv: pay, pending_left: acc.trader_pending_unxv, timestamp_ms: clock.timestamp_ms() });
+            store_account<Collat>(market, ctx.sender(), acc);
+            out
+        } else {
+            // nothing available; re-store and abort with no rewards
+            store_account<Collat>(market, ctx.sender(), acc);
+            coin::zero<UNXV>(ctx)
+        }
+    }
+
+    /// Keeper/public: deposit UNXV into the trader rewards pot and update accumulator
+    public fun deposit_trader_rewards<Collat>(market: &mut FuturesMarket<Collat>, mut unxv: Coin<UNXV>, clock: &Clock, ctx: &mut TxContext) {
+        let amt = coin::value(&unxv);
+        assert!(amt > 0, E_ZERO);
+        let bal = coin::into_balance(unxv);
+        market.trader_rewards_pot.join(bal);
+        if (market.trader_total_eligible > 0) {
+            let delta: u128 = ((amt as u128) * 1_000_000_000_000_000_000u128) / market.trader_total_eligible;
+            market.trader_acc_per_eligible_1e18 = market.trader_acc_per_eligible_1e18 + delta;
+        } else {
+            market.trader_buffer_unxv = market.trader_buffer_unxv + amt;
+        };
+        event::emit(TraderRewardsDeposited { market_id: object::id(market), amount_unxv: amt, total_eligible: market.trader_total_eligible, acc_1e18: market.trader_acc_per_eligible_1e18, timestamp_ms: clock.timestamp_ms() });
     }
 
     fun clone_string(s: &String): String {

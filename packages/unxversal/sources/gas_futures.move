@@ -342,14 +342,14 @@ module unxversal::gas_futures {
                 if (share_amt > 0 && share_amt < fee_amt) {
                     let pnl_part = coin::split(&mut c, share_amt, ctx);
                     fees::pnl_deposit<Collat>(vault, pnl_part);
-                    fees::accrue_generic<Collat>(vault, c, clock, ctx);
+                    fees::route_fee<Collat>(vault, c, clock, ctx);
                 } else if (share_amt >= fee_amt) {
                     fees::pnl_deposit<Collat>(vault, c);
                 } else {
-                    fees::accrue_generic<Collat>(vault, c, clock, ctx);
+                    fees::route_fee<Collat>(vault, c, clock, ctx);
                 };
             } else {
-                fees::accrue_generic<Collat>(vault, c, clock, ctx);
+                fees::route_fee<Collat>(vault, c, clock, ctx);
             };
             event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_1e6: total_notional_1e6, fee_paid: fee_amt, paid_in_unxv: false, timestamp_ms: clock.timestamp_ms() });
         };

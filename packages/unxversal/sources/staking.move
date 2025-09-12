@@ -12,10 +12,12 @@ module unxversal::staking {
         event,
         display,
         package,
-        transfer,
     };
+    
     use unxversal::unxv::UNXV;
-    use std::string::String;
+    use deepbook::pool::{Self as db_pool, Pool};
+    use deepbook::deep::DEEP;
+    use std::type_name::{Self as type_name, TypeName};
 
     const E_ZERO_AMOUNT: u64 = 1;
     const E_INSUFFICIENT_ACTIVE: u64 = 2;
@@ -91,6 +93,15 @@ module unxversal::staking {
         from_week: u64,
         to_week: u64,
         amount: u64,
+        timestamp_ms: u64,
+    }
+
+    /// Emitted when UNXV rewards are added via buyback conversion from other assets.
+    public struct RewardBuyback has copy, drop {
+        pool_id: ID,
+        asset: type_name::TypeName,
+        amount_in: u64,
+        unxv_added: u64,
         timestamp_ms: u64,
     }
 
@@ -188,6 +199,47 @@ module unxversal::staking {
         if (table::contains(&pool.reward_by_week, w)) { let _ = table::remove(&mut pool.reward_by_week, w); };
         table::add(&mut pool.reward_by_week, w, cur + amt);
         event::emit(RewardAdded { pool_id: object::id(pool), amount: amt, week: w, timestamp_ms: sui::clock::timestamp_ms(clock) });
+    }
+
+    /// Buy UNXV via Pool<UNXV, T> (UNXV as base) using a Coin<T> and deposit to current week.
+    /// Returns any leftover T and DEEP to caller. Emits RewardBuyback.
+    public fun add_weekly_reward_buyback_via_unxv_quote<T>(
+        pool: &mut StakingPool,
+        db_pool_unxv_t: &mut Pool<UNXV, T>,
+        t_in: Coin<T>,
+        min_unxv_out: u64,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ): (Coin<T>, Coin<DEEP>) {
+        let deep_zero = coin::zero<DEEP>(ctx);
+        let amount_in = coin::value(&t_in);
+        let (unxv_out, t_left, deep_back) = db_pool::swap_exact_quote_for_base(db_pool_unxv_t, t_in, deep_zero, min_unxv_out, clock, ctx);
+        let unxv_amt = coin::value(&unxv_out);
+        if (unxv_amt > 0) {
+            add_weekly_reward(pool, unxv_out, clock);
+            event::emit(RewardBuyback { pool_id: object::id(pool), asset: type_name::get<T>(), amount_in, unxv_added: unxv_amt, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        } else { transfer::public_transfer(unxv_out, ctx.sender()); };
+        (t_left, deep_back)
+    }
+
+    /// Buy UNXV via Pool<T, UNXV> (UNXV as quote) using a Coin<T> and deposit to current week.
+    public fun add_weekly_reward_buyback_via_base_unxv<T>(
+        pool: &mut StakingPool,
+        db_pool_t_unxv: &mut Pool<T, UNXV>,
+        t_in: Coin<T>,
+        min_unxv_out: u64,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ): (Coin<T>, Coin<DEEP>) {
+        let deep_zero = coin::zero<DEEP>(ctx);
+        let amount_in = coin::value(&t_in);
+        let (t_left, unxv_out, deep_back) = db_pool::swap_exact_base_for_quote(db_pool_t_unxv, t_in, deep_zero, min_unxv_out, clock, ctx);
+        let unxv_amt = coin::value(&unxv_out);
+        if (unxv_amt > 0) {
+            add_weekly_reward(pool, unxv_out, clock);
+            event::emit(RewardBuyback { pool_id: object::id(pool), asset: type_name::get<T>(), amount_in, unxv_added: unxv_amt, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        } else { transfer::public_transfer(unxv_out, ctx.sender()); };
+        (t_left, deep_back)
     }
 
     /// Claim rewards for all fully completed weeks since last claim.

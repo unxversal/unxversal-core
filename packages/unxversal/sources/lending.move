@@ -301,7 +301,7 @@ module unxversal::lending {
         assert!(avail >= amount, E_INSUFFICIENT_RESERVES);
         let part = balance::split(&mut market.debt_reserves, amount);
         let coin_out = coin::from_balance(part, ctx);
-        fees::accrue_generic<Debt>(vault, coin_out, clock, ctx);
+        fees::route_fee<Debt>(vault, coin_out, clock, ctx);
     }
 
     // ===== Accrual & utilization (market) =====

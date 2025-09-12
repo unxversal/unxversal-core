@@ -48,7 +48,7 @@ module unxversal::bridge {
         let fee_amt = (amt as u128 * (taker_bps as u128) / (fees::bps_denom() as u128)) as u64;
         if (fee_amt > 0) {
             let fee_coin = coin::split(&mut base_in, fee_amt, ctx);
-            fees::accrue_generic<Base>(vault, fee_coin, clock, ctx);
+            fees::route_fee<Base>(vault, fee_coin, clock, ctx);
         };
 
         // return remaining base coin and maybe UNXV to caller

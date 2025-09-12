@@ -12,12 +12,17 @@ module unxversal::fees {
         bag::{Self as bag, Bag},
         coin::{Self as coin, Coin},
         event,
+        object::ID,
         table::{Self as table, Table},
     };
 
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::unxv::UNXV;
     use unxversal::staking::{Self as staking, StakingPool};
+
+    // DeepBook V3 imports for sweeping conversions to UNXV
+    use deepbook::pool::{Self as db_pool, Pool};
+    use deepbook::deep::DEEP;
 
     /// Errors
     const E_NOT_ADMIN: u64 = 1;
@@ -64,6 +69,9 @@ module unxversal::fees {
         prefer_deep_backend: bool,
         /// Distribution percentages
         dist: FeeDistribution,
+        /// Optional share of UNXV-denominated fees routed to trader reward pots (in bps of total UNXV fees)
+        /// If zero, no trader share is carved out and legacy 3-way split is used.
+        traders_share_bps: u64,
         /// Unxversal fee (in UNXV units) for permissionless DeepBook pool creation
         pool_creation_fee_unxv: u64,
         /// Lending origination fee in bps (before discounts); applied on borrow_with_fee
@@ -114,6 +122,16 @@ module unxversal::fees {
         timestamp_ms: u64,
     }
 
+    /// Emitted when fees of asset T are swept via DeepBook into UNXV and distributed.
+    public struct FeesSwept has copy, drop {
+        actor: address,
+        asset: TypeName,
+        amount_in: u64,
+        unxv_out: u64,
+        pool_id: ID,
+        timestamp_ms: u64,
+    }
+
     public struct UnxvFeeSplit has copy, drop {
         payer: address,
         total_unxv: u64,
@@ -131,8 +149,6 @@ module unxversal::fees {
         amount: u64,
         timestamp_ms: u64,
     }
-
-    // maker rebates removed
 
     /// One-time witness for module initialization
     public struct FEES has drop {}
@@ -153,6 +169,7 @@ module unxversal::fees {
             treasury: ctx.sender(),
             prefer_deep_backend: false,
             dist: FeeDistribution { stakers_share_bps: 4000, treasury_share_bps: 4000, burn_share_bps: 2000 },
+            traders_share_bps: 0,
             pool_creation_fee_unxv: 500,
             lending_borrow_fee_bps: 0,
             lending_collateral_bonus_bps_max: 500, // +5% max bonus by default
@@ -267,6 +284,12 @@ module unxversal::fees {
         (num / (BPS_DENOM as u128)) as u64
     }
 
+    /// Route a fee coin of arbitrary type T into the protocol FeeVault.
+    /// Wrapper around accrue_generic that provides a stable API surface.
+    public fun route_fee<T>(vault: &mut FeeVault, amount: Coin<T>, clock: &sui::clock::Clock, ctx: &TxContext) {
+        accrue_generic<T>(vault, amount, clock, ctx)
+    }
+
     /// Accrue a generic asset fee into the vault (no distribution). Intended for "paid in input token" path.
     public fun accrue_generic<T>(vault: &mut FeeVault, amount: Coin<T>, clock: &sui::clock::Clock, ctx: &TxContext) {
         let amt = coin::value(&amount);
@@ -352,6 +375,50 @@ module unxversal::fees {
         });
 
         (stakers_coin, treasury_coin, burn_part)
+    }
+
+    /// Variant of accrue_unxv_and_split that first carves out a traders share from the total UNXV fees,
+    /// and then applies the legacy 3-way split (stakers/treasury/burn) over the remainder.
+    /// Returns (stakers_coin, traders_coin, treasury_coin, burn_amount_kept_in_vault)
+    public fun accrue_unxv_and_split_with_traders(
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        mut unxv_fee: Coin<UNXV>,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ): (Coin<UNXV>, Coin<UNXV>, Coin<UNXV>, u64) {
+        let total = coin::value(&unxv_fee);
+        assert!(total > 0, E_ZERO_AMOUNT);
+        let traders_bps = cfg.traders_share_bps;
+        if (traders_bps == 0) {
+            // Fallback to legacy split: no traders allocation
+            let (stakers_coin, treasury_coin, burn_amt) = accrue_unxv_and_split(cfg, vault, unxv_fee, clock, ctx);
+            (stakers_coin, coin::zero<UNXV>(ctx), treasury_coin, burn_amt)
+        } else {
+            // Carve out trader share first
+            let traders_part: u64 = (total as u128 * (traders_bps as u128) / (BPS_DENOM as u128)) as u64;
+            let mut traders_coin = coin::split(&mut unxv_fee, traders_part, ctx);
+            let remainder = coin::value(&unxv_fee);
+            // Split remainder per dist
+            let stakers_part: u64 = (remainder as u128 * (cfg.dist.stakers_share_bps as u128) / (BPS_DENOM as u128)) as u64;
+            let treasury_part: u64 = (remainder as u128 * (cfg.dist.treasury_share_bps as u128) / (BPS_DENOM as u128)) as u64;
+            let mut stakers_coin = coin::split(&mut unxv_fee, stakers_part, ctx);
+            let mut treasury_coin = coin::split(&mut unxv_fee, treasury_part, ctx);
+            // Remainder becomes burn
+            let burn_coin = unxv_fee;
+            let burn_bal = coin::into_balance(burn_coin);
+            vault.unxv_to_burn.join(burn_bal);
+            let burn_amt: u64 = total - traders_part - stakers_part - treasury_part;
+            event::emit(UnxvFeeSplit {
+                payer: ctx.sender(),
+                total_unxv: total,
+                stakers_unxv: stakers_part,
+                treasury_unxv: treasury_part,
+                burn_unxv: burn_amt,
+                timestamp_ms: sui::clock::timestamp_ms(clock),
+            });
+            (stakers_coin, traders_coin, treasury_coin, burn_amt)
+        }
     }
 
     /// Admin: transfer UNXV accumulated in vault for burning to the provided SupplyCap.burn (owner-controlled).
@@ -517,6 +584,113 @@ module unxversal::fees {
         ctx: &mut TxContext,
     ) { admin_withdraw_generic<T>(reg_admin, vault, amount, cfg.treasury, clock, ctx) }
 
+    /***********************
+     * Permissionless sweeping to UNXV via DeepBook pools
+     ***********************/
+    /// Convenience: permissionless keeper entry that sweeps full available of T into UNXV via Pool<UNXV, T>.
+    public fun keeper_sweep_all_via_unxv_quote<T>(
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        staking_pool: &mut StakingPool,
+        pool_unxv_t: &mut Pool<UNXV, T>,
+        min_unxv_out: u64,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ) { sweep_to_unxv_via_unxv_quote<T>(cfg, vault, staking_pool, pool_unxv_t, 0, min_unxv_out, clock, ctx) }
+
+    /// Convenience: permissionless keeper entry that sweeps full available of T into UNXV via Pool<T, UNXV>.
+    public fun keeper_sweep_all_via_base_unxv<T>(
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        staking_pool: &mut StakingPool,
+        pool_t_unxv: &mut Pool<T, UNXV>,
+        min_unxv_out: u64,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ) { sweep_to_unxv_via_base_unxv<T>(cfg, vault, staking_pool, pool_t_unxv, 0, min_unxv_out, clock, ctx) }
+    /// Sweep up to `max_amount` of asset T from the FeeVault into UNXV using a pool oriented as Pool<UNXV, T>.
+    /// - Pulls from vault, swaps T -> UNXV (quote -> base), returns any leftovers to the vault,
+    /// - Splits UNXV via accrue_unxv_and_split, deposits stakers share to `staking_pool`, sends treasury share,
+    /// - Emits FeesSwept.
+    /// If `max_amount` == 0, sweeps the full available balance.
+    public fun sweep_to_unxv_via_unxv_quote<T>(
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        staking_pool: &mut StakingPool,
+        pool_unxv_t: &mut Pool<UNXV, T>,
+        max_amount: u64,
+        min_unxv_out: u64,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ) {
+        let avail = fee_available<T>(vault);
+        if (avail == 0) { return }; // nothing to do
+        let take_amt = if (max_amount == 0 || max_amount > avail) { avail } else { max_amount };
+        if (take_amt == 0) { return };
+
+        // Withdraw from vault store into a Coin<T>
+        let key = FeeKey<T> {};
+        let b: &mut Balance<T> = &mut vault.store[key];
+        let part = balance::split(b, take_amt);
+        let t_coin = coin::from_balance(part, ctx);
+
+        // Swap T (quote) -> UNXV (base)
+        let deep_zero = coin::zero<DEEP>(ctx);
+        let (unxv_out, t_left, deep_back) = db_pool::swap_exact_quote_for_base(pool_unxv_t, t_coin, deep_zero, min_unxv_out, clock, ctx);
+
+        // Return any leftovers to the vault
+        deposit_generic<T>(vault, t_left);
+        deposit_generic<DEEP>(vault, deep_back);
+
+        let bought_unxv = coin::value(&unxv_out);
+        if (bought_unxv > 0) {
+            let (stakers_coin, treasury_coin, _burn) = accrue_unxv_and_split(cfg, vault, unxv_out, clock, ctx);
+            staking::add_weekly_reward(staking_pool, stakers_coin, clock);
+            transfer::public_transfer(treasury_coin, cfg.treasury);
+            event::emit(FeesSwept { actor: ctx.sender(), asset: type_name::get<T>(), amount_in: take_amt, unxv_out: bought_unxv, pool_id: object::id(pool_unxv_t), timestamp_ms: sui::clock::timestamp_ms(clock) });
+        }
+    }
+
+    /// Sweep up to `max_amount` of asset T from the FeeVault into UNXV using a pool oriented as Pool<T, UNXV>.
+    /// - Pulls from vault, swaps T (base) -> UNXV (quote), returns leftovers to vault, splits UNXV and distributes.
+    /// If `max_amount` == 0, sweeps the full available balance.
+    public fun sweep_to_unxv_via_base_unxv<T>(
+        cfg: &FeeConfig,
+        vault: &mut FeeVault,
+        staking_pool: &mut StakingPool,
+        pool_t_unxv: &mut Pool<T, UNXV>,
+        max_amount: u64,
+        min_unxv_out: u64,
+        clock: &sui::clock::Clock,
+        ctx: &mut TxContext,
+    ) {
+        let avail = fee_available<T>(vault);
+        if (avail == 0) { return };
+        let take_amt = if (max_amount == 0 || max_amount > avail) { avail } else { max_amount };
+        if (take_amt == 0) { return };
+
+        let key = FeeKey<T> {};
+        let b: &mut Balance<T> = &mut vault.store[key];
+        let part = balance::split(b, take_amt);
+        let t_coin = coin::from_balance(part, ctx);
+
+        // Swap T (base) -> UNXV (quote)
+        let deep_zero = coin::zero<DEEP>(ctx);
+        let (t_left, unxv_out, deep_back) = db_pool::swap_exact_base_for_quote(pool_t_unxv, t_coin, deep_zero, min_unxv_out, clock, ctx);
+
+        // Return leftovers
+        deposit_generic<T>(vault, t_left);
+        deposit_generic<DEEP>(vault, deep_back);
+
+        let bought_unxv = coin::value(&unxv_out);
+        if (bought_unxv > 0) {
+            let (stakers_coin, treasury_coin, _burn) = accrue_unxv_and_split(cfg, vault, unxv_out, clock, ctx);
+            staking::add_weekly_reward(staking_pool, stakers_coin, clock);
+            transfer::public_transfer(treasury_coin, cfg.treasury);
+            event::emit(FeesSwept { actor: ctx.sender(), asset: type_name::get<T>(), amount_in: take_amt, unxv_out: bought_unxv, pool_id: object::id(pool_t_unxv), timestamp_ms: sui::clock::timestamp_ms(clock) });
+        }
+    }
+
     /// Admin: withdraw UNXV accumulated in burn bucket to a recipient (e.g., treasury)
     public fun admin_withdraw_unxv_burn_to(
         reg_admin: &AdminRegistry,
@@ -561,6 +735,7 @@ module unxversal::fees {
             treasury: ctx.sender(),
             prefer_deep_backend: true,
             dist: FeeDistribution { stakers_share_bps: 4000, treasury_share_bps: 3000, burn_share_bps: 3000 },
+            traders_share_bps: 0,
             pool_creation_fee_unxv: 0,
             lending_borrow_fee_bps: 0,
             lending_collateral_bonus_bps_max: 500,

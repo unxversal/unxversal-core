@@ -282,7 +282,7 @@ module unxversal::options {
             if (!pay_with_unxv) {
                 if (fee_amt > 0) {
                     let fee_coin = coin::split(&mut pay, fee_amt, ctx);
-                    fees::accrue_generic<Quote>(vault, fee_coin, clock, ctx);
+                    fees::route_fee<Quote>(vault, fee_coin, clock, ctx);
                 };
             };
             // compute maker remaining after this fill (pre-commit) for UI

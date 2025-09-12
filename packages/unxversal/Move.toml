@@ -7,6 +7,11 @@ authors = ["Joshua (joshua@unxversal.com)"]
 
 [dependencies]
 
+[dependencies.deepbook]
+r.mvr = "@deepbook/core"
+override = true
+addr_subst = { deepbook = "0xa3886aaa8aa831572dd39549242ca004a438c3a55967af9f0387ad2b01595068" }
+
 [dependencies.Pyth]
 git = "https://github.com/pyth-network/pyth-crosschain.git"
 subdir = "target_chains/sui/contracts"
@@ -26,5 +31,6 @@ override = true
 
 [addresses]
 unxversal = "0x0"
+# deepbook = "0xa3886aaa8aa831572dd39549242ca004a438c3a55967af9f0387ad2b01595068"
 # pyth = "0x00b53b0f4174108627fbee72e2498b58d6a2714cded53fac537034c220d26302"
 # wormhole = "0x5306f64e312b581766351c07af79c72fcb1cd25147157fdc2f8ad76de9a3fb6a"

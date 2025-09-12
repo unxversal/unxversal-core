@@ -2,14 +2,15 @@
 
 [move]
 version = 3
-manifest_digest = "D9DEF85AA9138765D2DA84A4750C85C5637653055CF2E53CD8A84E974179304C"
-deps_digest = "397E6A9F7A624706DBDFEE056CE88391A15876868FD18A88504DA74EB458D697"
+manifest_digest = "79E537C82BB7104F7BB6E6331D26D2B861C701F2101A717BE1BA31A49907A0CA"
+deps_digest = "52B406A7A21811BEF51751CF88DA0E76DAEFFEAC888D4F4060B1A72BBE7D8D35"
 dependencies = [
   { id = "Bridge", name = "Bridge" },
   { id = "MoveStdlib", name = "MoveStdlib" },
   { id = "Pyth", name = "Pyth" },
   { id = "Sui", name = "Sui" },
   { id = "SuiSystem", name = "SuiSystem" },
+  { id = "deepbook", name = "deepbook" },
 ]
 
 [[move.package]]
@@ -60,7 +61,19 @@ dependencies = [
   { id = "Sui", name = "Sui" },
 ]
 
-[move.toolchain-version]
-compiler-version = "1.56.1"
-edition = "2024"
-flavor = "sui"
+[[move.package]]
+id = "deepbook"
+source = { git = "https://github.com/MystenLabs/deepbookv3", rev = "v3.0.0", subdir = "packages/deepbook" }
+
+dependencies = [
+  { id = "Sui", name = "Sui" },
+  { id = "token", name = "token" },
+]
+
+[[move.package]]
+id = "token"
+source = { git = "https://github.com/MystenLabs/deepbookv3", rev = "v3.0.0", subdir = "packages/deepbook/../token" }
+
+dependencies = [
+  { id = "Sui", name = "Sui" },
+]
