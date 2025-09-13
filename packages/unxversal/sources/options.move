@@ -49,6 +49,10 @@ module unxversal::options {
     // removed unused E_NOT_ITM
     // const E_NOT_ITM: u64 = 10;
     const E_SERIES_EXISTS: u64 = 11;
+    /// Cash-settled series settle at expiry only (no early exercise)
+    const E_CASH_EURO_ONLY: u64 = 12;
+    /// Cannot unlock writer collateral until all long positions settled
+    const E_PENDING_LONGS: u64 = 13;
 
     // Settlement anchoring (pre-expiry sampling)
     const TWAP_MAX_SAMPLES: u64 = 64;
@@ -63,6 +67,11 @@ module unxversal::options {
         strike_1e6: u64,    // price in quote per base, scaled 1e6
         is_call: bool,
         symbol: String,     // oracle symbol, e.g., "SUI/USDC"
+        /// Cash-settled payout in Quote at expiry using oracle settlement
+        cash_settled: bool,
+        /// Max payout per unit (1e6 quote units). Required for calls to bound liability.
+        /// For puts, cap is ignored (max payout is strike).
+        cap_1e6: u64,
     }
 
     /// Writer state for claims and outstanding obligations
@@ -155,14 +164,17 @@ module unxversal::options {
         tick_size: u64,
         lot_size: u64,
         min_size: u64,
+        cash_settled: bool,
+        cap_1e6: u64,
         ctx: &mut TxContext,
     ) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         assert!(expiry_ms > sui::tx_context::epoch_timestamp_ms(ctx), E_INVALID_SERIES);
         let key = series_key(expiry_ms, strike_1e6, is_call, &symbol);
         assert!(!table::contains(&market.series, key), E_SERIES_EXISTS);
+        if (cash_settled && is_call) { assert!(cap_1e6 > 0 && cap_1e6 >= strike_1e6, E_INVALID_SERIES); };
         let ser = SeriesState<Base, Quote> {
-            series: OptionSeries { expiry_ms, strike_1e6, is_call, symbol },
+            series: OptionSeries { expiry_ms, strike_1e6, is_call, symbol, cash_settled, cap_1e6 },
             book: ubk::empty(tick_size, lot_size, min_size, ctx),
             owners: table::new<u128, address>(ctx),
             writer: table::new<address, WriterInfo>(ctx),
@@ -205,20 +217,35 @@ module unxversal::options {
         let ser = table::borrow_mut(&mut market.series, key);
         assert!(clock.timestamp_ms() < ser.series.expiry_ms && clock.timestamp_ms() <= expire_ts, E_EXPIRED);
         let is_call = ser.series.is_call;
+        let is_cash = ser.series.cash_settled;
         if (is_call) {
-            assert!(option::is_some(&collateral) && option::is_none(&collateral_q), E_COLLATERAL_MISMATCH);
-            let base_in = option::extract(&mut collateral);
-            // require exact base equal to quantity
-            assert!(coin::value(&base_in) == quantity, E_COLLATERAL_MISMATCH);
-            let bal = coin::into_balance(base_in);
-            ser.pooled_base.join(bal);
-            // update writer info
-            upsert_writer_base_lock(ser, ctx.sender(), quantity, true);
-            event::emit(CollateralLocked { key, writer: ctx.sender(), is_call: true, amount_base: quantity, amount_quote: 0, timestamp_ms: clock.timestamp_ms() });
-            // consume options
-            option::destroy_none(collateral);
-            option::destroy_none(collateral_q);
+            if (is_cash) {
+                // Cash-settled CALL: lock Quote equal to cap * quantity
+                assert!(option::is_none(&collateral) && option::is_some(&collateral_q), E_COLLATERAL_MISMATCH);
+                let q_in = option::extract(&mut collateral_q);
+                let needed_q = mul_u64_u64(ser.series.cap_1e6, quantity);
+                assert!(coin::value(&q_in) == needed_q, E_COLLATERAL_MISMATCH);
+                ser.pooled_quote.join(coin::into_balance(q_in));
+                upsert_writer_quote_lock(ser, ctx.sender(), needed_q, true);
+                event::emit(CollateralLocked { key, writer: ctx.sender(), is_call: true, amount_base: 0, amount_quote: needed_q, timestamp_ms: clock.timestamp_ms() });
+                option::destroy_none(collateral);
+                option::destroy_none(collateral_q);
+            } else {
+                assert!(option::is_some(&collateral) && option::is_none(&collateral_q), E_COLLATERAL_MISMATCH);
+                let base_in = option::extract(&mut collateral);
+                // require exact base equal to quantity
+                assert!(coin::value(&base_in) == quantity, E_COLLATERAL_MISMATCH);
+                let bal = coin::into_balance(base_in);
+                ser.pooled_base.join(bal);
+                // update writer info
+                upsert_writer_base_lock(ser, ctx.sender(), quantity, true);
+                event::emit(CollateralLocked { key, writer: ctx.sender(), is_call: true, amount_base: quantity, amount_quote: 0, timestamp_ms: clock.timestamp_ms() });
+                // consume options
+                option::destroy_none(collateral);
+                option::destroy_none(collateral_q);
+            };
         } else {
+            // PUT: always lock Quote = strike * quantity (cash or physical)
             assert!(option::is_none(&collateral) && option::is_some(&collateral_q), E_COLLATERAL_MISMATCH);
             let q_in = option::extract(&mut collateral_q);
             // require exact quote equal to strike * quantity
@@ -399,6 +426,8 @@ module unxversal::options {
         assert!(amount > 0 && amount <= pos.amount, E_ZERO);
         let ser = table::borrow_mut(&mut market.series, pos.key);
         assert!(clock.timestamp_ms() <= ser.series.expiry_ms, E_PAST_EXPIRY_EXERCISE);
+        // Cash-settled series settle at expiry only
+        assert!(!ser.series.cash_settled, E_CASH_EURO_ONLY);
         let spot_1e6 = uoracle::get_price_for_symbol(reg, clock, &ser.series.symbol, price_info_object);
         let strike = ser.series.strike_1e6;
         event::emit(Exercised { key: pos.key, exerciser: ctx.sender(), amount, spot_1e6 });
@@ -536,7 +565,43 @@ module unxversal::options {
         assert!(clock.timestamp_ms() >= ser.series.expiry_ms && ser.settled, E_EXPIRED);
         let spot_1e6 = ser.settlement_price_1e6;
         let strike = ser.series.strike_1e6;
-        if (ser.series.is_call) {
+        if (ser.series.cash_settled) {
+            // Cash-settled payout in Quote
+            if (ser.series.is_call) {
+                let diff = if (spot_1e6 > strike) { spot_1e6 - strike } else { 0 };
+                let raw_pay = mul_u64_u64(diff, amount);
+                let cap_pay = mul_u64_u64(ser.series.cap_1e6, amount);
+                let pay_amt = if (raw_pay <= cap_pay) { raw_pay } else { cap_pay };
+                let qsplit = balance::split(&mut ser.pooled_quote, pay_amt);
+                let q_out = coin::from_balance(qsplit, ctx);
+                ser.total_exercised_units = ser.total_exercised_units + amount;
+                if (ser.total_sold_units >= amount) { ser.total_sold_units = ser.total_sold_units - amount; } else { ser.total_sold_units = 0; };
+                pos.amount = pos.amount - amount;
+                event::emit(OptionPositionUpdated { key: pos.key, owner: ctx.sender(), position_id: object::id(&pos), increase: false, delta_units: amount, new_amount: pos.amount, timestamp_ms: clock.timestamp_ms() });
+                // Return any provided coins
+                if (option::is_some(&pay_quote)) { let q = option::extract(&mut pay_quote); transfer::public_transfer(q, ctx.sender()); };
+                option::destroy_none(pay_quote);
+                if (option::is_some(&pay_base)) { let b = option::extract(&mut pay_base); transfer::public_transfer(b, ctx.sender()); };
+                option::destroy_none(pay_base);
+                transfer::public_transfer(pos, ctx.sender());
+                (option::none<Coin<Base>>(), option::some(q_out))
+            } else {
+                let diff2 = if (strike > spot_1e6) { strike - spot_1e6 } else { 0 };
+                let pay_amt2 = mul_u64_u64(diff2, amount);
+                let qsplit2 = balance::split(&mut ser.pooled_quote, pay_amt2);
+                let q_out2 = coin::from_balance(qsplit2, ctx);
+                ser.total_exercised_units = ser.total_exercised_units + amount;
+                if (ser.total_sold_units >= amount) { ser.total_sold_units = ser.total_sold_units - amount; } else { ser.total_sold_units = 0; };
+                pos.amount = pos.amount - amount;
+                event::emit(OptionPositionUpdated { key: pos.key, owner: ctx.sender(), position_id: object::id(&pos), increase: false, delta_units: amount, new_amount: pos.amount, timestamp_ms: clock.timestamp_ms() });
+                if (option::is_some(&pay_quote)) { let q3 = option::extract(&mut pay_quote); transfer::public_transfer(q3, ctx.sender()); };
+                option::destroy_none(pay_quote);
+                if (option::is_some(&pay_base)) { let b3 = option::extract(&mut pay_base); transfer::public_transfer(b3, ctx.sender()); };
+                option::destroy_none(pay_base);
+                transfer::public_transfer(pos, ctx.sender());
+                (option::none<Coin<Base>>(), option::some(q_out2))
+            }
+        } else if (ser.series.is_call) {
             if (!(spot_1e6 > strike)) {
                 // worthless
                 if (option::is_some(&pay_quote)) { let q = option::extract(&mut pay_quote); transfer::public_transfer(q, ctx.sender()); };
@@ -612,22 +677,51 @@ module unxversal::options {
         let strike = ser.series.strike_1e6;
         let spot = ser.settlement_price_1e6;
         let mut wi = if (table::contains(&ser.writer, ctx.sender())) { table::remove(&mut ser.writer, ctx.sender()) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0, proceeds_index_snap_1e12: ser.proceeds_index_1e12 } };
-        if (ser.series.is_call) {
-            if (spot <= strike && wi.locked_base > 0) {
-                let amt = wi.locked_base; wi.locked_base = 0;
-                let bsplit = balance::split(&mut ser.pooled_base, amt);
-                let c = coin::from_balance(bsplit, ctx);
-                transfer::public_transfer(c, ctx.sender());
-                event::emit(CollateralUnlocked { key, writer: ctx.sender(), is_call: true, amount_base: amt, amount_quote: 0, reason: 1, timestamp_ms: clock.timestamp_ms() });
+        if (ser.series.cash_settled) {
+            // Require all longs settled to avoid draining funds prematurely
+            assert!(ser.total_sold_units == 0, E_PENDING_LONGS);
+            if (ser.series.is_call) {
+                let mut pay_unit = if (spot > strike) { spot - strike } else { 0 };
+                if (pay_unit > ser.series.cap_1e6) { pay_unit = ser.series.cap_1e6; };
+                let used_q = mul_u64_u64(pay_unit, wi.sold_units);
+                let ret_q = if (wi.locked_quote > used_q) { wi.locked_quote - used_q } else { 0 };
+                if (ret_q > 0) {
+                    let qsplit = balance::split(&mut ser.pooled_quote, ret_q);
+                    let cq = coin::from_balance(qsplit, ctx);
+                    transfer::public_transfer(cq, ctx.sender());
+                    event::emit(CollateralUnlocked { key, writer: ctx.sender(), is_call: true, amount_base: 0, amount_quote: ret_q, reason: 1, timestamp_ms: clock.timestamp_ms() });
+                };
+                wi.locked_quote = 0; wi.sold_units = 0;
+            } else {
+                let pay_unit2 = if (strike > spot) { strike - spot } else { 0 };
+                let used_q2 = mul_u64_u64(pay_unit2, wi.sold_units);
+                let ret_q2 = if (wi.locked_quote > used_q2) { wi.locked_quote - used_q2 } else { 0 };
+                if (ret_q2 > 0) {
+                    let qsplit2 = balance::split(&mut ser.pooled_quote, ret_q2);
+                    let cq2 = coin::from_balance(qsplit2, ctx);
+                    transfer::public_transfer(cq2, ctx.sender());
+                    event::emit(CollateralUnlocked { key, writer: ctx.sender(), is_call: false, amount_base: 0, amount_quote: ret_q2, reason: 1, timestamp_ms: clock.timestamp_ms() });
+                };
+                wi.locked_quote = 0; wi.sold_units = 0;
             };
         } else {
-            if (spot >= strike) {
-                let need_q = wi.locked_quote; if (need_q > 0) {
-                    let qsplit = balance::split(&mut ser.pooled_quote, need_q);
-                    let cq = coin::from_balance(qsplit, ctx);
-                    wi.locked_quote = 0;
-                    transfer::public_transfer(cq, ctx.sender());
-                    event::emit(CollateralUnlocked { key, writer: ctx.sender(), is_call: false, amount_base: 0, amount_quote: need_q, reason: 1, timestamp_ms: clock.timestamp_ms() });
+            if (ser.series.is_call) {
+                if (spot <= strike && wi.locked_base > 0) {
+                    let amt = wi.locked_base; wi.locked_base = 0;
+                    let bsplit = balance::split(&mut ser.pooled_base, amt);
+                    let c = coin::from_balance(bsplit, ctx);
+                    transfer::public_transfer(c, ctx.sender());
+                    event::emit(CollateralUnlocked { key, writer: ctx.sender(), is_call: true, amount_base: amt, amount_quote: 0, reason: 1, timestamp_ms: clock.timestamp_ms() });
+                };
+            } else {
+                if (spot >= strike) {
+                    let need_q = wi.locked_quote; if (need_q > 0) {
+                        let qsplit = balance::split(&mut ser.pooled_quote, need_q);
+                        let cq = coin::from_balance(qsplit, ctx);
+                        wi.locked_quote = 0;
+                        transfer::public_transfer(cq, ctx.sender());
+                        event::emit(CollateralUnlocked { key, writer: ctx.sender(), is_call: false, amount_base: 0, amount_quote: need_q, reason: 1, timestamp_ms: clock.timestamp_ms() });
+                    };
                 };
             };
         };
@@ -775,13 +869,23 @@ module unxversal::options {
     fun unlock_excess_collateral<Base, Quote>(ser: &mut SeriesState<Base, Quote>, who: address, qty_unfilled: u64, clock: &Clock, ctx: &mut TxContext) {
         let mut wi = if (table::contains(&ser.writer, who)) { table::remove(&mut ser.writer, who) } else { WriterInfo { sold_units: 0, exercised_units: 0, claimed_proceeds_quote: 0, claimed_proceeds_base: 0, locked_base: 0, locked_quote: 0, proceeds_index_snap_1e12: ser.proceeds_index_1e12 } };
         if (ser.series.is_call) {
-            // cancel returns base for unfilled qty
-            let amt = qty_unfilled;
-            if (wi.locked_base >= amt) { wi.locked_base = wi.locked_base - amt; } else { wi.locked_base = 0; };
-            let bsplit = balance::split(&mut ser.pooled_base, amt);
-            let c = coin::from_balance(bsplit, ctx);
-            transfer::public_transfer(c, who);
-            event::emit(CollateralUnlocked { key: series_key(ser.series.expiry_ms, ser.series.strike_1e6, ser.series.is_call, &ser.series.symbol), writer: who, is_call: true, amount_base: amt, amount_quote: 0, reason: 0, timestamp_ms: clock.timestamp_ms() });
+            if (ser.series.cash_settled) {
+                // Cancel returns quote for unfilled qty at cap
+                let need_q2 = mul_u64_u64(ser.series.cap_1e6, qty_unfilled);
+                if (wi.locked_quote >= need_q2) { wi.locked_quote = wi.locked_quote - need_q2; } else { wi.locked_quote = 0; };
+                let qsplit2 = balance::split(&mut ser.pooled_quote, need_q2);
+                let cq2 = coin::from_balance(qsplit2, ctx);
+                transfer::public_transfer(cq2, who);
+                event::emit(CollateralUnlocked { key: series_key(ser.series.expiry_ms, ser.series.strike_1e6, ser.series.is_call, &ser.series.symbol), writer: who, is_call: true, amount_base: 0, amount_quote: need_q2, reason: 0, timestamp_ms: clock.timestamp_ms() });
+            } else {
+                // cancel returns base for unfilled qty (physical)
+                let amt = qty_unfilled;
+                if (wi.locked_base >= amt) { wi.locked_base = wi.locked_base - amt; } else { wi.locked_base = 0; };
+                let bsplit = balance::split(&mut ser.pooled_base, amt);
+                let c = coin::from_balance(bsplit, ctx);
+                transfer::public_transfer(c, who);
+                event::emit(CollateralUnlocked { key: series_key(ser.series.expiry_ms, ser.series.strike_1e6, ser.series.is_call, &ser.series.symbol), writer: who, is_call: true, amount_base: amt, amount_quote: 0, reason: 0, timestamp_ms: clock.timestamp_ms() });
+            };
         } else {
             let need_q = mul_u64_u64(ser.series.strike_1e6, qty_unfilled);
             if (wi.locked_quote >= need_q) { wi.locked_quote = wi.locked_quote - need_q; } else { wi.locked_quote = 0; };

@@ -55,103 +55,103 @@ export const MAINNET_DERIVATIVE_TYPE_TAGS: Record<string, {
 }> = {
   // Majors
   // BTC/USDC
-  // tickSize=$0.01; lotSize=minSize=0.1 BTC (10_000_000 sats if 8 decimals)
+  // tickSize=$0.01; lotSize=minSize≈ $10 notional in base units -> ~0.000086 BTC
   'BTC/USDC': {
     base: '0xaafb102dd0902f5055cadecd687fb5b71ca82ef0e0285d90afde828ec58ca96b::btc::BTC',
     quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
     tickSize: 10_000,
-    lotSize: 10_000_000,
-    minSize: 10_000_000,
+    lotSize: 9_000, // rounded
+    minSize: 9_000,
     baseDecimals: 8,
     quoteDecimals: 6,
   },
   // ETH/USDC
-  // tickSize=$0.01; lotSize=minSize=2 ETH
+  // tickSize=$0.01; lotSize=minSize≈ $10 notional -> ~0.00215 ETH
   'ETH/USDC': {
     base: '0xd0e89b2af5e4910726fbcd8b8dd37bb79b29e5f83f7491bca830e94f7f226d29::eth::ETH',
     quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
     tickSize: 10_000,
-    lotSize: 200_000_000,
-    minSize: 200_000_000,
+    lotSize: 300_000, // rounded
+    minSize: 300_000,
     baseDecimals: 8,
     quoteDecimals: 6,
   },
 
   // L1s / High Caps
   // SOL/USDC
-  // tickSize=$0.01; lotSize=minSize=4 SOL
+  // tickSize=$0.01; lotSize=minSize≈ $10 notional -> ~0.041684 SOL
   'SOL/USDC': {
     base: '0xb7844e289a8410e50fb3ca48d69eb9cf29e27d223ef90353fe1bd8e27ff8f3f8::coin::COIN',
     quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
     tickSize: 10_000,
-    lotSize: 4_000_000_000,
-    minSize: 4_000_000_000,
+    lotSize: 5_000_000, // rounded
+    minSize: 5_000_000,
     baseDecimals: 8,
     quoteDecimals: 6,
   },
   // WBNB/USDC
-  // tickSize=$0.01; lotSize=minSize=10 BNB
+  // tickSize=$0.01; lotSize=minSize≈ $10 notional -> ~0.010623 BNB
   'WBNB/USDC': {
     base: '0xb848cce11ef3a8f62eccea6eb5b35a12c4c2b1ee1af7755d02d7bd6218e8226f::coin::COIN',
     quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
     tickSize: 10_000,
-    lotSize: 1_000_000_000,
-    minSize: 1_000_000_000,
+    lotSize: 2_000_000, // rounded
+    minSize: 2_000_000,
     baseDecimals: 8,
     quoteDecimals: 6,
   },
   // SUI/USDC
-  // tickSize=$0.01; lotSize=minSize=2,000 SUI (baseDecimals=9)
+  // tickSize=$0.01; lotSize=minSize≈ $10 notional -> ~2.638522 SUI (baseDecimals=9)
   'SUI/USDC': {
     base: '0x2::sui::SUI',
     quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
     tickSize: 10_000,
-    lotSize: 2_000_000_000_000,
-    minSize: 2_000_000_000_000,
+    lotSize: 3_000_000_000, // rounded
+    minSize: 3_000_000_000,
     baseDecimals: 9,
     quoteDecimals: 6,
   },
-  // MATIC/USDC
-  // tickSize=$0.01; lotSize=minSize=30,000 MATIC
+  // MATIC/USDC (POL)
+  // tickSize=$0.01; lotSize=minSize≈ $10 notional -> ~35.349304 MATIC
   'MATIC/USDC': {
     base: '0xdbe380b13a6d0f5cdedd58de8f04625263f113b3f9db32b3e1983f49e2841676::coin::COIN',
     quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
     tickSize: 10_000,
-    lotSize: 3_000_000_000_000,
-    minSize: 3_000_000_000_000,
+    lotSize: 4_000_000_000, // rounded
+    minSize: 4_000_000_000,
     baseDecimals: 8,
     quoteDecimals: 6,
   },
   // APT/USDC
-  // tickSize=$0.01; lotSize=minSize=2,000 APT
+  // tickSize=$0.01; lotSize=minSize≈ $10 notional -> ~2.164502 APT
   'APT/USDC': {
     base: '0x3a5143bb1196e3bcdfab6203d1683ae29edd26294fc8bfeafe4aaa9d2704df37::coin::COIN',
     quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
     tickSize: 10_000,
-    lotSize: 2_000_000_000_000,
-    minSize: 2_000_000_000_000,
+    lotSize: 300_000_000, // rounded
+    minSize: 300_000_000,
     baseDecimals: 8,
     quoteDecimals: 6,
   },
   // CELO/USDC
-  // tickSize=$0.01; lotSize=minSize=30,000 CELO
+  // tickSize=$0.01; lotSize=minSize≈ $10 notional -> ~30.347356 CELO
   'CELO/USDC': {
     base: '0xa198f3be41cda8c07b3bf3fee02263526e535d682499806979a111e88a5a8d0f::coin::COIN',
     quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
     tickSize: 10_000,
-    lotSize: 3_000_000_000_000,
-    minSize: 3_000_000_000_000,
+    lotSize: 4_000_000_000, // rounded
+    minSize: 4_000_000_000,
     baseDecimals: 8,
     quoteDecimals: 6,
   },
   // GLMR/USDC
-  // tickSize=$0.01; lotSize=minSize=140,000 GLMR
+  // tickSize=$0.01; lotSize=minSize≈ $10 notional -> ~141.683196 GLMR
   'GLMR/USDC': {
     base: '0x66f87084e49c38f76502d17f87d17f943f183bb94117561eb573e075fdc5ff75::coin::COIN',
     quote: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
     tickSize: 10_000,
-    lotSize: 14_000_000_000_000,
-    minSize: 14_000_000_000_000,
+    lotSize: 20_000_000_000, // rounded
+    minSize: 20_000_000_000,
     baseDecimals: 8,
     quoteDecimals: 6,
   },

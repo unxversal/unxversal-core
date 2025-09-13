@@ -4,7 +4,7 @@ import { generateGasFuturesMarkets } from './series.js';
 export function buildMainnetGasFutures(): NonNullable<DeployConfig['gasFutures']> {
   return generateGasFuturesMarkets({
     collat: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
-    contractSize: 1_000_000,
+    contractSize: 2,
     initialMarginBps: 1000,
     maintenanceMarginBps: 600,
     liquidationFeeBps: 100,
@@ -24,7 +24,7 @@ export function buildMainnetGasFutures(): NonNullable<DeployConfig['gasFutures']
 export function buildTestnetGasFutures(): NonNullable<DeployConfig['gasFutures']> {
   return generateGasFuturesMarkets({
     collat: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
-    contractSize: 1_000_000,
+    contractSize: 2,
     initialMarginBps: 1000,
     maintenanceMarginBps: 600,
     liquidationFeeBps: 100,

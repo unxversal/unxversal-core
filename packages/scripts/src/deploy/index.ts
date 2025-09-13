@@ -374,6 +374,8 @@ async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25
             tx.pure.u64(m.tickSize),
             tx.pure.u64(m.lotSize),
             tx.pure.u64(m.minSize),
+            tx.pure.bool((s as any).cashSettled ?? false),
+            tx.pure.u64((s as any).cap1e6 ?? 0),
           ],
         });
         const res = await execTx(client, tx, keypair, `options.create_series ${s.symbol}`);

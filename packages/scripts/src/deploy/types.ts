@@ -89,7 +89,7 @@ export type DeployConfig = {
     minSize: number;
     baseDecimals: number;
     quoteDecimals: number;
-    series: Array<{ expiryMs: number; strike1e6: number; isCall: boolean; symbol: string }>;
+    series: Array<{ expiryMs: number; strike1e6: number; isCall: boolean; symbol: string; cashSettled?: boolean; cap1e6?: number }>;
   }>;
   futures?: Array<{
     marketId?: string;

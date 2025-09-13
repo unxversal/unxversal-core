@@ -67,11 +67,13 @@ module unxversal::perpetuals {
         initial_margin_bps: u64,
         maintenance_margin_bps: u64,
         liquidation_fee_bps: u64,
+        keeper_incentive_bps: u64,
+        /// Target buffer over IM used during liquidation (in bps)
+        liq_target_buffer_bps: u64,
         cum_long_pay_1e6: u128,      // cumulative funding longs owe per contract (1e6 scale)
         cum_short_pay_1e6: u128,     // cumulative funding shorts owe per contract (1e6 scale)
         last_funding_ms: u64,
         funding_vault: Balance<Collat>,
-        keeper_incentive_bps: u64,
         // Portion of liquidation penalty routed to treasury (via FeeVault), in bps (from FeeConfig)
         // removed local storage; read from FeeConfig
         /// Max account gross notional in 1e6 units (0 = unlimited)
@@ -97,7 +99,7 @@ module unxversal::perpetuals {
     }
 
     // Events
-    public struct PerpInitialized has copy, drop { market_id: ID, symbol: String, contract_size: u64, funding_interval_ms: u64, initial_margin_bps: u64, maintenance_margin_bps: u64, liquidation_fee_bps: u64, keeper_incentive_bps: u64 }
+    public struct PerpInitialized has copy, drop { market_id: ID, symbol: String, contract_size: u64, funding_interval_ms: u64, initial_margin_bps: u64, maintenance_margin_bps: u64, liquidation_fee_bps: u64, keeper_incentive_bps: u64, liq_target_buffer_bps: u64 }
     public struct CollateralDeposited<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, timestamp_ms: u64 }
     public struct CollateralWithdrawn<phantom Collat> has copy, drop { market_id: ID, who: address, amount: u64, timestamp_ms: u64 }
     public struct PositionChanged has copy, drop { market_id: ID, who: address, is_long: bool, qty_delta: u64, exec_price_1e6: u64, realized_gain: u64, realized_loss: u64, new_long: u64, new_short: u64, timestamp_ms: u64 }
@@ -107,6 +109,8 @@ module unxversal::perpetuals {
     public struct TraderRewardsClaimed has copy, drop { market_id: ID, who: address, amount_unxv: u64, pending_left: u64, timestamp_ms: u64 }
     public struct FundingSettled has copy, drop { market_id: ID, who: address, amount_paid: u64, amount_credited: u64, credit_left: u64, timestamp_ms: u64 }
     public struct Liquidated has copy, drop { market_id: ID, who: address, qty_closed: u64, exec_price_1e6: u64, penalty_collat: u64, timestamp_ms: u64 }
+    /// Emitted when equity computation saturates to u64::MAX (suggests contract_size too large)
+    public struct SaturationWarn has copy, drop { market_id: ID, who: address, context: u8, timestamp_ms: u64 }
 
     // === Init ===
     public fun init_market<Collat>(
@@ -146,11 +150,12 @@ module unxversal::perpetuals {
             initial_margin_bps,
             maintenance_margin_bps,
             liquidation_fee_bps,
+            keeper_incentive_bps,
+            liq_target_buffer_bps: 0,
             cum_long_pay_1e6: 0,
             cum_short_pay_1e6: 0,
             last_funding_ms: sui::tx_context::epoch_timestamp_ms(ctx),
             funding_vault: balance::zero<Collat>(),
-            keeper_incentive_bps,
             account_max_notional_1e6: 0,
             market_max_notional_1e6: 0,
             account_share_of_oi_bps: 300,
@@ -165,7 +170,7 @@ module unxversal::perpetuals {
             trader_rewards_pot: balance::zero<UNXV>(),
             trader_buffer_unxv: 0,
         };
-        event::emit(PerpInitialized { market_id: object::id(&m), symbol: clone_string(&m.params.symbol), contract_size, funding_interval_ms, initial_margin_bps, maintenance_margin_bps, liquidation_fee_bps, keeper_incentive_bps });
+        event::emit(PerpInitialized { market_id: object::id(&m), symbol: clone_string(&m.params.symbol), contract_size, funding_interval_ms, initial_margin_bps, maintenance_margin_bps, liquidation_fee_bps, keeper_incentive_bps, liq_target_buffer_bps: 0 });
         transfer::share_object(m);
     }
 
@@ -257,6 +262,7 @@ module unxversal::perpetuals {
         // Settle trader rewards before changing collateral
         settle_trader_rewards_eligible<Collat>(market, &mut acc);
         let eq = equity_collat(&acc, px, market.params.contract_size);
+        if (eq == U64_MAX_LITERAL) { event::emit(SaturationWarn { market_id: object::id(market), who: ctx.sender(), context: 1, timestamp_ms: clock.timestamp_ms() }); };
         assert!(eq >= amount, E_INSUFFICIENT);
         let eq_after = eq - amount;
         let free_after = if (eq_after > acc.locked_im) { eq_after - acc.locked_im } else { 0 };
@@ -441,10 +447,8 @@ module unxversal::perpetuals {
         let pay_with_unxv = option::is_some(maybe_unxv);
         let (t_eff, _) = fees::apply_discounts(taker_bps, 0, pay_with_unxv, staking_pool, ctx.sender(), cfg);
         let fee_amt = ((total_notional_1e6 * (t_eff as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64;
-        let taker_bps = fees::futures_taker_fee_bps(cfg);
-        let (t_eff_local, _) = fees::apply_discounts(taker_bps, 0, pay_with_unxv, staking_pool, ctx.sender(), cfg);
         let rebate_bps_cfg = fees::perps_maker_rebate_bps(cfg);
-        let eff_rebate_bps: u64 = if (rebate_bps_cfg <= t_eff_local) { rebate_bps_cfg } else { t_eff_local };
+        let eff_rebate_bps: u64 = if (rebate_bps_cfg <= t_eff) { rebate_bps_cfg } else { t_eff };
         if (pay_with_unxv) {
             let mut u = option::extract(maybe_unxv);
             // Rebate out of UNXV fee
@@ -489,6 +493,7 @@ module unxversal::perpetuals {
 
         let px_mark = current_price_1e6(&market.params, reg, price_info_object, clock);
         let eq = equity_collat(&acc, px_mark, market.params.contract_size);
+        if (eq == U64_MAX_LITERAL) { event::emit(SaturationWarn { market_id: object::id(market), who: ctx.sender(), context: 0, timestamp_ms: clock.timestamp_ms() }); };
         let req_im = required_margin_effective<Collat>(market, &acc, px_mark);
         let free = if (eq > acc.locked_im) { eq - acc.locked_im } else { 0 };
         assert!(free >= req_im, E_UNDER_IM);
@@ -574,15 +579,37 @@ module unxversal::perpetuals {
         let req_mm = required_margin_bps(&acc, px, market.params.contract_size, market.maintenance_margin_bps);
         assert!(eq < req_mm, E_UNDER_MM);
 
-        // Close qty from larger side
-        let mut closed = 0u64;
-        if (acc.long_qty >= acc.short_qty) {
-            let c = if (qty <= acc.long_qty) { qty } else { acc.long_qty };
-            if (c > 0) { let (_g,_l) = realize_long_ul(acc.avg_long_1e6, px, c, market.params.contract_size); /* only losses applied below */ acc.long_qty = acc.long_qty - c; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - c; closed = c; };
+        // Partial liquidation to restore equity to IM + buffer
+        let target_bps = market.initial_margin_bps + market.liq_target_buffer_bps;
+        let gross_before: u128 = (((acc.long_qty as u128) + (acc.short_qty as u128)) * (px as u128) * (market.params.contract_size as u128)) / 1_000_000u128;
+        let req0: u128 = (gross_before * (target_bps as u128)) / (fees::bps_denom() as u128);
+        let eq0: u128 = (eq as u128);
+        let shortfall: u128 = if (eq0 >= req0) { 0u128 } else { req0 - eq0 };
+        let per_contract_val: u64 = (((px as u128) * (market.params.contract_size as u128)) / 1_000_000u128) as u64;
+        let req_pc: u64 = (((per_contract_val as u128) * (target_bps as u128)) / (fees::bps_denom() as u128)) as u64;
+        let close_long_pref = acc.long_qty >= acc.short_qty;
+        let mut closed = 0u64; let mut realized_gain: u64 = 0; let mut realized_loss: u64 = 0;
+        if (shortfall == 0) {
+            if (acc.long_qty >= acc.short_qty) {
+                let c = if (qty <= acc.long_qty) { qty } else { acc.long_qty };
+                if (c > 0) { let (g,l) = realize_long_ul(acc.avg_long_1e6, px, c, market.params.contract_size); rewards::on_realized_pnl(rewards_obj, victim, (g as u128), (l as u128), clock); realized_gain = realized_gain + g; realized_loss = realized_loss + l; acc.long_qty = acc.long_qty - c; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - c; closed = c; };
+            } else {
+                let c2 = if (qty <= acc.short_qty) { qty } else { acc.short_qty };
+                if (c2 > 0) { let (g2,l2) = realize_short_ul(acc.avg_short_1e6, px, c2, market.params.contract_size); rewards::on_realized_pnl(rewards_obj, victim, (g2 as u128), (l2 as u128), clock); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.short_qty = acc.short_qty - c2; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - c2; closed = c2; };
+            };
         } else {
-            let c2 = if (qty <= acc.short_qty) { qty } else { acc.short_qty };
-            if (c2 > 0) { let (_g2,_l2) = realize_short_ul(acc.avg_short_1e6, px, c2, market.params.contract_size); acc.short_qty = acc.short_qty - c2; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - c2; closed = c2; };
+            let need_c: u64 = if (req_pc > 0) { let den = req_pc as u128; let num = shortfall + den - 1u128; (num / den) as u64 } else { qty };
+            if (close_long_pref && acc.long_qty > 0) {
+                let cmax = if (qty <= acc.long_qty) { qty } else { acc.long_qty };
+                let c = if (need_c > 0 && need_c <= cmax) { need_c } else { cmax };
+                if (c > 0) { let (g,l) = realize_long_ul(acc.avg_long_1e6, px, c, market.params.contract_size); rewards::on_realized_pnl(rewards_obj, victim, (g as u128), (l as u128), clock); realized_gain = realized_gain + g; realized_loss = realized_loss + l; acc.long_qty = acc.long_qty - c; if (acc.long_qty == 0) { acc.avg_long_1e6 = 0; }; market.total_long_qty = market.total_long_qty - c; closed = c; };
+            } else if (acc.short_qty > 0) {
+                let cmax2 = if (qty <= acc.short_qty) { qty } else { acc.short_qty };
+                let c2 = if (need_c > 0 && need_c <= cmax2) { need_c } else { cmax2 };
+                if (c2 > 0) { let (g2,l2) = realize_short_ul(acc.avg_short_1e6, px, c2, market.params.contract_size); rewards::on_realized_pnl(rewards_obj, victim, (g2 as u128), (l2 as u128), clock); realized_gain = realized_gain + g2; realized_loss = realized_loss + l2; acc.short_qty = acc.short_qty - c2; if (acc.short_qty == 0) { acc.avg_short_1e6 = 0; }; market.total_short_qty = market.total_short_qty - c2; closed = c2; };
+            };
         };
+        apply_realized_to_collat<Collat>(&mut acc.collat, realized_gain, realized_loss, vault, clock, ctx);
         // re-evaluate equity losses are implicitly realized via later checks; liquidation penalty still applied
         // Penalty -> fee vault
         let notional_1e6 = (closed as u128) * (px as u128) * (market.params.contract_size as u128);
