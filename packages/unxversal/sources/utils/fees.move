@@ -779,7 +779,7 @@ module unxversal::fees {
             unxv_discount_bps: 3000,
             treasury: ctx.sender(),
             prefer_deep_backend: true,
-            dist: FeeDistribution { stakers_share_bps: 4000, traders_share_bps: 0, treasury_share_bps: 3000, burn_share_bps: 3000 },
+            dist: FeeDistribution { stakers_share_bps: 4000, traders_share_bps: 2000, treasury_share_bps: 4000, burn_share_bps: 0 },
             pool_creation_fee_unxv: 0,
             lending_borrow_fee_bps: 0,
             lending_collateral_bonus_bps_max: 500,
