@@ -2,21 +2,23 @@
 name = "unxversal"
 version = "0.9.0"
 edition = "2024"
-license = "Apache 2.0"
-authors = ["Joshua (joshua@unxversal.com)"]
 
 [dependencies]
 
-[dependencies.deepbook]
-r.mvr = "@deepbook/core"
-override = true
-addr_subst = { deepbook = "0xa3886aaa8aa831572dd39549242ca004a438c3a55967af9f0387ad2b01595068" }
+deepbook = { local = "../deepbookv3/packages/deepbook" }
+token = { local = "../deepbookv3/packages/token" }
 
 [dependencies.Pyth]
 git = "https://github.com/pyth-network/pyth-crosschain.git"
 subdir = "target_chains/sui/contracts"
 rev = "sui-contract-testnet"
 override = true
+
+# [dependencies.Pyth]
+# git = "https://github.com/pyth-network/pyth-crosschain.git"
+# subdir = "target_chains/sui/contracts"
+# rev = "sui-contract-testnet"
+# override = true
 
 # [dependencies.Wormhole]
 # git = "https://github.com/wormhole-foundation/wormhole.git"
@@ -31,6 +33,6 @@ override = true
 
 [addresses]
 unxversal = "0x0"
-# deepbook = "0xa3886aaa8aa831572dd39549242ca004a438c3a55967af9f0387ad2b01595068"
+deepbook = "0xa3886aaa8aa831572dd39549242ca004a438c3a55967af9f0387ad2b01595068"
 # pyth = "0x00b53b0f4174108627fbee72e2498b58d6a2714cded53fac537034c220d26302"
 # wormhole = "0x5306f64e312b581766351c07af79c72fcb1cd25147157fdc2f8ad76de9a3fb6a"

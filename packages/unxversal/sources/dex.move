@@ -22,7 +22,7 @@ module unxversal::dex {
     use deepbook::balance_manager::{Self as bm, BalanceManager, TradeProof};
     use deepbook::registry::Registry as DBRegistry;
     use deepbook::order_info::OrderInfo;
-    use deepbook::deep::DEEP;
+    use token::deep::DEEP;
 
     // Unxversal
     use unxversal::unxv::UNXV;
@@ -519,6 +519,8 @@ module unxversal::dex {
         rewards::on_spot_swap(rew, ctx.sender(), notional_usd_1e6, clock);
         (quote_left, base_out)
     }
+
+    // Maker rebate helpers removed for DEX
 
     // === Advanced: Use UNXV to pay DeepBook fees (DEEP backend) ===
     /// Swap UNXV for DEEP using a UNXV/DEEP pool (UNXV as base), deposit DEEP to the caller's BalanceManager,

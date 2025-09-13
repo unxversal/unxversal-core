@@ -238,6 +238,9 @@ module unxversal::gas_futures {
         let mut acc = take_or_new_account<Collat>(market, ctx.sender());
         let index_px = current_gas_price_1e6(ctx);
         let mut total_notional_1e6: u128 = 0u128;
+        // Accumulate maker rebate weights (USD 1e6)
+        let mut rb_makers: vector<address> = vector::empty<address>();
+        let mut rb_weights_1e6: vector<u128> = vector::empty<u128>();
         let mut total_qty: u64 = 0;
         let mut wsum_px_qty: u128 = 0u128;
         let fills_len = ubk::fillplan_num_fills(&plan);
@@ -297,6 +300,11 @@ module unxversal::gas_futures {
             // Persist maker
             store_account<Collat>(market, maker_addr, maker_acc);
             if (!ubk::has_order(&market.book, maker_id)) { let _ = table::remove(&mut market.owners, maker_id); };
+            // Accumulate weight and per-fill event
+            let f_notional_1e6: u128 = (fqty as u128) * per_unit_1e6 * 1_000_000u128;
+            let mut j: u64 = 0; let mut found: bool = false; let n_m = vector::length(&rb_makers);
+            while (j < n_m) { if (*vector::borrow(&rb_makers, j) == maker_addr) { let wref = vector::borrow_mut(&mut rb_weights_1e6, j); *wref = *wref + f_notional_1e6; found = true; break }; j = j + 1; };
+            if (!found) { vector::push_back(&mut rb_makers, maker_addr); vector::push_back(&mut rb_weights_1e6, f_notional_1e6); };
             // Per-fill event
             event::emit(OrderFilled { market_id: object::id(market), maker_order_id: maker_id, maker: maker_addr, taker: ctx.sender(), price_1e6: px, base_qty: fqty, timestamp_ms: now });
             i = i + 1;
@@ -321,21 +329,42 @@ module unxversal::gas_futures {
             assert!(gross_acc_post <= allowed, E_EXPOSURE_CAP);
         };
 
-        // Protocol taker fee
+        // Protocol taker fee + maker rebates
         let taker_bps = fees::gasfut_taker_fee_bps(cfg);
         let pay_with_unxv = option::is_some(maybe_unxv);
         let (t_eff, _) = fees::apply_discounts(taker_bps, 0, pay_with_unxv, staking_pool, ctx.sender(), cfg);
         let fee_amt: u64 = ((total_notional_1e6 * (t_eff as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64;
+        let rebate_bps_cfg = fees::gasfut_maker_rebate_bps(cfg);
+        let eff_rebate_bps: u64 = if (rebate_bps_cfg <= t_eff) { rebate_bps_cfg } else { t_eff };
+        let total_rebate_collat: u64 = ((total_notional_1e6 * (eff_rebate_bps as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64;
         if (pay_with_unxv) {
-            let u = option::extract(maybe_unxv);
-            let (stakers_coin, treasury_coin, _burn_amt) = fees::accrue_unxv_and_split(cfg, vault, u, clock, ctx);
+            let mut u = option::extract(maybe_unxv);
+            // Split UNXV maker rebate to makers
+            let total_fee_unxv = coin::value(&u);
+            let total_rebate_unxv: u64 = ((total_fee_unxv as u128) * (eff_rebate_bps as u128) / (fees::bps_denom() as u128)) as u64;
+            if (total_rebate_unxv > 0 && vector::length(&rb_makers) > 0) {
+                let mut rb_pool = coin::split(&mut u, total_rebate_unxv, ctx);
+                let wsum: u128 = total_notional_1e6;
+                let n = vector::length(&rb_makers);
+                let mut k: u64 = 0; let mut paid: u64 = 0;
+                while (k < n) { let mk = *vector::borrow(&rb_makers, k); let w = *vector::borrow(&rb_weights_1e6, k); let mut pay_i: u64 = if (k + 1 == n) { total_rebate_unxv - paid } else { (((w * (total_rebate_unxv as u128)) / wsum) as u64) }; if (pay_i > 0) { let c_i = coin::split(&mut rb_pool, pay_i, ctx); transfer::public_transfer(c_i, mk); paid = paid + pay_i; }; k = k + 1; };
+                coin::destroy_zero(rb_pool);
+            };
+            let (stakers_coin, traders_coin, treasury_coin, _burn_amt) = fees::accrue_unxv_and_split_with_traders(cfg, vault, u, clock, ctx);
             staking::add_weekly_reward(staking_pool, stakers_coin, clock);
+            let t_amt = coin::value(&traders_coin); if (t_amt > 0) { fees::traders_bank_deposit(vault, traders_coin); } else { coin::destroy_zero(traders_coin); };
             transfer::public_transfer(treasury_coin, fees::treasury_address(cfg));
             event::emit(FeeCharged { market_id: object::id(market), who: ctx.sender(), notional_1e6: total_notional_1e6, fee_paid: 0, paid_in_unxv: true, timestamp_ms: clock.timestamp_ms() });
         } else {
             assert!(balance::value(&acc.collat) >= fee_amt, E_INSUFF);
             let part = balance::split(&mut acc.collat, fee_amt);
             let mut c = coin::from_balance(part, ctx);
+            if (total_rebate_collat > 0 && vector::length(&rb_makers) > 0) {
+                let mut rb_pool = coin::split(&mut c, total_rebate_collat, ctx);
+                let wsum2: u128 = total_notional_1e6; let n2 = vector::length(&rb_makers); let mut k2: u64 = 0; let mut paid2: u64 = 0;
+                while (k2 < n2) { let mk2 = *vector::borrow(&rb_makers, k2); let w2 = *vector::borrow(&rb_weights_1e6, k2); let mut pay2: u64 = if (k2 + 1 == n2) { total_rebate_collat - paid2 } else { (((w2 * (total_rebate_collat as u128)) / wsum2) as u64) }; if (pay2 > 0) { let c_i2 = coin::split(&mut rb_pool, pay2, ctx); transfer::public_transfer(c_i2, mk2); paid2 = paid2 + pay2; }; k2 = k2 + 1; };
+                coin::destroy_zero(rb_pool);
+            };
             let share_bps = market.pnl_fee_share_bps;
             if (share_bps > 0) {
                 let share_amt: u64 = ((fee_amt as u128) * (share_bps as u128) / (fees::bps_denom() as u128)) as u64;

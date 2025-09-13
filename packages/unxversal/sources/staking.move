@@ -16,7 +16,7 @@ module unxversal::staking {
     
     use unxversal::unxv::UNXV;
     use deepbook::pool::{Self as db_pool, Pool};
-    use deepbook::deep::DEEP;
+    use token::deep::DEEP;
     use std::type_name::{Self as type_name, TypeName};
 
     const E_ZERO_AMOUNT: u64 = 1;

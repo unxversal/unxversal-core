@@ -265,8 +265,12 @@ module unxversal::options {
         let is_call_series = ser.series.is_call;
         let pay_with_unxv = option::is_some(&fee_unxv_in);
         let (taker_bps, _) = fees::apply_discounts(fees::dex_taker_fee_bps(cfg), fees::dex_maker_fee_bps(cfg), pay_with_unxv, staking_pool, ctx.sender(), cfg);
+        let rebate_bps = fees::options_maker_rebate_bps(cfg);
+        let eff_rebate_bps: u64 = if (rebate_bps <= taker_bps) { rebate_bps } else { taker_bps };
         let mut total_units: u64 = 0;
         let mut total_premium: u64 = 0;
+        let mut rb_makers: vector<address> = vector::empty<address>();
+        let mut rb_weights_quote: vector<u128> = vector::empty<u128>();
         let fills_len = ubk::fillplan_num_fills(&plan);
         let mut i = 0;
         while (i < fills_len) {
@@ -281,8 +285,17 @@ module unxversal::options {
             let fee_amt: u64 = ((prem as u128) * (taker_bps as u128) / (fees::bps_denom() as u128)) as u64;
             if (!pay_with_unxv) {
                 if (fee_amt > 0) {
-                    let fee_coin = coin::split(&mut pay, fee_amt, ctx);
-                    fees::route_fee<Quote>(vault, fee_coin, clock, ctx);
+                    let mut fee_coin = coin::split(&mut pay, fee_amt, ctx);
+                    let reb_amt: u64 = ((prem as u128) * (eff_rebate_bps as u128) / (fees::bps_denom() as u128)) as u64;
+                    if (reb_amt > 0 && reb_amt < fee_amt) {
+                        let rb = coin::split(&mut fee_coin, reb_amt, ctx);
+                        transfer::public_transfer(rb, maker);
+                        fees::route_fee<Quote>(vault, fee_coin, clock, ctx);
+                    } else if (reb_amt >= fee_amt) {
+                        transfer::public_transfer(fee_coin, maker);
+                    } else {
+                        fees::route_fee<Quote>(vault, fee_coin, clock, ctx);
+                    };
                 };
             };
             // compute maker remaining after this fill (pre-commit) for UI
@@ -295,6 +308,10 @@ module unxversal::options {
             transfer::public_transfer(pay, maker);
             total_units = total_units + qty;
             total_premium = total_premium + prem;
+            // accumulate rebate weight by premium
+            let mut j: u64 = 0; let mut found: bool = false; let n_m = vector::length(&rb_makers);
+            while (j < n_m) { if (*vector::borrow(&rb_makers, j) == maker) { let wref: &mut u128 = vector::borrow_mut(&mut rb_weights_quote, j); *wref = *wref + (prem as u128); found = true; break }; j = j + 1; };
+            if (!found) { vector::push_back(&mut rb_makers, maker); vector::push_back(&mut rb_weights_quote, prem as u128); };
             // book-keeping for writer: increase sold_units and reduce locked collateral if needed (locked remains for sold outstanding)
             writer_add_sold(ser, maker, qty, is_call_series);
             i = i + 1;
@@ -311,8 +328,31 @@ module unxversal::options {
         event::emit(Matched { key, taker: ctx.sender(), total_units, total_premium_quote: total_premium });
         // If paying with UNXV, split and distribute the UNXV fees now
         if (pay_with_unxv) {
-            let unxv = option::extract(&mut fee_unxv_in);
-            distribute_unxv_fee(cfg, vault, staking_pool, unxv, clock, ctx);
+            let mut unxv = option::extract(&mut fee_unxv_in);
+            // Compute UNXV rebate from provided UNXV and distribute to makers by premium weight
+            let total_unxv = coin::value(&unxv);
+            let total_rebate_unxv: u64 = ((total_unxv as u128) * (eff_rebate_bps as u128) / (fees::bps_denom() as u128)) as u64;
+            if (total_rebate_unxv > 0 && vector::length(&rb_makers) > 0) {
+                let mut rb_pool = coin::split(&mut unxv, total_rebate_unxv, ctx);
+                let wsum: u128 = (total_premium as u128);
+                let n = vector::length(&rb_makers);
+                let mut k: u64 = 0; let mut paid: u64 = 0;
+                while (k < n) {
+                    let mk = *vector::borrow(&rb_makers, k);
+                    let w = *vector::borrow(&rb_weights_quote, k);
+                    let mut pay_i: u64 = if (k + 1 == n) { total_rebate_unxv - paid } else { (((w * (total_rebate_unxv as u128)) / wsum) as u64) };
+                    if (pay_i > 0) { let c_i = coin::split(&mut rb_pool, pay_i, ctx); transfer::public_transfer(c_i, mk); paid = paid + pay_i; };
+                    k = k + 1;
+                };
+                coin::destroy_zero(rb_pool);
+            };
+            // Split remaining UNXV per FeeDistribution (including traders share)
+            let (stakers_coin, traders_coin, treasury_coin, _burn) = fees::accrue_unxv_and_split_with_traders(cfg, vault, unxv, clock, ctx);
+            staking::add_weekly_reward(staking_pool, stakers_coin, clock);
+            // Accumulate trader share centrally in FeeVault traders bank; allocation to markets occurs via keepers
+            let t_amt = coin::value(&traders_coin);
+            if (t_amt > 0) { fees::traders_bank_deposit(vault, traders_coin); } else { coin::destroy_zero(traders_coin); };
+            transfer::public_transfer(treasury_coin, fees::treasury_address(cfg));
         };
         option::destroy_none(fee_unxv_in);
         // refund any leftover premium budget to sender
@@ -489,7 +529,7 @@ module unxversal::options {
     }
 
     /// Settle a long position after expiry at frozen price (physical settlement using provided coins)
-    public fun settle_position_after_expiry<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, mut pos: OptionPosition<Base, Quote>, amount: u64, reg: &OracleRegistry, price_info_object: &PriceInfoObject, mut pay_quote: Option<Coin<Quote>>, mut pay_base: Option<Coin<Base>>, clock: &Clock, ctx: &mut TxContext): (Option<Coin<Base>>, Option<Coin<Quote>>) {
+    public fun settle_position_after_expiry<Base, Quote>(market: &mut OptionsMarket<Base, Quote>, mut pos: OptionPosition<Base, Quote>, amount: u64, _reg: &OracleRegistry, _price_info_object: &PriceInfoObject, mut pay_quote: Option<Coin<Quote>>, mut pay_base: Option<Coin<Base>>, clock: &Clock, ctx: &mut TxContext): (Option<Coin<Base>>, Option<Coin<Quote>>) {
         assert!(table::contains(&market.series, pos.key), E_INVALID_SERIES);
         assert!(amount > 0 && amount <= pos.amount, E_ZERO);
         let ser = table::borrow_mut(&mut market.series, pos.key);
@@ -754,19 +794,7 @@ module unxversal::options {
     }
     // removed ensure_writer helper to avoid borrow conflicts
 
-    /// Internal: distribute UNXV fee to staking pool / treasury / burn via FeeConfig
-    fun distribute_unxv_fee(
-        cfg: &FeeConfig,
-        vault: &mut FeeVault,
-        staking_pool: &mut StakingPool,
-        unxv_fee: Coin<UNXV>,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ) {
-        let (stakers_coin, treasury_coin, _burn) = fees::accrue_unxv_and_split(cfg, vault, unxv_fee, clock, ctx);
-        staking::add_weekly_reward(staking_pool, stakers_coin, clock);
-        transfer::public_transfer(treasury_coin, fees::treasury_address(cfg));
-    }
+    // removed unused distribute_unxv_fee
 }
 
 
