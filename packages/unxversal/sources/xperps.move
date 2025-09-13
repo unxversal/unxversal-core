@@ -27,7 +27,7 @@ module unxversal::xperps {
         table::{Self as table, Table},
     };
 
-    use std::string::{Self as string, String};
+    
 
     use unxversal::admin::{Self as AdminMod, AdminRegistry};
     use unxversal::fees::{Self as fees, FeeConfig, FeeVault};
@@ -147,6 +147,7 @@ module unxversal::xperps {
     public struct FeeCharged has copy, drop { market_id: ID, who: address, notional_1e6: u128, fee_paid: u64, paid_in_unxv: bool, timestamp_ms: u64 }
     public struct TraderRewardsDeposited has copy, drop { market_id: ID, amount_unxv: u64, total_eligible: u128, acc_1e18: u128, timestamp_ms: u64 }
     public struct TraderRewardsClaimed has copy, drop { market_id: ID, who: address, amount_unxv: u64, pending_left: u64, timestamp_ms: u64 }
+    public struct FundingSettled has copy, drop { market_id: ID, who: address, amount_paid: u64, amount_credited: u64, credit_left: u64, timestamp_ms: u64 }
 
     // ===== Init =====
     public fun init_market<Collat>(
@@ -509,8 +510,8 @@ module unxversal::xperps {
 
     // ===== Funding =====
     /// Keeper/admin: apply funding delta directly (per contract, 1e6 scale)
-    public fun apply_funding_update<Collat>(reg_admin: &AdminRegistry, market: &mut XPerpMarket<Collat>, longs_pay: bool, delta_1e6: u64, clock: &Clock, _ctx: &TxContext) {
-        assert!(AdminMod::is_admin(reg_admin, sui::tx_context::sender()), E_NOT_ADMIN);
+    public fun apply_funding_update<Collat>(reg_admin: &AdminRegistry, market: &mut XPerpMarket<Collat>, longs_pay: bool, delta_1e6: u64, clock: &Clock, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         if (longs_pay) { market.cum_long_pay_1e6 = market.cum_long_pay_1e6 + (delta_1e6 as u128); } else { market.cum_short_pay_1e6 = market.cum_short_pay_1e6 + (delta_1e6 as u128); };
         market.last_funding_ms = sui::clock::timestamp_ms(clock);
         event::emit(FundingIndexUpdated { market_id: object::id(market), longs_pay, delta_1e6, cum_long_pay_1e6: market.cum_long_pay_1e6, cum_short_pay_1e6: market.cum_short_pay_1e6, timestamp_ms: market.last_funding_ms });
@@ -557,12 +558,12 @@ module unxversal::xperps {
         };
         let final_credit = acc.funding_credit;
         store_account<Collat>(market, ctx.sender(), acc);
-        event::emit(unxversal::perpetuals::FundingSettled { market_id: object::id(market), who: ctx.sender(), amount_paid: paid_long, amount_credited: credited_short + paid_out, credit_left: final_credit, timestamp_ms: sui::clock::timestamp_ms(clock) });
+        event::emit(FundingSettled { market_id: object::id(market), who: ctx.sender(), amount_paid: paid_long, amount_credited: credited_short + paid_out, credit_left: final_credit, timestamp_ms: sui::clock::timestamp_ms(clock) });
         credited_short + paid_out
     }
 
     // ===== Liquidation =====
-    public fun liquidate<Collat>(market: &mut XPerpMarket<Collat>, victim: address, vault: &mut FeeVault, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext, qty: u64) {
+    public fun liquidate<Collat>(market: &mut XPerpMarket<Collat>, victim: address, cfg: &FeeConfig, vault: &mut FeeVault, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext, qty: u64) {
         assert!(table::contains(&market.accounts, victim), E_NO_ACCOUNT);
         let px = synthetic_index_price_1e6(market);
         let mut acc = table::remove(&mut market.accounts, victim);
@@ -790,6 +791,22 @@ module unxversal::xperps {
     }
 
     fun wavg(prev_px: u64, prev_qty: u64, new_px: u64, new_qty: u64): u64 { if (prev_qty == 0) { new_px } else { (((prev_px as u128) * (prev_qty as u128) + (new_px as u128) * (new_qty as u128)) / ((prev_qty + new_qty) as u128)) as u64 } }
+
+    fun apply_realized_to_collat<Collat>(balc: &mut Balance<Collat>, gain: u64, loss: u64, vault: &mut FeeVault, _clock: &Clock, ctx: &mut TxContext) {
+        if (loss > 0) {
+            let have = balance::value(balc);
+            let pay_loss = if (loss <= have) { loss } else { have };
+            if (pay_loss > 0) {
+                let bal_loss = balance::split(balc, pay_loss);
+                let coin_loss = coin::from_balance(bal_loss, ctx);
+                fees::pnl_deposit<Collat>(vault, coin_loss);
+            };
+        };
+        if (gain > 0) {
+            let coin_gain = fees::pnl_withdraw<Collat>(vault, gain, ctx);
+            balc.join(coin::into_balance(coin_gain));
+        };
+    }
 
     fun im_for_qty(params: &XPerpParams, qty: u64, price_1e6: u64, im_bps: u64): u64 {
         let gross_1e6: u128 = (qty as u128) * (price_1e6 as u128) * (params.contract_size as u128);
