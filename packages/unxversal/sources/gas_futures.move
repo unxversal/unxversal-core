@@ -55,7 +55,7 @@ module unxversal::gas_futures {
         maintenance_margin_bps: u64,
         liquidation_fee_bps: u64,
         keeper_incentive_bps: u64,
-        /// Portion of liquidation penalty routed to treasury (via FeeVault), in bps (from FeeConfig)
+        // Portion of liquidation penalty routed to treasury (via FeeVault), in bps (from FeeConfig)
         // removed local storage; read from FeeConfig
         close_only: bool,
         max_deviation_bps: u64,
@@ -137,8 +137,6 @@ module unxversal::gas_futures {
     }
 
     /// Admin: set liquidation treasury share bps (taken from the liquidation penalty).
-    // Keeper note: liq treasury bps is read from FeeConfig
-
     public fun set_close_only<Collat>(reg_admin: &AdminRegistry, market: &mut GasMarket<Collat>, enabled: bool, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         market.close_only = enabled;
@@ -461,7 +459,7 @@ module unxversal::gas_futures {
         event::emit(OrderCanceled { market_id: object::id(market), order_id, maker: owner, remaining_qty: remaining, timestamp_ms: clock.timestamp_ms() });
     }
 
-    public fun liquidate<Collat>(market: &mut GasMarket<Collat>, victim: address, qty: u64, vault: &mut FeeVault, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext) {
+    public fun liquidate<Collat>(market: &mut GasMarket<Collat>, victim: address, qty: u64, cfg: &FeeConfig, vault: &mut FeeVault, rewards_obj: &mut rewards::Rewards, clock: &Clock, ctx: &mut TxContext) {
         assert!(table::contains(&market.accounts, victim), E_NO_ACCOUNT);
         assert!(qty > 0, E_ZERO);
         assert!(!market.is_settled, E_ALREADY_SETTLED);

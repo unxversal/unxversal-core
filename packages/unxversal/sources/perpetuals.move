@@ -72,7 +72,7 @@ module unxversal::perpetuals {
         last_funding_ms: u64,
         funding_vault: Balance<Collat>,
         keeper_incentive_bps: u64,
-        /// Portion of liquidation penalty routed to treasury (via FeeVault), in bps (from FeeConfig)
+        // Portion of liquidation penalty routed to treasury (via FeeVault), in bps (from FeeConfig)
         // removed local storage; read from FeeConfig
         /// Max account gross notional in 1e6 units (0 = unlimited)
         account_max_notional_1e6: u128,
@@ -553,6 +553,7 @@ module unxversal::perpetuals {
         victim: address,
         reg: &OracleRegistry,
         price_info_object: &PriceInfoObject,
+        cfg: &FeeConfig,
         vault: &mut FeeVault,
         rewards_obj: &mut rewards::Rewards,
         clock: &Clock,

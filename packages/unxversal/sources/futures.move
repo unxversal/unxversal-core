@@ -86,7 +86,7 @@ module unxversal::futures {
         maintenance_margin_bps: u64,
         liquidation_fee_bps: u64,
         keeper_incentive_bps: u64,
-        /// Portion of liquidation penalty routed to treasury (via FeeVault), in bps (from FeeConfig)
+        // Portion of liquidation penalty routed to treasury (via FeeVault), in bps (from FeeConfig)
         // removed local storage; read from FeeConfig
         /// Close-only mode toggle (true allows only trades that reduce exposure for the account)
         close_only: bool,
@@ -241,13 +241,7 @@ module unxversal::futures {
         market.keeper_incentive_bps = keeper_bps;
     }
 
-    /// Admin: set liquidation treasury share bps (taken from the liquidation penalty).
-    public fun set_liq_treasury_bps<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, bps: u64, ctx: &TxContext) {
-        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
-        // Keep within bounds
-        assert!(bps <= fees::bps_denom(), E_EXPOSURE_CAP);
-        market.liq_treasury_bps = bps;
-    }
+    // Removed: liq_treasury_bps is part of global `fees::FeeConfig` and not stored per market
 
     /// Admin: set close-only mode
     public fun set_close_only<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, enabled: bool, ctx: &TxContext) {
@@ -657,6 +651,7 @@ module unxversal::futures {
         qty: u64,
         reg: &OracleRegistry,
         price_info_object: &PriceInfoObject,
+        cfg: &FeeConfig,
         vault: &mut FeeVault,
         rewards_obj: &mut rewards::Rewards,
         clock: &Clock,

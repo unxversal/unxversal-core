@@ -181,7 +181,7 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
       <div className={styles.header}>
         <div className={styles.pairBar}>
           <div className={styles.pair}>
-            Unxversal Lending
+            <span>Unxversal Lending</span>
           </div>
           <div className={styles.metrics}>
             <div className={styles.metricItem}>
@@ -286,7 +286,6 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
                 )}
                 <div>
                   <div className={styles.tokenSymbol}>{mkt.symbolPair}</div>
-                  <div className={styles.tokenName}>{mkt.collateral.name} as Collateral, USDC as Debt</div>
                 </div>
               </div>
               
