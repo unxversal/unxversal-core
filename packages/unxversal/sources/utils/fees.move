@@ -189,9 +189,11 @@ module unxversal::fees {
             sd_t5_thr: 100_000, sd_t5_bps: 3000,
             sd_t6_thr: 500_000, sd_t6_bps: 4000,
         };
+
         let vault = FeeVault { id: object::new(ctx), store: bag::new(ctx), unxv_to_burn: balance::zero<UNXV>(), traders_bank_unxv: balance::zero<UNXV>() };
         transfer::share_object(cfg);
         transfer::share_object(vault);
+        
     }
 
     /// Admin: update fee parameters (all-or-nothing)
@@ -787,6 +789,7 @@ module unxversal::fees {
             pool_creation_fee_unxv: 0,
             lending_borrow_fee_bps: 0,
             lending_collateral_bonus_bps_max: 500,
+            liq_treasury_bps: 1000,
             sd_t1_thr: 10, sd_t1_bps: 500,
             sd_t2_thr: 100, sd_t2_bps: 1000,
             sd_t3_thr: 1_000, sd_t3_bps: 1500,

@@ -1,26 +1,31 @@
 import { useState, useMemo } from 'react';
 import styles from './LendingScreen.module.css';
-import { defaultSettings, getTokenTypeTag, type TokenInfo } from '../../lib/settings.config';
+import { defaultSettings, getTokenTypeTag, getTokenBySymbol, getDefaultQuoteToken, type TokenInfo } from '../../lib/settings.config';
+import { MARKETS } from '../../lib/markets';
 import { TrendingUp, TrendingDown, Percent, AlertCircle } from 'lucide-react';
 import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
 
-type LendingPool = {
+type LendingMarket = {
   id: string;
-  token: TokenInfo;
+  symbolPair: string; // e.g. "SUI/USDC"
+  collateral: TokenInfo; // volatile asset
+  debt: TokenInfo; // stablecoin (USDC)
   supplyApy: number;
   borrowApy: number;
-  totalSupply: number;
-  totalBorrow: number;
-  utilizationRate: number;
-  totalLiquidity: number;
-  userSupplied?: number;
-  userBorrowed?: number;
-  maxLtv: number;
-  liquidationThreshold: number;
-  reserveFactor: number;
+  totalSupplyDebt: number; // total USDC supplied
+  totalBorrowDebt: number; // total USDC borrowed
+  utilizationRate: number; // %
+  totalLiquidityDebt: number; // USDC liquidity
+  userSuppliedDebt?: number; // user's USDC supplied
+  userBorrowedDebt?: number; // user's USDC borrowed
+  userCollateral?: number; // user's posted collateral units
+  maxLtv: number; // %
+  liquidationThreshold: number; // %
+  reserveFactor: number; // %
 };
 
 type ViewMode = 'markets' | 'portfolio';
+type DrawerMode = 'supplyDebt' | 'depositCollat' | 'borrowDebt';
 
 export function LendingScreen({ started: _started, network, protocolStatus }: { 
   started?: boolean;
@@ -37,106 +42,95 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
   // Suppress unused parameter warning
   _started;
   const [viewMode, setViewMode] = useState<ViewMode>('markets');
-  const [selectedPool, setSelectedPool] = useState<LendingPool | null>(null);
+  const [selectedMarket, setSelectedMarket] = useState<LendingMarket | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [drawerMode, setDrawerMode] = useState<'supply' | 'borrow'>('supply');
+  const [drawerMode, setDrawerMode] = useState<DrawerMode>('supplyDebt');
   const [inputAmount, setInputAmount] = useState<number>(0);
   const [userBalance] = useState<number>(1000); // Mock balance
   const [submitting, setSubmitting] = useState(false);
   const account = useCurrentAccount();
   
-  // Generate lending pools for all tokens with realistic fake data
-  const lendingPools: LendingPool[] = useMemo(() => {
-    
-    return defaultSettings.tokens.map((token, index) => {
-      // Generate realistic APYs based on token type
-      const baseSupplyApy = token.symbol === 'SUI' ? 2.8 : 
-                           token.symbol === 'USDC' ? 4.5 :
-                           token.symbol === 'USDT' || token.symbol === 'suiUSDT' ? 4.2 :
-                           token.symbol.includes('USD') ? 3.8 :
-                           token.symbol === 'WBTC' || token.symbol === 'suiBTC' || token.symbol === 'xBTC' ? 1.9 :
-                           token.symbol === 'WETH' || token.symbol === 'suiETH' ? 2.3 :
-                           token.symbol === 'DEEP' ? 5.2 :
-                           token.symbol === 'UNXV' ? 6.1 :
-                           token.symbol === 'DRF' ? 4.8 :
-                           token.symbol === 'NS' ? 7.2 :
-                           token.symbol === 'TYPUS' ? 5.5 :
-                           token.symbol === 'WAL' ? 4.1 :
-                           token.symbol === 'IKA' ? 6.8 :
-                           token.symbol === 'SEND' ? 3.9 :
-                           token.symbol === 'APT' ? 3.2 :
-                           token.symbol === 'CELO' ? 2.9 :
-                           token.symbol.startsWith('W') ? 2.1 : // Other wrapped tokens
-                           Math.random() * 3 + 2.5; // Default for other tokens
-      
+  // Generate lending markets (Collat/USDC) with realistic fake data
+  const lendingMarkets: LendingMarket[] = useMemo(() => {
+    const usdc = getDefaultQuoteToken() || getTokenBySymbol('USDC') || defaultSettings.tokens.find(t => t.symbol === 'USDC');
+    if (!usdc) return [];
+    const pairs = MARKETS.usdc; // All X/USDC symbols
+    const out: LendingMarket[] = [];
+    let idx = 0;
+    for (const pair of pairs) {
+      const [collatSym, debtSym] = pair.split('/');
+      if (debtSym !== 'USDC') continue;
+      const collat = getTokenBySymbol(collatSym) || defaultSettings.tokens.find(t => t.symbol === collatSym);
+      if (!collat) continue;
+      // Sample APYs based on collateral class
+      const baseSupplyApy = collat.symbol === 'SUI' ? 2.8 :
+                           collat.symbol === 'DEEP' ? 5.2 :
+                           collat.symbol === 'UNXV' ? 6.1 :
+                           collat.symbol.includes('BTC') ? 1.9 :
+                           collat.symbol.includes('ETH') ? 2.3 :
+                           collat.symbol.startsWith('W') ? 2.1 :
+                           collat.symbol.includes('USD') ? 3.8 :
+                           Math.random() * 3 + 2.5;
       const borrowApy = baseSupplyApy + Math.random() * 3 + 1.5;
-      
-      // Generate realistic supply/borrow amounts based on token
-      const baseSupply = token.symbol === 'SUI' ? Math.floor(Math.random() * 20_000_000 + 45_000_000) :
-                        token.symbol === 'USDC' ? Math.floor(Math.random() * 10_000_000 + 20_000_000) :
-                        token.symbol === 'USDT' || token.symbol === 'suiUSDT' ? Math.floor(Math.random() * 8_000_000 + 15_000_000) :
-                        token.symbol.includes('USD') ? Math.floor(Math.random() * 5_000_000 + 8_000_000) :
-                        token.symbol === 'WBTC' || token.symbol === 'suiBTC' || token.symbol === 'xBTC' ? Math.floor(Math.random() * 800 + 1_000) :
-                        token.symbol === 'WETH' || token.symbol === 'suiETH' ? Math.floor(Math.random() * 5_000 + 7_500) :
-                        token.symbol === 'DEEP' ? Math.floor(Math.random() * 8_000_000 + 12_000_000) :
-                        token.symbol === 'UNXV' ? Math.floor(Math.random() * 15_000_000 + 25_000_000) :
-                        token.symbol === 'DRF' ? Math.floor(Math.random() * 2_000_000 + 3_000_000) :
-                        token.symbol === 'NS' ? Math.floor(Math.random() * 1_500_000 + 2_500_000) :
-                        token.symbol === 'TYPUS' ? Math.floor(Math.random() * 3_000_000 + 4_000_000) :
-                        token.symbol === 'WAL' ? Math.floor(Math.random() * 5_000_000 + 8_000_000) :
-                        token.symbol === 'IKA' ? Math.floor(Math.random() * 800_000 + 1_200_000) :
-                        token.symbol === 'SEND' ? Math.floor(Math.random() * 1_000_000 + 1_800_000) :
-                        token.symbol === 'APT' ? Math.floor(Math.random() * 2_000_000 + 3_500_000) :
-                        token.symbol === 'CELO' ? Math.floor(Math.random() * 1_200_000 + 2_000_000) :
-                        token.symbol.startsWith('W') ? Math.floor(Math.random() * 1_500_000 + 2_500_000) : // Other wrapped tokens
-                        Math.floor(Math.random() * 3_000_000 + 1_000_000); // Default for other tokens
-      
-      const totalBorrow = Math.floor(baseSupply * (0.3 + Math.random() * 0.4));
-      const utilizationRate = (totalBorrow / baseSupply) * 100;
-      
-      return {
-        id: `pool-${token.symbol.toLowerCase()}`,
-        token,
+      // Sample totals (USDC notional)
+      const baseSupplyDebt = collat.symbol === 'SUI' ? Math.floor(Math.random() * 20_000_000 + 45_000_000) :
+                             collat.symbol.includes('BTC') ? Math.floor(Math.random() * 8_000_000 + 12_000_000) :
+                             collat.symbol.includes('ETH') ? Math.floor(Math.random() * 6_000_000 + 9_000_000) :
+                             collat.symbol === 'DEEP' ? Math.floor(Math.random() * 8_000_000 + 12_000_000) :
+                             collat.symbol === 'UNXV' ? Math.floor(Math.random() * 15_000_000 + 25_000_000) :
+                             Math.floor(Math.random() * 5_000_000 + 6_000_000);
+      const totalBorrowDebt = Math.floor(baseSupplyDebt * (0.3 + Math.random() * 0.4));
+      const utilizationRate = (totalBorrowDebt / baseSupplyDebt) * 100;
+      // Risk params
+      const maxLtv = collat.symbol.includes('USD') ? Math.floor(Math.random() * 5 + 83) :
+                     collat.symbol === 'SUI' ? Math.floor(Math.random() * 5 + 73) :
+                     (collat.symbol.includes('BTC') || collat.symbol.includes('ETH')) ? Math.floor(Math.random() * 5 + 68) :
+                     Math.floor(Math.random() * 10 + 60);
+      const liquidationThreshold = collat.symbol.includes('USD') ? Math.floor(Math.random() * 3 + 88) :
+                                   collat.symbol === 'SUI' ? Math.floor(Math.random() * 5 + 78) :
+                                   (collat.symbol.includes('BTC') || collat.symbol.includes('ETH')) ? Math.floor(Math.random() * 5 + 73) :
+                                   Math.floor(Math.random() * 8 + 72);
+      const reserveFactor = Math.floor(Math.random() * 15 + 10);
+
+      out.push({
+        id: `mkt-${collat.symbol.toLowerCase()}-usdc`,
+        symbolPair: pair,
+        collateral: collat,
+        debt: usdc,
         supplyApy: Number(baseSupplyApy.toFixed(2)),
         borrowApy: Number(borrowApy.toFixed(2)),
-        totalSupply: baseSupply,
-        totalBorrow,
+        totalSupplyDebt: baseSupplyDebt,
+        totalBorrowDebt,
         utilizationRate: Number(utilizationRate.toFixed(1)),
-        totalLiquidity: baseSupply - totalBorrow,
-        // Simulate some user positions (about 30% of pools have user activity)
-        userSupplied: index % 3 === 0 ? Math.floor(Math.random() * 50000 + 1000) : undefined,
-        userBorrowed: index % 5 === 0 ? Math.floor(Math.random() * 25000 + 500) : undefined,
-        maxLtv: token.symbol.includes('USD') ? Math.floor(Math.random() * 5 + 83) : // 83-87%
-                token.symbol === 'SUI' ? Math.floor(Math.random() * 5 + 73) : // 73-77%
-                token.symbol.includes('BTC') || token.symbol.includes('ETH') ? Math.floor(Math.random() * 5 + 68) : // 68-72%
-                token.symbol === 'DEEP' || token.symbol === 'UNXV' ? Math.floor(Math.random() * 5 + 70) : // 70-74%
-                Math.floor(Math.random() * 10 + 60), // 60-69% for others
-        liquidationThreshold: token.symbol.includes('USD') ? Math.floor(Math.random() * 3 + 88) : // 88-90%
-                             token.symbol === 'SUI' ? Math.floor(Math.random() * 5 + 78) : // 78-82%
-                             token.symbol.includes('BTC') || token.symbol.includes('ETH') ? Math.floor(Math.random() * 5 + 73) : // 73-77%
-                             Math.floor(Math.random() * 8 + 72), // 72-79% for others
-        reserveFactor: Math.floor(Math.random() * 15 + 10) // 10-24%
-      };
-    });
+        totalLiquidityDebt: baseSupplyDebt - totalBorrowDebt,
+        userSuppliedDebt: idx % 3 === 0 ? Math.floor(Math.random() * 50_000 + 1_000) : undefined,
+        userBorrowedDebt: idx % 5 === 0 ? Math.floor(Math.random() * 25_000 + 500) : undefined,
+        userCollateral: idx % 4 === 0 ? Math.floor(Math.random() * 1_000 + 50) : undefined,
+        maxLtv,
+        liquidationThreshold,
+        reserveFactor,
+      });
+      idx += 1;
+    }
+    return out;
   }, []);
 
   // Calculate portfolio totals
   const portfolioStats = useMemo(() => {
-    const totalSupplied = lendingPools.reduce((sum, pool) => sum + (pool.userSupplied || 0), 0);
-    const totalBorrowed = lendingPools.reduce((sum, pool) => sum + (pool.userBorrowed || 0), 0);
-    const netApy = lendingPools.reduce((sum, pool) => {
-      const supplyValue = (pool.userSupplied || 0) * pool.supplyApy / 100;
-      const borrowValue = (pool.userBorrowed || 0) * pool.borrowApy / 100;
+    const totalSupplied = lendingMarkets.reduce((sum, m) => sum + (m.userSuppliedDebt || 0), 0);
+    const totalBorrowed = lendingMarkets.reduce((sum, m) => sum + (m.userBorrowedDebt || 0), 0);
+    const netApyAbs = lendingMarkets.reduce((sum, m) => {
+      const supplyValue = (m.userSuppliedDebt || 0) * m.supplyApy / 100;
+      const borrowValue = (m.userBorrowedDebt || 0) * m.borrowApy / 100;
       return sum + supplyValue - borrowValue;
     }, 0);
-    
     return {
       totalSupplied,
       totalBorrowed,
-      netApy: totalSupplied > 0 ? (netApy / totalSupplied) * 100 : 0,
-      healthFactor: totalBorrowed > 0 ? (totalSupplied * 0.8) / totalBorrowed : Number.POSITIVE_INFINITY
+      netApy: totalSupplied > 0 ? (netApyAbs / totalSupplied) * 100 : 0,
+      healthFactor: totalBorrowed > 0 ? (totalSupplied * 0.8) / totalBorrowed : Number.POSITIVE_INFINITY,
     };
-  }, [lendingPools]);
+  }, [lendingMarkets]);
 
   const formatNumber = (num: number, decimals: number = 2) => {
     if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
@@ -156,13 +150,15 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
   };
 
   const handleSubmit = async () => {
-    if (!selectedPool || inputAmount <= 0 || !account?.address) return;
-    
+    if (!selectedMarket || inputAmount <= 0 || !account?.address) return;
+    const action = drawerMode === 'supplyDebt' ? 'Supply USDC'
+                  : drawerMode === 'depositCollat' ? `Deposit ${selectedMarket.collateral.symbol}`
+                  : 'Borrow USDC';
     setSubmitting(true);
     try {
       // TODO: Implement actual lending/borrowing transaction logic
       await new Promise(resolve => setTimeout(resolve, 2000)); // Mock delay
-      console.log(`${drawerMode} ${inputAmount} ${selectedPool.token.symbol}`);
+      console.log(`${action}: ${inputAmount} (${selectedMarket.symbolPair})`);
       
       // Reset form after successful submission
       setInputAmount(0);
@@ -174,7 +170,7 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
     }
   };
 
-  const handleDrawerAction = (mode: 'supply' | 'borrow') => {
+  const handleDrawerAction = (mode: DrawerMode) => {
     setDrawerMode(mode);
     setInputAmount(0);
   };
@@ -258,82 +254,83 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
 
         <div className={styles.marketsTable}>
           <div className={styles.tableHeader}>
-            <span>Asset</span>
+            <span>Market (Collat/USDC)</span>
             <span>Supply APY</span>
             <span>Borrow APY</span>
-            <span>Total Supply</span>
-            <span>Total Borrow</span>
+            <span>Total USDC Supply</span>
+            <span>Total USDC Borrow</span>
             <span>Utilization</span>
-            <span>Liquidity</span>
+            <span>USDC Liquidity</span>
             {viewMode === 'portfolio' && <span>Your Position</span>}
             <span>Actions</span>
           </div>
           
           <div className={styles.tableBody}>
-            {lendingPools.length === 0 ? (
+            {lendingMarkets.length === 0 ? (
               <div className={styles.emptyState}>
                 <p>No lending pools available. Check your settings configuration.</p>
               </div>
             ) : (
-              lendingPools.map((pool) => (
+              lendingMarkets.map((mkt) => (
                 <div 
-                  key={pool.id} 
-                  className={`${styles.tableRow} ${selectedPool?.id === pool.id ? styles.selected : ''}`}
+                  key={mkt.id} 
+                  className={`${styles.tableRow} ${selectedMarket?.id === mkt.id ? styles.selected : ''}`}
                   onClick={() => {
-                    setSelectedPool(pool);
+                    setSelectedMarket(mkt);
                     setIsDrawerOpen(true);
                   }}
                 >
               <div className={styles.assetCell}>
-                {pool.token.iconUrl && (
-                  <img src={pool.token.iconUrl} alt={pool.token.name} className={styles.tokenIcon} />
+                {mkt.collateral.iconUrl && (
+                  <img src={mkt.collateral.iconUrl} alt={mkt.collateral.name} className={styles.tokenIcon} />
                 )}
                 <div>
-                  <div className={styles.tokenSymbol}>{pool.token.symbol}</div>
-                  <div className={styles.tokenName}>{pool.token.name}</div>
+                  <div className={styles.tokenSymbol}>{mkt.symbolPair}</div>
+                  <div className={styles.tokenName}>{mkt.collateral.name} as Collateral, USDC as Debt</div>
                 </div>
               </div>
               
-              <span className={styles.positive}>{pool.supplyApy}%</span>
-              <span className={styles.negative}>{pool.borrowApy}%</span>
-              <span>{formatNumber(pool.totalSupply)}</span>
-              <span>{formatNumber(pool.totalBorrow)}</span>
+              <span className={styles.positive}>{mkt.supplyApy}%</span>
+              <span className={styles.negative}>{mkt.borrowApy}%</span>
+              <span>{formatNumber(mkt.totalSupplyDebt)}</span>
+              <span>{formatNumber(mkt.totalBorrowDebt)}</span>
               
               <div className={styles.utilizationCell}>
                 <div 
                   className={styles.utilizationBar}
                   style={{ 
-                    background: `linear-gradient(90deg, ${getUtilizationColor(pool.utilizationRate)} ${pool.utilizationRate}%, #1a1d29 ${pool.utilizationRate}%)` 
+                    background: `linear-gradient(90deg, ${getUtilizationColor(mkt.utilizationRate)} ${mkt.utilizationRate}%, #1a1d29 ${mkt.utilizationRate}%)` 
                   }}
                 />
-                <span style={{ color: getUtilizationColor(pool.utilizationRate) }}>
-                  {pool.utilizationRate}%
+                <span style={{ color: getUtilizationColor(mkt.utilizationRate) }}>
+                  {mkt.utilizationRate}%
                 </span>
               </div>
               
-              <span>{formatNumber(pool.totalLiquidity)}</span>
+              <span>{formatNumber(mkt.totalLiquidityDebt)}</span>
               
               {viewMode === 'portfolio' && (
                 <div className={styles.positionCell}>
-                  {pool.userSupplied && (
+                  {mkt.userSuppliedDebt && (
                     <div className={styles.positionItem}>
                       <TrendingUp size={12} />
-                      <span>{formatNumber(pool.userSupplied)}</span>
+                      <span>{formatNumber(mkt.userSuppliedDebt)} USDC</span>
                     </div>
                   )}
-                  {pool.userBorrowed && (
+                  {mkt.userBorrowedDebt && (
                     <div className={styles.positionItem}>
                       <TrendingDown size={12} />
-                      <span>{formatNumber(pool.userBorrowed)}</span>
+                      <span>{formatNumber(mkt.userBorrowedDebt)} USDC</span>
                     </div>
                   )}
-                  {!pool.userSupplied && !pool.userBorrowed && <span>-</span>}
+                  {!mkt.userSuppliedDebt && !mkt.userBorrowedDebt && <span>-</span>}
                 </div>
               )}
               
               <div className={styles.actionButtons}>
-                <button className={styles.supplyBtn}>Supply</button>
-                <button className={styles.borrowBtn}>Borrow</button>
+                <button className={styles.supplyBtn} onClick={(e) => { e.stopPropagation(); setSelectedMarket(mkt); setIsDrawerOpen(true); setDrawerMode('supplyDebt'); }}>Supply USDC</button>
+                <button className={styles.supplyBtn} onClick={(e) => { e.stopPropagation(); setSelectedMarket(mkt); setIsDrawerOpen(true); setDrawerMode('depositCollat'); }}>Deposit {mkt.collateral.symbol}</button>
+                <button className={styles.borrowBtn} onClick={(e) => { e.stopPropagation(); setSelectedMarket(mkt); setIsDrawerOpen(true); setDrawerMode('borrowDebt'); }}>Borrow USDC</button>
               </div>
             </div>
               ))
@@ -346,16 +343,16 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
       <div className={`${styles.drawer} ${isDrawerOpen ? styles.drawerOpen : ''}`}>
         <div className={styles.drawerOverlay} onClick={() => setIsDrawerOpen(false)} />
         <div className={styles.drawerContent}>
-          {selectedPool && (
+          {selectedMarket && (
             <>
               <div className={styles.drawerHeader}>
                 <div className={styles.drawerHeaderLeft}>
-                  {selectedPool.token.iconUrl && (
-                    <img src={selectedPool.token.iconUrl} alt={selectedPool.token.name} className={styles.drawerTokenIcon} />
+                  {selectedMarket.collateral.iconUrl && (
+                    <img src={selectedMarket.collateral.iconUrl} alt={selectedMarket.collateral.name} className={styles.drawerTokenIcon} />
                   )}
                   <div>
-                    <h3>{selectedPool.token.symbol} Pool Details</h3>
-                    <span className={styles.tokenName}>{selectedPool.token.name}</span>
+                    <h3>{selectedMarket.symbolPair} Market</h3>
+                    <span className={styles.tokenName}>{selectedMarket.collateral.name} collateral, USDC debt</span>
                   </div>
                 </div>
                 <button onClick={() => setIsDrawerOpen(false)} className={styles.drawerCloseBtn}>×</button>
@@ -364,16 +361,16 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
               <div className={styles.drawerBody}>
                 <div className={styles.drawerMetrics}>
                   <div className={styles.drawerMetricCard}>
-                    <div className={styles.drawerMetricValue}>{selectedPool.supplyApy}%</div>
+                    <div className={styles.drawerMetricValue}>{selectedMarket.supplyApy}%</div>
                     <div className={styles.drawerMetricLabel}>Supply APY</div>
                   </div>
                   <div className={styles.drawerMetricCard}>
-                    <div className={styles.drawerMetricValue}>{selectedPool.borrowApy}%</div>
+                    <div className={styles.drawerMetricValue}>{selectedMarket.borrowApy}%</div>
                     <div className={styles.drawerMetricLabel}>Borrow APY</div>
                   </div>
                   <div className={styles.drawerMetricCard}>
-                    <div className={styles.drawerMetricValue} style={{ color: getUtilizationColor(selectedPool.utilizationRate) }}>
-                      {selectedPool.utilizationRate}%
+                    <div className={styles.drawerMetricValue} style={{ color: getUtilizationColor(selectedMarket.utilizationRate) }}>
+                      {selectedMarket.utilizationRate}%
                     </div>
                     <div className={styles.drawerMetricLabel}>Utilization</div>
                   </div>
@@ -381,25 +378,16 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
 
                 <div className={styles.drawerActions}>
                   <div className={styles.drawerTabs}>
-                    <button 
-                      className={drawerMode === 'supply' ? styles.active : ''}
-                      onClick={() => handleDrawerAction('supply')}
-                    >
-                      Supply
-                    </button>
-                    <button 
-                      className={drawerMode === 'borrow' ? styles.active : ''}
-                      onClick={() => handleDrawerAction('borrow')}
-                    >
-                      Borrow
-                    </button>
+                    <button className={drawerMode === 'supplyDebt' ? styles.active : ''} onClick={() => handleDrawerAction('supplyDebt')}>Supply USDC</button>
+                    <button className={drawerMode === 'depositCollat' ? styles.active : ''} onClick={() => handleDrawerAction('depositCollat')}>Deposit {selectedMarket.collateral.symbol}</button>
+                    <button className={drawerMode === 'borrowDebt' ? styles.active : ''} onClick={() => handleDrawerAction('borrowDebt')}>Borrow USDC</button>
                   </div>
                   
                   <div className={styles.inputSection}>
                     <div className={styles.balanceInfo}>
                       <span className={styles.balanceLabel}>Available Balance:</span>
                       <span className={styles.balanceAmount}>
-                        {userBalance.toFixed(4)} {selectedPool.token.symbol}
+                        {userBalance.toFixed(4)} {drawerMode === 'depositCollat' ? selectedMarket.collateral.symbol : 'USDC'}
                       </span>
                     </div>
                     
@@ -408,13 +396,13 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
                         type="number"
                         value={inputAmount || ''}
                         onChange={(e) => setInputAmount(Number(e.target.value))}
-                        placeholder={`Enter ${drawerMode} amount`}
+                        placeholder={`Enter ${drawerMode === 'depositCollat' ? 'deposit' : drawerMode === 'supplyDebt' ? 'supply' : 'borrow'} amount`}
                         className={styles.amountInput}
                         max={userBalance}
                         min={0}
                       />
                       <div className={styles.tokenSelector}>
-                        <span>{selectedPool.token.symbol}</span>
+                        <span>{drawerMode === 'depositCollat' ? selectedMarket.collateral.symbol : 'USDC'}</span>
                       </div>
                     </div>
                     
@@ -427,12 +415,12 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
                     
                     <div className={styles.transactionInfo}>
                       <div className={styles.infoRow}>
-                        <span>{drawerMode === 'supply' ? 'You will earn:' : 'You will pay:'}</span>
-                        <span className={drawerMode === 'supply' ? styles.positive : styles.negative}>
-                          {drawerMode === 'supply' ? selectedPool.supplyApy : selectedPool.borrowApy}% APY
+                        <span>{drawerMode === 'supplyDebt' ? 'You will earn:' : drawerMode === 'borrowDebt' ? 'You will pay:' : 'You will enable borrowing up to:'}</span>
+                        <span className={drawerMode === 'supplyDebt' ? styles.positive : drawerMode === 'borrowDebt' ? styles.negative : ''}>
+                          {drawerMode === 'supplyDebt' ? `${selectedMarket.supplyApy}% APY` : drawerMode === 'borrowDebt' ? `${selectedMarket.borrowApy}% APY` : `${selectedMarket.maxLtv}% of collateral value`}
                         </span>
                       </div>
-                      {drawerMode === 'borrow' && (
+                      {drawerMode === 'borrowDebt' && (
                         <div className={styles.infoRow}>
                           <span>Health Factor:</span>
                           <span className={styles.warning}>1.45</span>
@@ -448,14 +436,17 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
                       <button
                         onClick={handleSubmit}
                         disabled={submitting || inputAmount <= 0 || inputAmount > userBalance}
-                        className={`${styles.submitBtn} ${drawerMode === 'supply' ? styles.supplyBtn : styles.borrowBtn}`}
+                        className={`${styles.submitBtn} ${drawerMode !== 'borrowDebt' ? styles.supplyBtn : styles.borrowBtn}`}
                       >
-                        {submitting 
-                          ? `${drawerMode === 'supply' ? 'Supplying' : 'Borrowing'}...`
-                          : inputAmount <= 0 
-                            ? `Enter amount to ${drawerMode}`
-                            : `${drawerMode === 'supply' ? 'Supply' : 'Borrow'} ${inputAmount.toLocaleString()} ${selectedPool.token.symbol}`
-                        }
+                        {submitting
+                          ? (drawerMode === 'supplyDebt' ? 'Supplying...' : drawerMode === 'depositCollat' ? 'Depositing...' : 'Borrowing...')
+                          : inputAmount <= 0
+                            ? `Enter amount to ${drawerMode === 'supplyDebt' ? 'supply' : drawerMode === 'depositCollat' ? 'deposit' : 'borrow'}`
+                            : drawerMode === 'supplyDebt'
+                              ? `Supply ${inputAmount.toLocaleString()} USDC`
+                              : drawerMode === 'depositCollat'
+                                ? `Deposit ${inputAmount.toLocaleString()} ${selectedMarket.collateral.symbol}`
+                                : `Borrow ${inputAmount.toLocaleString()} USDC`}
                       </button>
                     )}
                   </div>
@@ -465,60 +456,72 @@ export function LendingScreen({ started: _started, network, protocolStatus }: {
                   <div className={styles.drawerDetailCard}>
                     <h4>Pool Information</h4>
                     <div className={styles.drawerDetailRow}>
-                      <span>Total Supply:</span>
-                      <span>{formatNumber(selectedPool.totalSupply)}</span>
+                      <span>Total USDC Supply:</span>
+                      <span>{formatNumber(selectedMarket.totalSupplyDebt)}</span>
                     </div>
                     <div className={styles.drawerDetailRow}>
-                      <span>Total Borrow:</span>
-                      <span>{formatNumber(selectedPool.totalBorrow)}</span>
+                      <span>Total USDC Borrow:</span>
+                      <span>{formatNumber(selectedMarket.totalBorrowDebt)}</span>
                     </div>
                     <div className={styles.drawerDetailRow}>
-                      <span>Available Liquidity:</span>
-                      <span>{formatNumber(selectedPool.totalLiquidity)}</span>
+                      <span>USDC Liquidity:</span>
+                      <span>{formatNumber(selectedMarket.totalLiquidityDebt)}</span>
                     </div>
                     <div className={styles.drawerDetailRow}>
                       <span>Max LTV:</span>
-                      <span>{selectedPool.maxLtv}%</span>
+                      <span>{selectedMarket.maxLtv}%</span>
                     </div>
                     <div className={styles.drawerDetailRow}>
                       <span>Liquidation Threshold:</span>
-                      <span>{selectedPool.liquidationThreshold}%</span>
+                      <span>{selectedMarket.liquidationThreshold}%</span>
                     </div>
                     <div className={styles.drawerDetailRow}>
                       <span>Reserve Factor:</span>
-                      <span>{selectedPool.reserveFactor}%</span>
+                      <span>{selectedMarket.reserveFactor}%</span>
                     </div>
                   </div>
                   
                   <div className={styles.drawerDetailCard}>
                     <h4>Your Position</h4>
-                    {selectedPool.userSupplied || selectedPool.userBorrowed ? (
+                    {selectedMarket.userSuppliedDebt || selectedMarket.userBorrowedDebt || selectedMarket.userCollateral ? (
                       <>
-                        {selectedPool.userSupplied && (
+                        {selectedMarket.userSuppliedDebt && (
                           <div className={styles.drawerDetailRow}>
-                            <span>Supplied:</span>
-                            <span className={styles.positive}>{formatNumber(selectedPool.userSupplied)}</span>
+                            <span>Supplied (USDC):</span>
+                            <span className={styles.positive}>{formatNumber(selectedMarket.userSuppliedDebt)}</span>
                           </div>
                         )}
-                        {selectedPool.userBorrowed && (
+                        {selectedMarket.userCollateral && (
                           <div className={styles.drawerDetailRow}>
-                            <span>Borrowed:</span>
-                            <span className={styles.negative}>{formatNumber(selectedPool.userBorrowed)}</span>
+                            <span>Collateral ({selectedMarket.collateral.symbol}):</span>
+                            <span>{formatNumber(selectedMarket.userCollateral)}</span>
+                          </div>
+                        )}
+                        {selectedMarket.userBorrowedDebt && (
+                          <div className={styles.drawerDetailRow}>
+                            <span>Borrowed (USDC):</span>
+                            <span className={styles.negative}>{formatNumber(selectedMarket.userBorrowedDebt)}</span>
                           </div>
                         )}
                       </>
                     ) : (
                       <div className={styles.drawerEmptyPosition}>
                         <span>No active positions</span>
-                        <span>Start by supplying or borrowing {selectedPool.token.symbol}</span>
+                        <span>Start by supplying USDC, depositing collateral, or borrowing USDC</span>
                       </div>
                     )}
                     
                     <div className={styles.drawerDetailRow}>
-                      <span>Token Contract:</span>
+                      <span>Collateral Type:</span>
                       <span className={styles.contractAddress}>
-                        {getTokenTypeTag(selectedPool.token).slice(0, 20)}...
+                        {getTokenTypeTag(selectedMarket.collateral).slice(0, 20)}...
             </span>
+                    </div>
+                    <div className={styles.drawerDetailRow}>
+                      <span>Debt Type:</span>
+                      <span className={styles.contractAddress}>
+                        {getTokenTypeTag(selectedMarket.debt).slice(0, 20)}...
+                      </span>
                     </div>
                   </div>
                 </div>
