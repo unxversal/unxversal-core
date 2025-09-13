@@ -181,7 +181,7 @@ module unxversal::fees {
             pool_creation_fee_unxv: 500,
             lending_borrow_fee_bps: 0,
             lending_collateral_bonus_bps_max: 500, // +5% max bonus by default
-            liq_treasury_bps: 0,
+            liq_treasury_bps: 1000,
             sd_t1_thr: 10, sd_t1_bps: 500,
             sd_t2_thr: 100, sd_t2_bps: 1000,
             sd_t3_thr: 1_000, sd_t3_bps: 1500,
