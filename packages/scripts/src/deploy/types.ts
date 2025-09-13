@@ -63,60 +63,6 @@ export type DeployConfig = {
   oracleFeeds?: Array<{ symbol: string; priceId: string }>;
   oracleMaxAgeSec?: number;
   usdu?: { perAddressLimit?: number; paused?: boolean };
-  /** Synthetic xoptions using EMA pseudo-spot */
-  xoptions?: Array<{
-    marketId?: string;
-    base: SuiTypeTag;
-    quote: SuiTypeTag;
-    tickSize: number;
-    lotSize: number;
-    minSize: number;
-    baseDecimals: number;
-    quoteDecimals: number;
-    series: Array<{ expiryMs: number; strike1e6: number; isCall: boolean; symbol: string }>;
-  }>;
-  /** Synthetic xfutures using EMA pseudo-spot */
-  xfutures?: Array<{
-    marketId?: string;
-    collat: SuiTypeTag;
-    symbol: string;
-    expiryMs: number;
-    contractSize: number;
-    initialMarginBps: number;
-    maintenanceMarginBps: number;
-    liquidationFeeBps: number;
-    keeperIncentiveBps?: number;
-    tickSize: number;
-    lotSize: number;
-    minSize: number;
-    accountMaxNotional1e6?: string;
-    marketMaxNotional1e6?: string;
-    accountShareOfOiBps?: number;
-    tierThresholds1e6?: number[];
-    tierImBps?: number[];
-  }>;
-  /** Synthetic xperps using EMA pseudo-spot */
-  xperps?: Array<{
-    marketId?: string;
-    collat: SuiTypeTag;
-    symbol: string;
-    contractSize: number;
-    fundingIntervalMs: number;
-    initialMark1e6: number;
-    initialMarginBps: number;
-    maintenanceMarginBps: number;
-    liquidationFeeBps: number;
-    keeperIncentiveBps?: number;
-    tickSize: number;
-    lotSize: number;
-    minSize: number;
-    accountMaxNotional1e6?: string;
-    marketMaxNotional1e6?: string;
-    accountShareOfOiBps?: number;
-    tierThresholds1e6?: number[];
-    tierImBps?: number[];
-    ema?: { alphaNum?: number; alphaDen?: number; alphaLongNum?: number; alphaLongDen?: number; capMultipleBps?: number; markGateBps?: number };
-  }>;
   /**
    * Initialize dual-asset lending markets (Collateral → Debt)
    */
@@ -219,6 +165,76 @@ export type DeployConfig = {
     accountShareOfOiBps?: number;
     tierThresholds1e6?: number[];
     tierImBps?: number[];
+  }>;
+  /** Synthetic perpetuals (xperps) without external oracle */
+  xperps?: Array<{
+    marketId?: string;
+    collat: SuiTypeTag;
+    symbol: string; // synthetic symbol, e.g., xOPENAI, xgETH
+    contractSize: number;
+    fundingIntervalMs: number;
+    initialMarginBps: number;
+    maintenanceMarginBps: number;
+    liquidationFeeBps: number;
+    keeperIncentiveBps?: number;
+    tickSize: number;
+    lotSize: number;
+    minSize: number;
+    // caps and tiers
+    accountMaxNotional1e6?: string;
+    marketMaxNotional1e6?: string;
+    accountShareOfOiBps?: number;
+    tierThresholds1e6?: number[];
+    tierImBps?: number[];
+    // EMA params
+    initialMark1e6: number;
+    alphaNum?: number;
+    alphaDen?: number;
+    alphaLongNum?: number;
+    alphaLongDen?: number;
+    capMultipleBps?: number;
+    markGateBps?: number;
+  }>;
+  /** Synthetic dated futures (xfutures) */
+  xfutures?: Array<{
+    marketId?: string;
+    collat: SuiTypeTag;
+    symbol: string; // synthetic underlying name (for grouping)
+    expiryMs: number;
+    contractSize: number;
+    initialMarginBps: number;
+    maintenanceMarginBps: number;
+    liquidationFeeBps: number;
+    keeperIncentiveBps?: number;
+    tickSize: number;
+    lotSize: number;
+    minSize: number;
+    // caps and tiers
+    accountMaxNotional1e6?: string;
+    marketMaxNotional1e6?: string;
+    accountShareOfOiBps?: number;
+    tierThresholds1e6?: number[];
+    tierImBps?: number[];
+    // EMA params
+    initialMark1e6: number;
+    alphaNum?: number;
+    alphaDen?: number;
+    alphaLongNum?: number;
+    alphaLongDen?: number;
+    capMultipleBps?: number;
+    markGateBps?: number;
+  }>;
+  /** Synthetic options (xoptions) */
+  xoptions?: Array<{
+    marketId?: string;
+    base: SuiTypeTag;
+    quote: SuiTypeTag;
+    tickSize: number;
+    lotSize: number;
+    minSize: number;
+    baseDecimals: number;
+    quoteDecimals: number;
+    series: Array<{ expiryMs: number; strike1e6: number; isCall: boolean; underlying: string; initialMark1e6: number }>;
   }>;
   dexPools?: Array<{
     registryId: string;

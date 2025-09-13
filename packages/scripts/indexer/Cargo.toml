@@ -30,4 +30,5 @@ telemetry-subscribers = { git = "https://github.com/MystenLabs/sui.git", rev = "
 sui-pg-db = { git = "https://github.com/MystenLabs/sui.git", rev = "7f45ba185ff0773331d256469c49aefb82542102" }
 move-core-types = { git = "https://github.com/MystenLabs/sui.git", rev = "7f45ba185ff0773331d256469c49aefb82542102" }
 sui-types = { git = "https://github.com/MystenLabs/sui.git", rev = "7f45ba185ff0773331d256469c49aefb82542102" }
+sui-field-count = { git = "https://github.com/MystenLabs/sui.git", rev = "7f45ba185ff0773331d256469c49aefb82542102" }
 

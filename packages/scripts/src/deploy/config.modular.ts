@@ -7,30 +7,15 @@ import { buildLendingMarketsMainnet, buildLendingMarketsTestnet } from './lendin
 import { MAINNET_ORACLE_FEEDS, TESTNET_ORACLE_FEEDS, ORACLE_MAX_AGE_SEC } from './oracle.js';
 import { buildMainnetDexPools, buildTestnetDexPools } from './dex.js';
 import { buildVaults } from './vaults.js';
+import { buildMainnetXPerps, buildTestnetXPerps } from './xperps.js';
+import { buildMainnetXFutureSeries, buildTestnetXFutureSeries } from './xfutures.js';
+import { buildMainnetXOptions, buildTestnetXOptions } from './xoptions.js';
+import { X_ASSET_SETS } from './xassets.js';
 import { TIER_PARAMS, DERIVATIVE_PERP_FUT_SPECS } from './markets.js';
 import type { SuiTypeTag } from './types.js';
 import { generateExpiriesMs } from '../utils/series.js';
-
-// ===== Synthetic asset sets (no overlap across xoptions, xfutures, xperps) =====
-export const X_ASSET_SETS = {
-  privateCos: [
-    'Openai',
-    'Anthropic',
-    'Spacex',
-    'Xai',
-    'Kraken',
-    'Anduril',
-    'Cursor',
-    'Stripe',
-    'Brex',
-    'Discord',
-    'Polymarket',
-    'Kalshi',
-  ],
-  gasPerps: [
-    'ETH', 'POL', 'NEAR', 'SOL', 'ARB', 'BASE', 'AVAX', 'BNB', 'OP',
-  ],
-} as const;
+// Re-export X_ASSET_SETS for modular configs to import if needed
+export { X_ASSET_SETS } from './xassets.js';
 
 // Additional derivatives to enable ONLY for perps/futures (keep Options unaffected)
 // Do NOT add these to DERIVATIVE_SYMBOLS to avoid impacting options deploy
@@ -123,6 +108,10 @@ export const deployConfig: DeployConfig = {
   gasFutures: buildMainnetGasFutures(),
   perpetuals: buildMainnetPerpetuals(),
   dexPools: buildMainnetDexPools(),
+  // x- synthetic defaults (empty unless overridden in a modular config)
+  xperps: buildMainnetXPerps(),
+  xfutures: buildMainnetXFutureSeries(),
+  xoptions: buildMainnetXOptions(),
   vaults: buildVaults(),
 };
 
@@ -157,6 +146,26 @@ export const testnetDeployConfig: DeployConfig = {
   perpetuals: [
     ...buildTestnetPerpetuals(),
     ...EXTRA_PERPS_TESTNET,
+  ],
+  xperps: [
+    // Example wiring for synthetic sets (commented by default):
+    // ...X_ASSET_SETS.privateCos.map((s) => ({
+    //   collat: USDC_TESTNET_TYPE,
+    //   symbol: s,
+    //   contractSize: 1_000_000,
+    //   fundingIntervalMs: 3_600_000,
+    //   initialMarginBps: 800, maintenanceMarginBps: 500, liquidationFeeBps: 100,
+    //   tickSize: 10_000, lotSize: 1, minSize: 1,
+    //   initialMark1e6: 1_000_000,
+    // })),
+    ...buildTestnetXPerps(),
+  ],
+  xfutures: [
+    // ...generate from X_ASSET_SETS with expiries if desired
+    ...buildTestnetXFutureSeries(),
+  ],
+  xoptions: [
+    ...buildTestnetXOptions(),
   ],
   dexPools: buildTestnetDexPools(),
   vaults: buildVaults(),

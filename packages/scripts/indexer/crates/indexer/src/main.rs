@@ -76,7 +76,24 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Pipeline: generic Unxv events
     indexer
-        .concurrent_pipeline(UnxvEventsHandler::new(None), Default::default())
+        .concurrent_pipeline(
+            UnxvEventsHandler::new(Some(vec![
+                "dex",
+                "futures",
+                "gas_futures",
+                "lending",
+                "options",
+                "perpetuals",
+                "rewards",
+                "staking",
+                "unxv",
+                "usdu",
+                "xfutures",
+                "xoptions",
+                "xperps",
+            ])),
+            Default::default(),
+        )
         .await?;
 
     let h_indexer = indexer.run().await?;
