@@ -772,6 +772,7 @@ module unxversal::options {
                         event::emit(WriterClaimed { key, writer: ctx.sender(), amount_base: 0, amount_quote: to_pay, timestamp_ms: clock.timestamp_ms() });
                         return (coin::zero<Base>(ctx), qout)
                     };
+                    
                 } else {
                     let pool_b = balance::value(&ser.pooled_base) as u128;
                     let to_pay_b_u128 = if (gross <= pool_b) { gross } else { pool_b };
