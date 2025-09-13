@@ -55,6 +55,8 @@ module unxversal::gas_futures {
         maintenance_margin_bps: u64,
         liquidation_fee_bps: u64,
         keeper_incentive_bps: u64,
+        /// Portion of liquidation penalty routed to treasury (via FeeVault), in bps (from FeeConfig)
+        // removed local storage; read from FeeConfig
         close_only: bool,
         max_deviation_bps: u64,
         last_price_1e6: u64,
@@ -133,6 +135,9 @@ module unxversal::gas_futures {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         market.keeper_incentive_bps = keeper_bps;
     }
+
+    /// Admin: set liquidation treasury share bps (taken from the liquidation penalty).
+    // Keeper note: liq treasury bps is read from FeeConfig
 
     public fun set_close_only<Collat>(reg_admin: &AdminRegistry, market: &mut GasMarket<Collat>, enabled: bool, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
@@ -504,7 +509,7 @@ module unxversal::gas_futures {
         let pen = ((notional_1e6 * (market.liquidation_fee_bps as u128)) / (fees::bps_denom() as u128) / (1_000_000u128)) as u64;
         let have = balance::value(&acc.collat);
         let pay = if (pen <= have) { pen } else { have };
-        if (pay > 0) { let keeper_bps: u64 = market.keeper_incentive_bps; let keeper_cut: u64 = ((pay as u128) * (keeper_bps as u128) / (fees::bps_denom() as u128)) as u64; let mut pen_coin = coin::from_balance(balance::split(&mut acc.collat, pay), ctx); if (keeper_cut > 0) { let kc = coin::split(&mut pen_coin, keeper_cut, ctx); transfer::public_transfer(kc, ctx.sender()); }; fees::pnl_deposit<Collat>(vault, pen_coin); };
+        if (pay > 0) { let keeper_bps: u64 = market.keeper_incentive_bps; let keeper_cut: u64 = ((pay as u128) * (keeper_bps as u128) / (fees::bps_denom() as u128)) as u64; let treasury_bps: u64 = fees::liq_treasury_bps(cfg); let treasury_cut: u64 = ((pay as u128) * (treasury_bps as u128) / (fees::bps_denom() as u128)) as u64; let mut pen_coin = coin::from_balance(balance::split(&mut acc.collat, pay), ctx); if (keeper_cut > 0) { let kc = coin::split(&mut pen_coin, keeper_cut, ctx); transfer::public_transfer(kc, ctx.sender()); }; if (treasury_cut > 0) { let tc = coin::split(&mut pen_coin, treasury_cut, ctx); fees::route_fee<Collat>(vault, tc, clock, ctx); }; fees::pnl_deposit<Collat>(vault, pen_coin); };
         store_account<Collat>(market, victim, acc);
         event::emit(Liquidated { market_id: object::id(market), who: victim, qty_closed: closed, exec_price_1e6: px, penalty_collat: pay, timestamp_ms: clock.timestamp_ms() });
         // Rewards: liquidation credit

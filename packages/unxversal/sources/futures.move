@@ -86,6 +86,8 @@ module unxversal::futures {
         maintenance_margin_bps: u64,
         liquidation_fee_bps: u64,
         keeper_incentive_bps: u64,
+        /// Portion of liquidation penalty routed to treasury (via FeeVault), in bps (from FeeConfig)
+        // removed local storage; read from FeeConfig
         /// Close-only mode toggle (true allows only trades that reduce exposure for the account)
         close_only: bool,
         /// Max allowed price deviation vs last accepted price, in bps (0 disables gating)
@@ -237,6 +239,14 @@ module unxversal::futures {
     public fun set_keeper_incentive_bps<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, keeper_bps: u64, ctx: &TxContext) {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         market.keeper_incentive_bps = keeper_bps;
+    }
+
+    /// Admin: set liquidation treasury share bps (taken from the liquidation penalty).
+    public fun set_liq_treasury_bps<Collat>(reg_admin: &AdminRegistry, market: &mut FuturesMarket<Collat>, bps: u64, ctx: &TxContext) {
+        assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
+        // Keep within bounds
+        assert!(bps <= fees::bps_denom(), E_EXPOSURE_CAP);
+        market.liq_treasury_bps = bps;
     }
 
     /// Admin: set close-only mode
@@ -724,8 +734,11 @@ module unxversal::futures {
         if (pay > 0) {
             let keeper_bps: u64 = market.keeper_incentive_bps;
             let keeper_cut: u64 = ((pay as u128) * (keeper_bps as u128) / (fees::bps_denom() as u128)) as u64;
+            let treasury_bps: u64 = fees::liq_treasury_bps(cfg);
+            let treasury_cut: u64 = ((pay as u128) * (treasury_bps as u128) / (fees::bps_denom() as u128)) as u64;
             let mut pen_coin = coin::from_balance(balance::split(&mut acc.collat, pay), ctx);
             if (keeper_cut > 0) { let kc = coin::split(&mut pen_coin, keeper_cut, ctx); transfer::public_transfer(kc, ctx.sender()); };
+            if (treasury_cut > 0) { let tc = coin::split(&mut pen_coin, treasury_cut, ctx); fees::route_fee<Collat>(vault, tc, clock, ctx); };
             fees::pnl_deposit<Collat>(vault, pen_coin);
         };
 

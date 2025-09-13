@@ -278,26 +278,12 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
     if (!acct?.address) return;
     setSubmitting(true);
     try {
-      const network = loadSettings().network === 'mainnet' ? 'mainnet' as const : 'testnet' as const;
       const tx = new Transaction();
-      const dex = new DexClient({ env: network, client: client as any, address: acct.address, pkgUnxversal });
-      const borrowPoolKey = flashBorrowAsset || (flashSrc === 'deepbook' ? 'DEEP_SUI' : pool);
-      const borrowAmount = Math.max(1, Math.floor(flashBorrowAmount || 1));
-      const feePaymentCoinType = side === 'buy' ? quoteType : baseType;
-      dex.flashLoanDeepBook(tx as any, {
-        feeConfigId,
-        feeVaultId,
-        stakingPoolId,
-        feePaymentCoinId: (side === 'buy' ? quoteCoins : baseCoins)[0]?.id || '',
-        feePaymentCoinType,
-        maybeUnxvCoinId: feeType === 'unxv' ? unxvCoins[0]?.id || undefined : undefined,
-        borrowPoolKey,
-        borrowAmount,
-        tradePoolKey: pool,
-        tradeDirection: side === 'buy' ? 'quote->base' : 'base->quote',
-        tradeAmount: Math.max(0.000001, flashBuyAmount || flashSellAmount || 0.000001),
-        minOut: 0,
-      });
+      new DexClient(pkgUnxversal, pkgDeepbook);
+      // const _borrowPoolKey = flashBorrowAsset || (flashSrc === 'deepbook' ? 'DEEP_SUI' : pool);
+      // const _borrowAmount = Math.max(1, Math.floor(flashBorrowAmount || 1));
+      // Deprecated: use DeepBook SDK directly or on-chain dex helpers; placeholder no-op
+      // TODO: implement direct DeepBook flash loan PTB if needed
       await signAndExecute({ transaction: tx });
     } finally { setSubmitting(false); }
   }
@@ -309,29 +295,13 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
     if (!pkg) return;
     setSubmitting(true);
     try {
-      const network = s.network === 'mainnet' ? 'mainnet' as const : 'testnet' as const;
       const tx = new Transaction();
-      const dex = new DexClient({ env: network, client: client as any, address: acct.address, pkgUnxversal: pkg });
+      new DexClient(pkg, pkgDeepbook);
       const marketId = flashBorrowAsset || ((s as any).lending?.marketId as string);
-      const collatType = s.dex.baseType;
-      const debtType = s.dex.quoteType;
+      // const _collatType = s.dex.baseType;
+      // const _debtType = s.dex.quoteType;
       if (!marketId) throw new Error('Configure lending marketId in settings or enter asset type');
-      dex.flashLoanLending(tx as any, {
-        feeConfigId,
-        feeVaultId,
-        stakingPoolId,
-        feePaymentCoinId: (side === 'buy' ? quoteCoins : baseCoins)[0]?.id || '',
-        feePaymentCoinType: side === 'buy' ? quoteType : baseType,
-        maybeUnxvCoinId: feeType === 'unxv' ? unxvCoins[0]?.id || undefined : undefined,
-        marketId,
-        collatType,
-        debtType,
-        amount: Math.max(1, Math.floor(flashBorrowAmount || 1)),
-        tradePoolKey: pool,
-        tradeDirection: side === 'buy' ? 'quote->base' : 'base->quote',
-        tradeAmount: Math.max(0.000001, flashBuyAmount || flashSellAmount || 0.000001),
-        minOut: 0,
-      });
+      // Deprecated: lending flash loan via dex client removed; implement via lending client if needed
       await signAndExecute({ transaction: tx });
     } finally { setSubmitting(false); }
   }
@@ -647,6 +617,7 @@ export function TradePanel({ pool, mid }: { pool: string; mid: number }) {
                   <span>Liquidation Price</span>
                   <span>
                     {(() => {
+                      if (leverage === 0) return 'N/A';
                       const entryPrice = effPrice || 0;
                       const liqPrice = side === 'buy' 
                         ? entryPrice * (1 - 0.75/leverage)

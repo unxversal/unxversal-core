@@ -87,6 +87,8 @@ module unxversal::fees {
         sd_t4_thr: u64, sd_t4_bps: u64,
         sd_t5_thr: u64, sd_t5_bps: u64,
         sd_t6_thr: u64, sd_t6_bps: u64,
+        /// Treasury share of liquidation penalties (bps of penalty amount)
+        liq_treasury_bps: u64,
     }
 
     /// Generic key wrapper for storing balances in a Bag
@@ -179,6 +181,7 @@ module unxversal::fees {
             pool_creation_fee_unxv: 500,
             lending_borrow_fee_bps: 0,
             lending_collateral_bonus_bps_max: 500, // +5% max bonus by default
+            liq_treasury_bps: 0,
             sd_t1_thr: 10, sd_t1_bps: 500,
             sd_t2_thr: 100, sd_t2_bps: 1000,
             sd_t3_thr: 1_000, sd_t3_bps: 1500,
@@ -483,6 +486,7 @@ module unxversal::fees {
     public fun pool_creation_fee_unxv(cfg: &FeeConfig): u64 { cfg.pool_creation_fee_unxv }
     public fun lending_borrow_fee_bps(cfg: &FeeConfig): u64 { cfg.lending_borrow_fee_bps }
     public fun lending_collateral_bonus_bps_max(cfg: &FeeConfig): u64 { cfg.lending_collateral_bonus_bps_max }
+    public fun liq_treasury_bps(cfg: &FeeConfig): u64 { cfg.liq_treasury_bps }
     public fun futures_maker_rebate_bps(cfg: &FeeConfig): u64 { cfg.futures_maker_rebate_bps }
     public fun gasfut_maker_rebate_bps(cfg: &FeeConfig): u64 { cfg.gasfut_maker_rebate_bps }
     public fun perps_maker_rebate_bps(cfg: &FeeConfig): u64 { cfg.perps_maker_rebate_bps }

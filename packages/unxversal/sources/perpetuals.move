@@ -72,6 +72,8 @@ module unxversal::perpetuals {
         last_funding_ms: u64,
         funding_vault: Balance<Collat>,
         keeper_incentive_bps: u64,
+        /// Portion of liquidation penalty routed to treasury (via FeeVault), in bps (from FeeConfig)
+        // removed local storage; read from FeeConfig
         /// Max account gross notional in 1e6 units (0 = unlimited)
         account_max_notional_1e6: u128,
         /// Max market gross notional in 1e6 units (0 = unlimited)
@@ -179,6 +181,8 @@ module unxversal::perpetuals {
         assert!(AdminMod::is_admin(reg_admin, ctx.sender()), E_NOT_ADMIN);
         market.keeper_incentive_bps = keeper_bps;
     }
+
+    // Keeper note: liq treasury bps is read from FeeConfig
 
     // contract caps removed (deprecated)
 
@@ -585,11 +589,14 @@ module unxversal::perpetuals {
         let have = balance::value(&acc.collat);
         let pay = if (pen <= have) { pen } else { have };
         if (pay > 0) {
-            // Split keeper incentive and deposit remainder into PnL bucket
+            // Split keeper incentive and deposit remainder into PnL bucket, routing treasury cut via FeeVault
             let keeper_bps: u64 = market.keeper_incentive_bps;
             let keeper_cut: u64 = ((pay as u128) * (keeper_bps as u128) / (fees::bps_denom() as u128)) as u64;
+            let treasury_bps: u64 = fees::liq_treasury_bps(cfg);
+            let treasury_cut: u64 = ((pay as u128) * (treasury_bps as u128) / (fees::bps_denom() as u128)) as u64;
             let mut pen_coin = coin::from_balance(balance::split(&mut acc.collat, pay), ctx);
             if (keeper_cut > 0) { let kc = coin::split(&mut pen_coin, keeper_cut, ctx); transfer::public_transfer(kc, ctx.sender()); };
+            if (treasury_cut > 0) { let tc = coin::split(&mut pen_coin, treasury_cut, ctx); fees::route_fee<Collat>(vault, tc, clock, ctx); };
             fees::pnl_deposit<Collat>(vault, pen_coin);
         };
 
