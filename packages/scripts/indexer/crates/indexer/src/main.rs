@@ -25,15 +25,36 @@ struct Args {
     metrics_address: SocketAddr,
     #[clap(env, long, default_value = "postgres://postgres:postgrespw@localhost:5432/unxv_indexer")]
     database_url: Url,
+    /// Optional positional network: mainnet | testnet
+    #[clap(value_enum)]
+    network: Option<UnxvEnv>,
+    /// Optional flag/env override for network
     #[clap(env, long)]
-    env: UnxvEnv,
+    env: Option<UnxvEnv>,
 }
+
+const BANNER: &str = r#"
+██╗░░░██╗███╗░░██╗██╗░░██╗██╗░░░██╗██╗███╗░░██╗██████╗░███████╗██╗░░██╗███████╗██████╗░
+██║░░░██║████╗░██║╚██╗██╔╝██║░░░██║██║████╗░██║██╔══██╗██╔════╝╚██╗██╔╝██╔════╝██╔══██╗
+██║░░░██║██╔██╗██║░╚███╔╝░╚██╗░██╔╝██║██╔██╗██║██║░░██║█████╗░░░╚███╔╝░█████╗░░██████╔╝
+██║░░░██║██║╚████║░██╔██╗░░╚████╔╝░██║██║╚████║██║░░██║██╔══╝░░░██╔██╗░██╔══╝░░██╔══██╗
+╚██████╔╝██║░╚███║██╔╝╚██╗░░╚██╔╝░░██║██║░╚███║██████╔╝███████╗██╔╝╚██╗███████╗██║░░██║
+░╚═════╝░╚═╝░░╚══╝╚═╝░░╚═╝░░░╚═╝░░░╚═╝╚═╝░░╚══╝╚═════╝░╚══════╝╚═╝░░╚═╝╚══════╝╚═╝░░╚═╝
+"#;
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let _guard = telemetry_subscribers::TelemetryConfig::new().with_env().init();
 
-    let Args { db_args, indexer_args, metrics_address, database_url, env } = Args::parse();
+    let args = Args::parse();
+    let env = args.env.or(args.network).unwrap_or(UnxvEnv::Mainnet);
+    let Args { db_args, indexer_args, metrics_address, database_url, .. } = args;
+
+    println!("{}", BANNER);
+    println!("Unxversal Indexer starting...");
+    println!("Network:   {:?}", env);
+    println!("Database:  {}", database_url);
+    println!("Metrics:   {}", metrics_address);
 
     let cancel = CancellationToken::new();
     let registry = Registry::new_custom(Some("unxv".into()), None)
@@ -75,6 +96,10 @@ async fn main() -> Result<(), anyhow::Error> {
     .await?;
 
     // Pipeline: generic Unxv events
+    // Allowlist package addresses from env var UNXV_PACKAGE_IDS (comma-separated), e.g. "0xabc,0xdef"
+    let package_allowlist: Option<Vec<String>> = std::env::var("UNXV_PACKAGE_IDS")
+        .ok()
+        .map(|s| s.split(',').map(|x| x.trim().to_ascii_lowercase()).filter(|x| !x.is_empty()).collect());
     indexer
         .concurrent_pipeline(
             UnxvEventsHandler::new(Some(vec![
@@ -91,7 +116,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 "xfutures",
                 "xoptions",
                 "xperps",
-            ])),
+            ]), package_allowlist),
             Default::default(),
         )
         .await?;

@@ -990,6 +990,50 @@ async function deployXFutureSeries(client: SuiClient, cfg: DeployConfig, keypair
           liquidationFeeBps: f.liquidationFeeBps,
           keeperIncentiveBps: (f as any).keeperIncentiveBps ?? 0,
         } as any);
+        // Optional post-init caps and tiers
+        if ((f as any).accountMaxNotional1e6 || (f as any).marketMaxNotional1e6) {
+          const t = new Transaction();
+          t.moveCall({ target: `${cfg.pkgId}::xfutures::set_notional_caps`, typeArguments: [f.collat], arguments: [
+            t.object(cfg.adminRegistryId), t.object(id),
+            t.pure.u128(BigInt((f as any).accountMaxNotional1e6 || '0')),
+            t.pure.u128(BigInt((f as any).marketMaxNotional1e6 || '0')),
+          ] as any });
+          await execTx(client, t, keypair, `xfutures.set_notional_caps ${f.symbol}`);
+        }
+        if (typeof (f as any).accountShareOfOiBps === 'number') {
+          const t = new Transaction();
+          t.moveCall({ target: `${cfg.pkgId}::xfutures::set_share_of_oi_bps`, typeArguments: [f.collat], arguments: [
+            t.object(cfg.adminRegistryId), t.object(id), t.pure.u64((f as any).accountShareOfOiBps),
+          ] });
+          await execTx(client, t, keypair, `xfutures.set_share_of_oi_bps ${f.symbol}`);
+        }
+        if ((f as any).tierThresholds1e6 && (f as any).tierImBps) {
+          const thresholds = (f as any).tierThresholds1e6 as number[];
+          const imbps = (f as any).tierImBps as number[];
+          const t = new Transaction();
+          t.moveCall({ target: `${cfg.pkgId}::xfutures::set_risk_tiers`, typeArguments: [f.collat], arguments: [
+            t.object(cfg.adminRegistryId), t.object(id), t.pure.vector('u64', thresholds), t.pure.vector('u64', imbps),
+          ] as any });
+          await execTx(client, t, keypair, `xfutures.set_risk_tiers ${f.symbol}`);
+        }
+        if (typeof (f as any).pnlFeeShareBps === 'number') {
+          const t = new Transaction();
+          t.moveCall({ target: `${cfg.pkgId}::xfutures::set_pnl_fee_share_bps`, typeArguments: [f.collat], arguments: [
+            t.object(cfg.adminRegistryId), t.object(id), t.pure.u64((f as any).pnlFeeShareBps),
+          ] });
+          await execTx(client, t, keypair, `xfutures.set_pnl_fee_share_bps ${f.symbol}`);
+        }
+        // EMA params for xfutures index
+        if ((f as any).alphaNum || (f as any).capMultipleBps || (f as any).markGateBps) {
+          const t = new Transaction();
+          t.moveCall({ target: `${cfg.pkgId}::xfutures::set_ema_params`, typeArguments: [f.collat], arguments: [
+            t.object(cfg.adminRegistryId), t.object(id),
+            t.pure.u64((f as any).alphaNum ?? 1), t.pure.u64((f as any).alphaDen ?? 480),
+            t.pure.u64((f as any).alphaLongNum ?? 1), t.pure.u64((f as any).alphaLongDen ?? 43200),
+            t.pure.u64((f as any).capMultipleBps ?? 40000), t.pure.u64((f as any).markGateBps ?? 0),
+          ] });
+          await execTx(client, t, keypair, `xfutures.set_ema_params ${f.symbol}`);
+        }
       }
     }
   }

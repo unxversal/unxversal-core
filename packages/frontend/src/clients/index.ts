@@ -7,5 +7,8 @@ export { PerpetualsClient } from './perpetuals';
 export { LendingClient } from './lending';
 export { DexClient } from './dex';
 export { BridgeClient } from './bridge';
+export { XPerpsClient } from './xperps.ts';
+export { XFutureClient } from './xfutures.ts';
+export { XOptionsClient } from './xoptions.ts';
 
 

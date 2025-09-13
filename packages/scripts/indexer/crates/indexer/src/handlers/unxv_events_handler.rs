@@ -17,12 +17,15 @@ use unxv_schema::schema::unxv_events;
 pub struct UnxvEventsHandler {
     /// Lowercased module names to accept (e.g. "futures", "perpetuals"). Empty => accept all modules under unxversal.
     modules_filter: Option<HashSet<String>>,
+    /// Lowercased 0x package addresses to accept (comma-separated allowlist). Empty => accept any.
+    package_allowlist: Option<HashSet<String>>,
 }
 
 impl UnxvEventsHandler {
-    pub fn new(modules_filter: Option<Vec<&str>>) -> Self {
+    pub fn new(modules_filter: Option<Vec<&str>>, package_allowlist: Option<Vec<String>>) -> Self {
         let modules_filter = modules_filter.map(|v| v.into_iter().map(|s| s.to_ascii_lowercase()).collect());
-        Self { modules_filter }
+        let package_allowlist = package_allowlist.map(|v| v.into_iter().map(|s| s.to_ascii_lowercase()).collect());
+        Self { modules_filter, package_allowlist }
     }
 
     fn allow_module(&self, module: &str) -> bool {
@@ -50,7 +53,12 @@ impl Processor for UnxvEventsHandler {
                 let type_tag = &ev.type_;
                 let module_name = type_tag.module.to_string();
                 let struct_name = type_tag.name.to_string();
+                // package address as 0x string
+                let addr_hex = type_tag.address.to_string().to_ascii_lowercase();
                 if !self.allow_module(&module_name) { continue; }
+                if let Some(allow) = &self.package_allowlist {
+                    if !allow.contains(&addr_hex) { continue; }
+                }
 
                 let type_params = serde_json::json!(type_tag.type_params.iter().map(|t| t.to_string()).collect::<Vec<_>>());
                 let event_digest = format!("{digest}{idx}");
