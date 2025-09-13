@@ -1,0 +1,15 @@
+[package]
+name = "unxv-schema"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+diesel = { workspace = true }
+diesel_migrations = { workspace = true }
+serde = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+

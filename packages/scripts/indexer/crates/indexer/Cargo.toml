@@ -1,0 +1,39 @@
+[package]
+name = "unxv-indexer"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+tokio = { workspace = true }
+clap = { workspace = true, features = ["env"] }
+diesel = { workspace = true }
+diesel-async = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+bcs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+url = { workspace = true }
+tokio-util = { workspace = true }
+prometheus = { workspace = true }
+
+sui-indexer-alt-framework = { workspace = true }
+sui-indexer-alt-metrics = { workspace = true }
+telemetry-subscribers = { workspace = true }
+sui-pg-db = { workspace = true }
+move-core-types = { workspace = true }
+sui-types = { workspace = true }
+
+unxv-schema = { path = "../schema" }
+
+[dev-dependencies]
+chrono = "0.4.39"
+serde_json = { workspace = true }
+
+[[bin]]
+name = "unxv-indexer"
+path = "src/main.rs"
+

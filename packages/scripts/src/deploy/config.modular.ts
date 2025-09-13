@@ -11,6 +11,27 @@ import { TIER_PARAMS, DERIVATIVE_PERP_FUT_SPECS } from './markets.js';
 import type { SuiTypeTag } from './types.js';
 import { generateExpiriesMs } from '../utils/series.js';
 
+// ===== Synthetic asset sets (no overlap across xoptions, xfutures, xperps) =====
+export const X_ASSET_SETS = {
+  privateCos: [
+    'Openai',
+    'Anthropic',
+    'Spacex',
+    'Xai',
+    'Kraken',
+    'Anduril',
+    'Cursor',
+    'Stripe',
+    'Brex',
+    'Discord',
+    'Polymarket',
+    'Kalshi',
+  ],
+  gasPerps: [
+    'ETH', 'POL', 'NEAR', 'SOL', 'ARB', 'BASE', 'AVAX', 'BNB', 'OP',
+  ],
+} as const;
+
 // Additional derivatives to enable ONLY for perps/futures (keep Options unaffected)
 // Do NOT add these to DERIVATIVE_SYMBOLS to avoid impacting options deploy
 const EXTRA_DERIVATIVE_SYMBOLS_TESTNET = [

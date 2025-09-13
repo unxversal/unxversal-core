@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/schema",
+    "crates/indexer",
+]
+
+[workspace.package]
+edition = "2021"
+
+[workspace.dependencies]
+tokio = "1.45.1"
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.140"
+diesel = { version = "2.2.7", default-features = false, features = ["postgres", "chrono", "serde_json", "numeric"] }
+diesel-async = { version = "0.5.2", features = ["bb8", "postgres"] }
+diesel_migrations = "2.2.0"
+anyhow = "1.0.98"
+tracing = "0.1.41"
+clap = { version = "4.5.31", features = ["env", "derive"] }
+async-trait = "0.1.83"
+bcs = "0.1.6"
+url = "2.5.4"
+prometheus = "0.13.4"
+tokio-util = "0.7.13"
+
+sui-indexer-alt-framework = { git = "https://github.com/MystenLabs/sui.git", rev = "7f45ba185ff0773331d256469c49aefb82542102" }
+sui-indexer-alt-metrics = { git = "https://github.com/MystenLabs/sui.git", rev = "7f45ba185ff0773331d256469c49aefb82542102" }
+telemetry-subscribers = { git = "https://github.com/MystenLabs/sui.git", rev = "7f45ba185ff0773331d256469c49aefb82542102" }
+sui-pg-db = { git = "https://github.com/MystenLabs/sui.git", rev = "7f45ba185ff0773331d256469c49aefb82542102" }
+move-core-types = { git = "https://github.com/MystenLabs/sui.git", rev = "7f45ba185ff0773331d256469c49aefb82542102" }
+sui-types = { git = "https://github.com/MystenLabs/sui.git", rev = "7f45ba185ff0773331d256469c49aefb82542102" }
+

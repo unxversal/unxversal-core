@@ -10,6 +10,7 @@ import { useCurrentAccount } from '@mysten/dapp-kit'
 import styles from './components/AppShell.module.css'
 import Navbar from './components/Layout/Navbar'
 import { StakingWrapper } from './newui/staking'
+import { LendingWrapper } from './newui/lending'
 import { DexScreen } from './components/dex/DexScreen'
 import { GasFuturesScreen } from './components/gas-futures/GasFuturesScreen'
 import { FuturesScreen } from './components/futures/FuturesScreen'
@@ -155,7 +156,11 @@ function App() {
       <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'lending' || view === 'staking' || view === 'swap' ? styles.mainDex : styles.main}>
         {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'gas' && <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
-        {view === 'lending' && <LendingScreen started={started} network={network} protocolStatus={protocolStatus} />}
+        {view === 'lending' && (
+          useNewUi
+            ? <LendingWrapper useSampleData={useSampleData} />
+            : <LendingScreen started={started} network={network} protocolStatus={protocolStatus} />
+        )}
         {view === 'staking' && (
           useNewUi
             ? <StakingWrapper useSampleData={useSampleData} />
