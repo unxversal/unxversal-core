@@ -1,0 +1,196 @@
+.root { 
+  height: 100%; 
+  display: grid; 
+  box-sizing: border-box;
+  grid-template-columns: 40px 1fr minmax(400px, 500px); 
+  grid-template-rows: 44px minmax(0, 1fr) 200px; 
+  gap: 6px; 
+  padding: 6px; 
+  overflow: hidden;
+  background: #030507;
+}
+
+.priceCard { 
+  grid-column: 1 / 3; 
+  grid-row: 1 / 2; 
+  background: #0a0c12; 
+  border-radius: 8px; 
+  overflow: hidden;
+}
+
+.pairBar { 
+  display: flex; 
+  align-items: center; 
+  justify-content: space-between; 
+  gap: 16px;
+  padding: 0 12px; 
+  background: #0a0c12;
+  height: 44px;
+}
+
+.pair { 
+  font-weight: 600; 
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pairIcon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+
+.metrics { 
+  display: flex; 
+  gap: 16px; 
+  align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.metricItem {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.metricValue {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e5e7eb;
+  text-align: right;
+}
+
+.metricLabel {
+  font-size: 9px;
+  color: #9ca3af;
+  text-transform: uppercase;
+  font-weight: 500;
+  text-align: right;
+}
+
+.positive { color: #10b981; }
+.negative { color: #ef4444; }
+
+.toolboxCard { 
+  grid-column: 1 / 2; 
+  grid-row: 2 / 3; 
+  background: #0a0c12; 
+  border-radius: 8px; 
+  overflow: hidden;
+}
+
+.toolbox { 
+  width: 100%;
+  height: 100%;
+  display: flex; 
+  flex-direction: column; 
+  gap: 2px; 
+  padding: 8px 1px;
+  border-radius: 8px;
+  overflow-y: auto;
+  overflow-x: visible;
+  min-height: 0;
+  max-height: 100%;
+}
+.toolbox::-webkit-scrollbar { 
+  width: 4px;
+}
+.toolbox::-webkit-scrollbar-track {
+  background: transparent;
+}
+.toolbox::-webkit-scrollbar-thumb {
+  background: #2a2d3a;
+  border-radius: 2px;
+}
+.toolbox::-webkit-scrollbar-thumb:hover {
+  background: #3b82f6;
+}
+.toolbox button { 
+  background: transparent; 
+  border: none; 
+  color: #9ca3af; 
+  width: 34px; 
+  height: 32px; 
+  border-radius: 4px; 
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+  cursor: pointer; 
+  transition: all 0.2s ease;
+  font-size: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+  position: relative;
+  margin: 0;
+}
+.toolbox button:hover { background: #1a1d29; color: #e5e7eb; }
+.toolbox button.active { background: #3b82f6; color: #ffffff; }
+.toolboxDivider { width: calc(100% - 2px); height: 1px; background: #2a2d3a; margin: 3px 1px; flex-shrink: 0; }
+
+.chartCard { 
+  grid-column: 2 / 3; 
+  grid-row: 2 / 3; 
+  background: #0a0c12; 
+  border-radius: 8px; 
+  overflow: hidden;
+  min-height: 0;
+}
+
+.chartContainer { position: relative; width: 100%; height: 100%; overflow: hidden; }
+.chartArea { position: relative; width: 100%; height: 100%; min-height: 0; }
+.chart { width: 100%; height: 100%; }
+
+.ohlcDisplay { position: absolute; left: 12px; top: 8px; display: flex; gap: 16px; align-items: center; font-size: 11px; background: rgba(10, 12, 18, 0.9); padding: 6px 12px; border-radius: 6px; border: 1px solid #1a1d29; z-index: 9; }
+.ohlcDisplay .pair { color: #e5e7eb; font-weight: 600; margin-right: 8px; }
+.ohlcValue { color: #9ca3af; font-weight: 500; }
+
+.center { 
+  grid-column: 3 / 4; 
+  grid-row: 1 / 3; 
+  background: #0a0c12; 
+  border-radius: 8px; 
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.bottomSection { 
+  grid-column: 1 / -1; 
+  grid-row: 3 / 4; 
+  display: grid; 
+  grid-template-columns: 1fr minmax(260px, 280px); 
+  gap: 6px;
+  min-height: 0;
+}
+
+.activityCard { background: #0a0c12; border-radius: 8px; display: grid; grid-template-rows: 44px 1fr; overflow: hidden; height: 100%; }
+.activityTabs { display: flex; gap: 2px; padding: 8px; background: #0a0c12; overflow-x: auto; }
+.activityTabs > button { border: none; background: #0f131a; color: #cbd5e1; padding: 8px 12px; border-radius: 6px; font-size: 11px; font-weight: 500; transition: all 0.2s ease; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+.activityTabs > button.active { background: #ffffff; color: #000000; }
+.activityTabs > button:hover:not(.active) { background: #1a1d29; color: #e5e7eb; }
+.activityContent { padding: 12px 8px 8px 12px; overflow: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: #2a2d3a transparent; }
+.activityContent::-webkit-scrollbar { width: 6px; }
+.activityContent::-webkit-scrollbar-track { background: transparent; margin: 4px 0; }
+.activityContent::-webkit-scrollbar-thumb { background: #2a2d3a; border-radius: 3px; }
+.activityContent::-webkit-scrollbar-thumb:hover { background: #3a4553; }
+
+.ordersTable { width: 100%; font-size: 11px; }
+.ordersTable th { color: #9ca3af; font-weight: 500; text-align: left; padding: 8px 4px; background: #0f131a; }
+.ordersTable td { color: #e5e7eb; padding: 8px 4px; background: #0a0c12; }
+.ordersTable tr:nth-child(even) td { background: #0d1015; }
+
+.pointsCard { background: #0a0c12; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 16px; min-height: 0; flex-shrink: 0; overflow: hidden; }
+.pointsHeader { color: #e5e7eb; font-size: 14px; font-weight: 600; padding-bottom: 8px; margin-bottom: 8px; position: relative; }
+.pointsHeader::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 1px; background: repeating-linear-gradient( to right, #374151 0px, #374151 4px, transparent 4px, transparent 8px ); }
+.pointsStats { display: flex; justify-content: space-between; gap: 24px; }
+.pointsStat { display: flex; flex-direction: column; gap: 4px; }
+.pointsStat span:first-child { color: #9ca3af; font-size: 12px; font-weight: 500; }
+.pointsStat span:last-child { color: #e5e7eb; font-size: 14px; font-weight: 600; }
+.pointsMessage { color: #9ca3af; font-size: 13px; line-height: 1.4; margin-top: auto; }
+
+
+

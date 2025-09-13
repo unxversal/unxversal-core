@@ -5,7 +5,7 @@ import { generateExpiriesMs } from '../utils/series.js';
 const USDC_MAINNET_TYPE = '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC' as const;
 const USDC_TESTNET_TYPE = USDC_MAINNET_TYPE;
 
-const X_IM_BPS = 800;
+const X_IM_BPS = 1000;
 const X_MM_BPS = 500;
 const X_LIQ_BPS = 100;
 const X_KEEPER_BPS = 2000;

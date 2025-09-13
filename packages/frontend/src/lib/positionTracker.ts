@@ -254,3 +254,4 @@ export function initializePositionTracker(
   positionTrackerInstance = new PositionTracker(client, packageIds);
   return positionTrackerInstance;
 }
+

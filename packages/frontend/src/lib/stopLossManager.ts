@@ -447,3 +447,4 @@ export function initializeStopLossManager(client: SuiClient, config: StopLossCon
   stopLossManagerInstance = new StopLossManager(client, config);
   return stopLossManagerInstance;
 }
+

@@ -255,3 +255,4 @@ export function useStopLossStatus() {
     isActive: status === 'running',
   };
 }
+
