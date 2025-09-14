@@ -201,24 +201,7 @@ export function DerivativesScreen({
             vols = (r.volumes ?? []).map(v => ({ time: v.time as UTCTimestamp, value: v.value }));
           } catch {}
         }
-        if (data.length === 0) {
-          const points: CandlestickData<UTCTimestamp>[] = [];
-          const volData: { time: UTCTimestamp; value: number }[] = [];
-          let base = 0.023;
-          for (let i = 300; i >= 0; i--) {
-            const time = (now - i*step) as UTCTimestamp;
-            const noise = (Math.sin(i/12) + Math.random()*0.3 - 0.15) * 0.002;
-            const open = base;
-            const close = base + noise;
-            const high = Math.max(open, close) + Math.random()*0.001;
-            const low = Math.min(open, close) - Math.random()*0.001;
-            base = close;
-            points.push({ time, open, high, low, close });
-            volData.push({ time, value: Math.round(50000 + Math.random()*30000) });
-          }
-          data = points;
-          vols = volData;
-        }
+        
         vol.setData(showVolume ? vols : []);
         dataRef.current = data;
         if (chartType === 'line') {

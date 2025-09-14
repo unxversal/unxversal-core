@@ -5,7 +5,6 @@ edition = "2024"
 [dependencies]
 deepbook = { local = "../deepbookv3/packages/deepbook" }
 token = { local = "../deepbookv3/packages/token" }
-unxvstaking = { local = "../unxvstaking" }
 
 [dependencies.Pyth]
 git = "https://github.com/pyth-network/pyth-crosschain.git"

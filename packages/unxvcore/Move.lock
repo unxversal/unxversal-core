@@ -2,7 +2,7 @@
 
 [move]
 version = 3
-manifest_digest = "3B9281FB5693B13EEF5C8C2B7D2D8A920CB878C30D6E4F3923220FD035983E3A"
+manifest_digest = "8AB413970FD5950DA7221359645CD33A6AD44BE9EA2891811F2E6216131D59C5"
 deps_digest = "CAFAD8A7CF51067FB4358215BECB86BD100DD64E57C2AC8A7AE7D74B688F5965"
 dependencies = [
   { id = "Bridge", name = "Bridge" },
@@ -81,3 +81,8 @@ source = { local = "../deepbookv3/packages/token" }
 dependencies = [
   { id = "Sui", name = "Sui" },
 ]
+
+[move.toolchain-version]
+compiler-version = "1.56.1"
+edition = "2024"
+flavor = "sui"

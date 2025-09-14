@@ -21,6 +21,8 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
       initialMarginBps?: number;
       maintenanceMarginBps?: number;
       maxLeverage?: number;
+      oracleRegistryId?: string;
+      aggregatorId?: string;
     };
   loading: boolean;
   error?: string;
@@ -35,6 +37,8 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
   const allSymbols = settings.markets.watchlist;
   const [availableExpiriesMs, setAvailableExpiriesMs] = useState<number[]>([]);
   const [marketId, setMarketId] = useState<string>('');
+  const [oracleRegistryId, setOracleRegistryId] = useState<string | undefined>(undefined);
+  const [aggregatorId, setAggregatorId] = useState<string | undefined>(undefined);
 
   // core data
   const [summary, setSummary] = useState<FuturesSummary>({});
@@ -241,7 +245,7 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
         let c: { txDigest: string; eventSeq: string } | null = null;
         while (!stopped) {
           const res = await client.queryEvents({ query: { Any: [QUERY, { TimeRange: { startTime: String(startMs), endTime: String(endMs) } }] }, cursor: c, limit: PAGE_LIMIT, order: 'ascending' });
-          const evs = res.data ?? [];
+        const evs = res.data ?? [];
           if (evs.length === 0) break;
           for (const ev of evs) handleEvent(ev);
           if (!res.hasNextPage) break;
@@ -292,6 +296,8 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
           const lastPx1e6 = Number(f.last_price_1e6 ?? 0);
           const im = Number(f.initial_margin_bps ?? 0);
           const mm = Number(f.maintenance_margin_bps ?? 0);
+          const oreg = String(f.oracle_registry_id?.id ?? f.oracle_registry_id ?? f.oracle_registry ?? '');
+          const aggr = String(f.aggregator_id?.id ?? f.aggregator_id ?? f.aggregator ?? '');
           // price selection: prefer on-chain last, else last trade
           const lastTrade = recentTrades[recentTrades.length - 1];
           let last = lastPx1e6 ? lastPx1e6 / 1_000_000 : (lastTrade ? lastTrade.priceQuote : undefined);
@@ -314,6 +320,8 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
           setInitialMarginBpsState(im || undefined);
           setMaintenanceMarginBpsState(mm || undefined);
           setMaxLeverageState(im > 0 ? (10000 / im) : undefined);
+          if (oreg) setOracleRegistryId(oreg);
+          if (aggr) setAggregatorId(aggr);
         } catch {}
       };
       const id = setInterval(pollMarketFields, 800);
@@ -346,6 +354,8 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
       initialMarginBps: initialMarginBpsState,
       maintenanceMarginBps: maintenanceMarginBpsState,
       maxLeverage: maxLeverageState,
+      oracleRegistryId,
+      aggregatorId,
     },
     loading,
     error,
