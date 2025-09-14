@@ -156,9 +156,9 @@
 }
 
 .optionTypeSegmented button {
-  background: rgba(16, 185, 129, 0.2);
+  background: #1a1d29;
   border: none;
-  color: #10b981;
+  color: #9ca3af;
   padding: 8px 12px;
   font-weight: 500;
   font-size: 12px;
@@ -166,13 +166,19 @@
   transition: all 0.2s ease;
 }
 
-.optionTypeSegmented button.active {
-  background: #10b981;
-  color: #000000;
+.optionTypeSegmented button:nth-child(1).active {
+  background: #065f46;
+  color: #6ee7b7;
+}
+
+.optionTypeSegmented button:nth-child(2).active {
+  background: #991b1b;
+  color: #fca5a5;
 }
 
 .optionTypeSegmented button:hover:not(.active) {
-  background: rgba(16, 185, 129, 0.3);
+  background: #2a2d3a;
+  color: #e5e7eb;
 }
 
 /* Form Fields */

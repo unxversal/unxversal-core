@@ -18,10 +18,11 @@ import { PerpsScreen } from './components/perps/PerpsScreen'
 import { LendingScreen } from './components/lending/LendingScreen'
 import { StakingScreen } from './components/staking/StakingScreen'
 import { SettingsScreen } from './components/SettingsScreen'
-import { OptionsScreen } from './components/options/OptionsScreen'
+import { OptionsScreen as LegacyOptionsScreen } from './components/options/OptionsScreen'
 import { BridgeScreen } from './components/bridge/BridgeScreen'
 import { SwapScreen } from './components/swap'
 import { createMockOptionsProvider } from './components/options/providers/mock'
+import { OptionsScreen as NewOptionsScreen } from './newui/options/OptionsScreen'
 
 type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'bridge' | 'swap' | 'settings'
 
@@ -97,35 +98,26 @@ function App() {
   useEffect(() => {
     switch (view) {
       case 'dex':
-        // DEX screen handles its own title with price/pair info: PRICE | PAIR | Unxversal DEX
         break;
       case 'gas':
-        // TODO: Future implementation should show: PRICE | MARKET | Unxversal MIST Futures
-        // For now, show generic protocol name
         document.title = 'Unxversal MIST Futures';
         break;
       case 'lending':
-        // TODO: Future implementation could show: SELECTED_POOL | STAKED_AMOUNT | Unxversal Lending
-        // For now, show generic protocol name
         document.title = 'Unxversal Lending';
         break;
       case 'staking':
-        // TODO: Future implementation could show: STAKED_AMOUNT | APY | Unxversal Staking
         document.title = 'Unxversal Staking';
         break;
       case 'faucet':
         document.title = 'Unxversal Faucet';
         break;
       case 'options':
-        // TODO: Future implementation should show: PRICE | MARKET | Unxversal Options
         document.title = 'Unxversal Options';
         break;
       case 'futures':
-        // TODO: Future implementation should show: PRICE | MARKET | Unxversal Futures
         document.title = 'Unxversal Futures';
         break;
       case 'perps':
-        // TODO: Future implementation should show: PRICE | MARKET | Unxversal Perps
         document.title = 'Unxversal Perps';
         break;
       case 'bridge':
@@ -171,20 +163,24 @@ function App() {
         {view === 'bridge' && <BridgeScreen network={network} protocolStatus={protocolStatus} />}
         {view === 'swap' && <SwapScreen network={network} />}
         {view === 'options' && (
-          <OptionsScreen
-            started={started}
-            surgeReady={surgeReady}
-            network={network}
-            marketLabel={'Options'}
-            symbol={'MIST'}
-            quoteSymbol={'USDC'}
-            dataProvider={createMockOptionsProvider()}
-            panelProvider={{
-              async submitOrder() {
-                await new Promise(r => setTimeout(r, 300));
-              }
-            }}
-          />
+          useNewUi
+            ? <NewOptionsScreen useSampleData={useSampleData} />
+            : (
+              <LegacyOptionsScreen
+                started={started}
+                surgeReady={surgeReady}
+                network={network}
+                marketLabel={'Options'}
+                symbol={'MIST'}
+                quoteSymbol={'USDC'}
+                dataProvider={createMockOptionsProvider()}
+                panelProvider={{
+                  async submitOrder() {
+                    await new Promise(r => setTimeout(r, 300));
+                  }
+                }}
+              />
+            )
         )}
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>

@@ -51,16 +51,6 @@ export interface OptionChainRow {
   seriesKeyPut?: string;
 }
 
-export interface OrderBookLevel {
-  priceQuote: number;
-  qtyUnits: number;
-}
-
-export interface OrderBook {
-  bids: OrderBookLevel[];
-  asks: OrderBookLevel[];
-}
-
 export interface TradeFill {
   maker: string;
   taker: string;
@@ -141,10 +131,6 @@ export interface OptionsComponentProps extends OptionsActions {
   // chain data for selected expiry
   chainRows: OptionChainRow[];
   underlyingPrice?: number; // for price indicator convenience
-
-  // optional series detail
-  orderBook?: OrderBook;
-  recentTrades?: TradeFill[];
 
   // user-scoped
   positions: PositionRow[];
