@@ -2,39 +2,57 @@
 // Adjust as needed. These are just placeholders; keep them realistic for strike banding.
 
 export const X_REF_PRICES_1E6: Record<string, number> = {
-  // ========= Private companies (synthetic "reference share" in USD) =========
-  // These are *synthetic* per-unit references (not actual secondary prices).
-  // Pick round numbers that keep your strike grid readable and liquid.
+  // ---------- Private companies ----------
+  // Formula: Valuation ($B) ÷ 0.75, expressed in USD × 1e6
 
-  xOPENAI:     10_000_000,  // $10  — synthetic unit for OpenAI exposure
-  xANTHROPIC:  10_000_000,  // $10
-  xSPACEX:    100_000_000,  // $100
-  xXAI:        10_000_000,  // $10
-  xKRAKEN:     10_000_000,  // $10
-  xANDURIL:    20_000_000,  // $20
-  xCURSOR:      1_000_000,  // $1
-  xSTRIPE:     50_000_000,  // $50
-  xBREX:       10_000_000,  // $10
-  xDISCORD:    10_000_000,  // $10
-  xPOLYMARKET:  1_000_000,  // $1
-  xKALSHI:      1_000_000,  // $1
+  // OpenAI ~ $500B → 500 / 0.75 = 666.7 → $667
+  xOPENAI:     667_000_000,
 
-  // ========= Gas synthetics (USD cost of reference/average gas price) =========
-  // Naming: xgETH, xgPOL, etc. (keep tickers for gas futures the same)
-  // Unit meaning: **USD per standard tx** on that chain (at typical/current conditions).
-  // These “ref” values are sensible midpoints so your strike bands make sense.
-  // You’ll still compute live marks from your EMA indexer; these are just centers.
+  // Anthropic ~ $183B → 183 / 0.75 = 244
+  xANTHROPIC:  244_000_000,
 
-  xgETH:   2_000_000,   // $2.00   — L1 ETH simple transfer (21k gas; ~15–30 gwei, ETH~$3k)
-  xgPOL:     10_000,    // $0.01   — Polygon PoS
-  xgNEAR:     5_000,    // $0.005  — NEAR simple transfer
-  xgSOL:      1_000,    // $0.001  — Solana simple transfer
-  xgARB:     50_000,    // $0.05   — Arbitrum
-  xgBASE:    30_000,    // $0.03   — Base
-  xgAVAX:    50_000,    // $0.05   — Avalanche C-Chain
-  xgBNB:     30_000,    // $0.03   — BNB Chain
-  xgOP:      30_000,    // $0.03   — Optimism
+  // SpaceX ~ $380B → 380 / 0.75 = 507
+  xSPACEX:     507_000_000,
+
+  // xAI ~ $190B → 190 / 0.75 = 253
+  xXAI:        253_000_000,
+
+  // Kraken ~ $15B → 15 / 0.75 = 20
+  xKRAKEN:      20_000_000,
+
+  // Anduril ~ $30.5B → 30.5 / 0.75 ≈ 41
+  xANDURIL:     41_000_000,
+
+  // Cursor ~ $9.9B → 9.9 / 0.75 ≈ 13
+  xCURSOR:      13_000_000,
+
+  // Stripe ~ $91.5B → 91.5 / 0.75 = 122
+  xSTRIPE:     122_000_000,
+
+  // Brex ~ $12.3B → 12.3 / 0.75 ≈ 16
+  xBREX:        16_000_000,
+
+  // Discord ~ $15B → 15 / 0.75 = 20
+  xDISCORD:     20_000_000,
+
+  // Polymarket ~ $9B → 9 / 0.75 = 12
+  xPOLYMARKET:  12_000_000,
+
+  // Kalshi ~ $2B → 2 / 0.75 ≈ 2.7
+  xKALSHI:       3_000_000,
+
+  // ---------- Gas synthetics (unchanged) ----------
+  xGASUSD_ETH:   450_000,   // $0.45
+  xGASUSD_POL:     5_300,   // $0.0053
+  xGASUSD_NEAR:    1_000,   // $0.0010
+  xGASUSD_SOL:     6_300,   // $0.0063
+  xGASUSD_ARB:    12_300,   // $0.0123
+  xGASUSD_BASE:   18_500,   // $0.0185
+  xGASUSD_AVAX:   23_500,   // $0.0235
+  xGASUSD_BNB:    25_000,   // $0.0250
+  xGASUSD_OP:      2_500,   // $0.0025
 };
+
 
 export type XPolicy = {
   bandLow?: number;   // fraction of ref price, default 0.5

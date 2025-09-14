@@ -393,7 +393,6 @@ export function OptionsComponent(props: OptionsComponentProps) {
               <tr>
                 <th style={{textAlign:'left'}}>Strike price</th>
                 <th style={{textAlign:'left'}}>Breakeven</th>
-                <th style={{textAlign:'left'}}>Chance of profit</th>
                 <th style={{textAlign:'left'}}>% Change</th>
                 <th style={{textAlign:'left'}}>Change</th>
                 <th style={{textAlign:'right'}}>Bid Price</th>
@@ -412,13 +411,11 @@ export function OptionsComponent(props: OptionsComponentProps) {
                 }
                 const ask = callPut === 'put' ? (r.putAsk ?? null) : (r.callAsk ?? null);
                 const breakeven = r.breakeven ?? (callPut === 'put' ? (r.strike - (r.putBid ?? r.putAsk ?? 0)) : (r.strike + (r.callAsk ?? r.callBid ?? 0)));
-                const chance = r.chanceOfProfit ?? undefined;
                 return (
                   <React.Fragment key={`row-${i}`}>
                     <tr className={chainStyles.optionRow}>
                       <td style={{textAlign:'left'}}>${r.strike.toFixed(2)}</td>
                       <td style={{textAlign:'left'}}>${(breakeven || r.strike).toFixed(2)}</td>
-                      <td style={{textAlign:'left'}}>{chance !== undefined ? `${Number(chance).toFixed(2)}%` : '-'}</td>
                       <td style={{textAlign:'left', color: changeColor}}>{changePrefix}{(r.changePercent || 0).toFixed(2)}%</td>
                       <td style={{textAlign:'left', color: changeColor}}>{changePrefix}${Math.abs(r.changeAmount || 0).toFixed(2)}</td>
                       <td style={{textAlign:'right'}}>

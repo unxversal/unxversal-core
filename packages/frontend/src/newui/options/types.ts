@@ -44,7 +44,6 @@ export interface OptionChainRow {
   volume?: number; // recent 24h trades count or quote notional
   changePercent?: number; // per strike premium change (%)
   changeAmount?: number; // per strike premium change in quote
-  chanceOfProfit?: number; // UI metric
   breakeven?: number; // UI metric
   priceChange24h?: number; // sign for badge coloring
   seriesKeyCall?: string; // optional series key ids
