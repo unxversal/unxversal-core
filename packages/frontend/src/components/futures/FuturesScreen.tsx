@@ -46,6 +46,10 @@ export function FuturesScreen({ started, surgeReady, network, protocolStatus }: 
       availableExpiries={availableExpiries}
       onExpiryChange={handleExpiryChange}
       protocolStatus={protocolStatus}
+      allSymbols={[]}
+      selectedSymbol={'MIST Futures'}
+      onSelectSymbol={() => {}}
+      symbolIconMap={{}}
       TradePanelComponent={(props) => (
         <GasFuturesTradePanel mid={props.mid} provider={props.provider} baseSymbol={props.baseSymbol} quoteSymbol={props.quoteSymbol} />
       )}

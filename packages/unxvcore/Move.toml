@@ -1,0 +1,18 @@
+[package]
+name = "unxvcore"
+edition = "2024"
+
+[dependencies]
+deepbook = { local = "../deepbookv3/packages/deepbook" }
+token = { local = "../deepbookv3/packages/token" }
+unxvstaking = { local = "../unxvstaking" }
+
+[dependencies.Pyth]
+git = "https://github.com/pyth-network/pyth-crosschain.git"
+subdir = "target_chains/sui/contracts"
+rev = "sui-contract-testnet"
+override = true
+
+[addresses]
+unxvcore = "0x0"
+deepbook = "0xa3886aaa8aa831572dd39549242ca004a438c3a55967af9f0387ad2b01595068"

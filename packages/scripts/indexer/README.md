@@ -94,7 +94,7 @@ unxvindexer
 - Network: defaults to `mainnet` (change via positional arg or `--env`)
 - Database: `postgres://postgres:postgrespw@localhost:5432/unxv_indexer`
 - Metrics: `0.0.0.0:9184`
-- Module filter: indexes events from Unxversal modules only (`dex`, `futures`, `gas_futures`, `lending`, `options`, `perpetuals`, `rewards`, `staking`, `unxv`, `usdu`, `xfutures`, `xoptions`, `xperps`)
+- Module filter: indexes events from Unxversal modules only (`dex`, `futures`, `gas_futures`, `lending`, `options`, `perpetuals`, `rewards`, `staking`, `unxv`, `usdu`, `xperps`)
 
 All `sui-indexer-alt-framework` `IndexerArgs` and DB pool `DbArgs` flags are also supported via CLI/env.
 

@@ -209,7 +209,7 @@ module unxversal::rewards {
             l1_bps: 2000, // 20%
             l2_bps: 600,  // 6%
             l3_bps: 200,  // 2%
-            ref_cap_bps_per_week: 10_000, // 100% cap of own points
+            ref_cap_bps_per_week: 1_000_000, // 100x cap of own points
             // faucet
             per_day_mint_cap_usdu: 100_000_000u128, // 100k USDU (6 decimals)
             loss_budget_per_tier_usd_1e6: vector::empty<u128>(),

@@ -23,6 +23,7 @@ import { BridgeScreen } from './components/bridge/BridgeScreen'
 import { SwapScreen } from './components/swap'
 import { createMockOptionsProvider } from './components/options/providers/mock'
 import { OptionsScreen as NewOptionsScreen } from './newui/options/OptionsScreen'
+import { FuturesScreen as NewFuturesScreen } from './newui/futures/FuturesScreen'
 
 type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'bridge' | 'swap' | 'settings'
 
@@ -158,7 +159,11 @@ function App() {
             ? <StakingWrapper useSampleData={useSampleData} />
             : <StakingScreen started={started} network={network} protocolStatus={protocolStatus} />
         )}
-        {view === 'futures' && <FuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
+        {view === 'futures' && (
+          useNewUi
+            ? <NewFuturesScreen useSampleData={useSampleData} />
+            : <FuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />
+        )}
         {view === 'perps' && <PerpsScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
         {view === 'bridge' && <BridgeScreen network={network} protocolStatus={protocolStatus} />}
         {view === 'swap' && <SwapScreen network={network} />}

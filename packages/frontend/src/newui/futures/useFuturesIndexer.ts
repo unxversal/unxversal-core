@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SuiClient } from '@mysten/sui/client';
 import type { FuturesComponentProps, FuturesSummary, OrderbookSnapshot, TradeFillRow, FuturesPositionRow, UserOrderRow, OrderHistoryRow } from './types';
 import { loadSettings } from '../../lib/settings.config';
+import { getLatestPrice } from '../../lib/switchboard';
 
 export type UseFuturesIndexerArgs = {
   client: SuiClient;
@@ -16,7 +17,11 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
     'selectedSymbol' | 'allSymbols' | 'onSelectSymbol' |
     'selectedExpiryMs' | 'availableExpiriesMs' | 'onSelectExpiry' |
     'marketId' | 'summary' | 'orderBook' | 'recentTrades' |
-    'positions' | 'openOrders' | 'tradeHistory' | 'orderHistory'>;
+    'positions' | 'openOrders' | 'tradeHistory' | 'orderHistory'> & {
+      initialMarginBps?: number;
+      maintenanceMarginBps?: number;
+      maxLeverage?: number;
+    };
   loading: boolean;
   error?: string;
 } {
@@ -35,6 +40,9 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
   const [summary, setSummary] = useState<FuturesSummary>({});
   const [orderBook, setOrderBook] = useState<OrderbookSnapshot>({ bids: [], asks: [] });
   const [recentTrades, setRecentTrades] = useState<TradeFillRow[]>([]);
+  const [initialMarginBpsState, setInitialMarginBpsState] = useState<number | undefined>(undefined);
+  const [maintenanceMarginBpsState, setMaintenanceMarginBpsState] = useState<number | undefined>(undefined);
+  const [maxLeverageState, setMaxLeverageState] = useState<number | undefined>(undefined);
 
   // user
   const [positions, setPositions] = useState<FuturesPositionRow[]>([]);
@@ -53,6 +61,51 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
   type UserPos = { marketId: string; symbol: string; contractSize: number; longQty: number; shortQty: number; avgLong1e6: number; avgShort1e6: number; markPrice1e6?: number; collat?: number };
   const positionsByUser = useRef<Map<string, UserPos>>(new Map());
   const lastMarketReadRef = useRef<number>(0);
+
+  function pythSymbolOf(selected: string): string | null {
+    const [base] = (selected || '').split('/');
+    if (!base) return null;
+    const canonBase = base.startsWith('W') && base.length > 1 ? base.slice(1) : base;
+    const m: Record<string, string> = {
+      'SUI': 'SUI/USD',
+      'ETH': 'ETH/USD',
+      'BTC': 'BTC/USD',
+      'SOL': 'SOL/USD',
+    };
+    return m[canonBase] || null;
+  }
+
+  function asNumVec(field: any): number[] {
+    try {
+      if (Array.isArray(field)) return field.map((x) => Number(x));
+      if (field && Array.isArray(field.value)) return field.value.map((x: any) => Number(x));
+      if (field && field.fields && Array.isArray(field.fields.contents)) return field.fields.contents.map((x: any) => Number(x));
+      return [];
+    } catch { return []; }
+  }
+
+  function computeTwap(ts: number[], px1e6: number[], endMs: number, windowMs: number): number | undefined {
+    if (ts.length === 0 || px1e6.length === 0) return undefined;
+    const n = Math.min(ts.length, px1e6.length);
+    const startMs = Math.max(0, endMs - windowMs);
+    let sumWeighted = 0, sumDt = 0;
+    let prevT = startMs;
+    let prevPx = px1e6[0];
+    for (let i = 0; i < n; i++) {
+      const t = ts[i];
+      const p = px1e6[i];
+      if (t < startMs) { prevT = t; prevPx = p; continue; }
+      const dt = Math.max(0, t - prevT);
+      sumWeighted += dt * prevPx;
+      sumDt += dt;
+      prevT = t; prevPx = p;
+    }
+    const tailDt = Math.max(0, endMs - prevT);
+    sumWeighted += tailDt * prevPx;
+    sumDt += tailDt;
+    if (sumDt === 0) return (px1e6[n - 1] ?? 0) / 1_000_000;
+    return (sumWeighted / sumDt) / 1_000_000;
+  }
 
   useEffect(() => {
     if (!enabled) { setLoading(false); return; }
@@ -234,60 +287,33 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
           const content: any = (res.data as any)?.content;
           const f = content?.dataType === 'moveObject' ? content.fields : null;
           if (!f) return;
-          const im = Number(f.initial_margin_bps ?? 0);
-          const mm = Number(f.maintenance_margin_bps ?? 0);
           const totalLong = Number(f.total_long_qty ?? 0);
           const totalShort = Number(f.total_short_qty ?? 0);
           const lastPx1e6 = Number(f.last_price_1e6 ?? 0);
+          const im = Number(f.initial_margin_bps ?? 0);
+          const mm = Number(f.maintenance_margin_bps ?? 0);
           // price selection: prefer on-chain last, else last trade
           const lastTrade = recentTrades[recentTrades.length - 1];
-          const last = lastPx1e6 ? lastPx1e6 / 1_000_000 : (lastTrade ? lastTrade.priceQuote : undefined);
+          let last = lastPx1e6 ? lastPx1e6 / 1_000_000 : (lastTrade ? lastTrade.priceQuote : undefined);
+          if (last == null) {
+            const ps = pythSymbolOf(selectedSymbol);
+            const pv = ps ? getLatestPrice(ps) : null;
+            if (pv != null) last = pv;
+          }
           // 24h change and volume from trades window
           const cutoff = nowMs - 24 * 3600 * 1000;
           const trades24 = recentTrades.filter(t => t.tsMs >= cutoff);
           const vol24h = trades24.reduce((acc, t) => acc + (t.priceQuote * t.baseQty), 0);
           const price24 = trades24.length ? trades24[0].priceQuote : (recentTrades[0]?.priceQuote ?? last);
           const change24h = last != null && price24 != null && price24 > 0 ? ((last - price24) / price24) * 100 : undefined;
-          setSummary((prev) => ({ ...prev, last, openInterest: totalLong + totalShort, vol24h, change24h, expiryMs: f.series?.fields?.expiry_ms ?? null }));
-
-          // Build orderbook snapshot for selected market (aggregate by price)
-          const omap = ordersByMarket.current.get(marketId) || new Map();
-          const now = Date.now();
-          const bids: Record<number, number> = {};
-          const asks: Record<number, number> = {};
-          for (const o of omap.values()) {
-            if (o.expireTs && o.expireTs <= now) continue;
-            if (o.remaining <= 0) continue;
-            const px = o.price1e6 / 1_000_000;
-            if (o.isBid) bids[px] = (bids[px] ?? 0) + o.remaining;
-            else asks[px] = (asks[px] ?? 0) + o.remaining;
-          }
-          const bidLvls = Object.entries(bids).map(([p,q]) => ({ price: Number(p), qty: q as number })).sort((a,b)=> b.price - a.price).slice(0, 24);
-          const askLvls = Object.entries(asks).map(([p,q]) => ({ price: Number(p), qty: q as number })).sort((a,b)=> a.price - b.price).slice(0, 24);
-          setOrderBook({ bids: bidLvls, asks: askLvls });
-
-          // Recompute user positions list (all markets) if address provided
-          if (address) {
-            const list: FuturesPositionRow[] = [];
-            for (const pos of positionsByUser.current.values()) {
-              if (!pos) continue;
-              const markPx1e6 = lastPx1e6 || (last ? Math.floor(last * 1_000_000) : 0);
-              const pnlLong = pos.longQty > 0 && pos.avgLong1e6 > 0 ? Math.floor(((markPx1e6 - pos.avgLong1e6) * pos.longQty * pos.contractSize) / 1_000_000) : 0;
-              const pnlShort = pos.shortQty > 0 && pos.avgShort1e6 > 0 ? Math.floor(((pos.avgShort1e6 - markPx1e6) * pos.shortQty * pos.contractSize) / 1_000_000) : 0;
-              const pnlQuote = (pnlLong + pnlShort) / 1;
-              list.push({ marketId: pos.marketId, symbol: pos.symbol, expiryMs: null, contractSize: pos.contractSize, longQty: pos.longQty, shortQty: pos.shortQty, avgLong1e6: pos.avgLong1e6, avgShort1e6: pos.avgShort1e6, markPrice1e6: markPx1e6, pnlQuote });
-            }
-            setPositions(list);
-            // Open orders scoped to user
-            const myOrders: UserOrderRow[] = [];
-            for (const [mId, om] of ordersByMarket.current.entries()) {
-              for (const o of om.values()) {
-                if (address && o.maker.toLowerCase() !== address.toLowerCase()) continue;
-                myOrders.push({ orderId: o.orderId, marketId: mId, isBid: o.isBid, priceQuote: o.price1e6 / 1_000_000, qtyRemaining: o.remaining, expireTs: o.expireTs });
-              }
-            }
-            setOpenOrders(myOrders);
-          }
+          // TWAP(5m)
+          const tsVec = asNumVec((f.twap_ts_ms ?? f.twap_ts) ?? []);
+          const pxVec = asNumVec((f.twap_px_1e6 ?? f.twap_px) ?? []);
+          const twap5m = computeTwap(tsVec, pxVec, nowMs, 5 * 60 * 1000);
+          setSummary((prev) => ({ ...prev, last, openInterest: totalLong + totalShort, vol24h, change24h, expiryMs: f.series?.fields?.expiry_ms ?? null, twap5m }));
+          setInitialMarginBpsState(im || undefined);
+          setMaintenanceMarginBpsState(mm || undefined);
+          setMaxLeverageState(im > 0 ? (10000 / im) : undefined);
         } catch {}
       };
       const id = setInterval(pollMarketFields, 800);
@@ -317,6 +343,9 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
       openOrders,
       tradeHistory,
       orderHistory,
+      initialMarginBps: initialMarginBpsState,
+      maintenanceMarginBps: maintenanceMarginBpsState,
+      maxLeverage: maxLeverageState,
     },
     loading,
     error,

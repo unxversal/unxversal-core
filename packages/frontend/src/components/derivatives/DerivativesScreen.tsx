@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import styles from './DerivativesScreen.module.css';
 import { createChart, type IChartApi, type CandlestickData, type UTCTimestamp, CandlestickSeries, LineSeries, BarSeries } from 'lightweight-charts';
 import { Orderbook } from './Orderbook';
@@ -7,7 +7,22 @@ import { Tooltip } from '../dex/Tooltip';
 import { BarChart3, Crosshair, Square, LineChart, CandlestickChart, Waves, Eye, Clock, TrendingUp, Minus } from 'lucide-react';
 import type { DerivativesScreenProps } from './types';
 
-export function DerivativesScreen({ network, marketLabel, symbol, quoteSymbol = 'USDC', dataProvider, panelProvider, TradePanelComponent, availableExpiries, onExpiryChange, protocolStatus }: DerivativesScreenProps) {
+export function DerivativesScreen({ 
+  network, 
+  marketLabel, 
+  symbol, 
+  quoteSymbol = 'USDC', 
+  dataProvider, 
+  panelProvider, 
+  TradePanelComponent, 
+  availableExpiries, 
+  onExpiryChange, 
+  protocolStatus,
+  allSymbols,
+  selectedSymbol,
+  onSelectSymbol,
+  symbolIconMap,
+}: DerivativesScreenProps) {
 
   const [summary, setSummary] = useState<{ 
     last?: number; 
@@ -39,6 +54,7 @@ export function DerivativesScreen({ network, marketLabel, symbol, quoteSymbol = 
   const dataRef = useRef<CandlestickData<UTCTimestamp>[]>([]);
   const drawingsRef = useRef<any[]>([]);
   const indicatorsRef = useRef<{sma?: any, ema?: any, bbUpper?: any, bbLower?: any}>({});
+  const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
 
   // Activity sample state when provider is not present
   const [samplePositions, setSamplePositions] = useState<any[]>([]);
@@ -326,12 +342,55 @@ export function DerivativesScreen({ network, marketLabel, symbol, quoteSymbol = 
     });
   };
 
+  const uniqueSymbols = useMemo(() => allSymbols ? Array.from(new Set(allSymbols)) : [], [allSymbols]);
+
   return (
-    <div className={styles.root}>
+    <div className={styles.root} onClick={(e) => {
+      // Close symbol dropdown when clicking outside
+      if (showSymbolDropdown && !(e.target as Element).closest(`.${styles.pair}`)) {
+        setShowSymbolDropdown(false);
+      }
+    }}>
       <div className={styles.priceCard}>
         <div className={styles.pairBar}>
           <div className={styles.pair}>
-            {marketLabel}
+            {selectedSymbol && allSymbols && allSymbols.length > 0 ? (
+              <>
+                {symbolIconMap?.[selectedSymbol] && (
+                  <img className={styles.pairIcon} src={symbolIconMap[selectedSymbol]} alt={selectedSymbol} />
+                )}
+                <span 
+                  style={{ color: '#e5e7eb', fontWeight: 600, fontSize: '18px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  onClick={() => setShowSymbolDropdown(v => !v)}
+                >
+                  {selectedSymbol}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" style={{ color: '#9ca3af' }}>
+                    <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </span>
+                {showSymbolDropdown && (
+                  <div className={styles.symbolDropdown}>
+                    {uniqueSymbols.map(sym => (
+                      <div 
+                        key={sym} 
+                        className={styles.symbolOption}
+                        onClick={() => { 
+                          onSelectSymbol?.(sym); 
+                          setShowSymbolDropdown(false); 
+                        }}
+                      >
+                        {symbolIconMap?.[sym] && (
+                          <img className={styles.symbolOptionIcon} src={symbolIconMap[sym]} alt={sym} />
+                        )}
+                        <span>{sym}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              marketLabel
+            )}
             {availableExpiries && availableExpiries.length > 0 && (
               <select 
                 className={styles.expirySelector}
@@ -757,5 +816,6 @@ export function DerivativesScreen({ network, marketLabel, symbol, quoteSymbol = 
     </div>
   );
 }
+
 
 

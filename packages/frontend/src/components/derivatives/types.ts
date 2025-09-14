@@ -115,6 +115,10 @@ export interface DerivativesScreenProps {
   TradePanelComponent?: (props: TradePanelProps) => React.ReactElement;
   availableExpiries?: ExpiryContract[]; // for futures contracts
   onExpiryChange?: (expiryId: string) => void;
+  allSymbols?: string[];
+  selectedSymbol?: string;
+  onSelectSymbol?: (symbol: string) => void;
+  symbolIconMap?: Record<string, string>;
   protocolStatus?: {
     options: boolean;
     futures: boolean;

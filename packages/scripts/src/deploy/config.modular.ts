@@ -8,8 +8,7 @@ import { MAINNET_ORACLE_FEEDS, TESTNET_ORACLE_FEEDS, ORACLE_MAX_AGE_SEC } from '
 import { buildMainnetDexPools, buildTestnetDexPools } from './dex.js';
 import { buildVaults } from './vaults.js';
 import { buildMainnetXPerps, buildTestnetXPerps } from './xperps.js';
-import { buildMainnetXFutureSeries, buildTestnetXFutureSeries } from './xfutures.js';
-import { buildMainnetXOptions, buildTestnetXOptions } from './xoptions.js';
+// Removed xfutures/xoptions modules
 import { X_ASSET_SETS } from './xassets.js';
 import { TIER_PARAMS, DERIVATIVE_PERP_FUT_SPECS } from './markets.js';
 import type { SuiTypeTag } from './types.js';
@@ -110,8 +109,6 @@ export const deployConfig: DeployConfig = {
   dexPools: buildMainnetDexPools(),
   // x- synthetic defaults (empty unless overridden in a modular config)
   xperps: buildMainnetXPerps(),
-  xfutures: buildMainnetXFutureSeries(),
-  xoptions: buildMainnetXOptions(),
   vaults: buildVaults(),
 };
 
@@ -159,13 +156,6 @@ export const testnetDeployConfig: DeployConfig = {
     //   initialMark1e6: 1_000_000,
     // })),
     ...buildTestnetXPerps(),
-  ],
-  xfutures: [
-    // ...generate from X_ASSET_SETS with expiries if desired
-    ...buildTestnetXFutureSeries(),
-  ],
-  xoptions: [
-    ...buildTestnetXOptions(),
   ],
   dexPools: buildTestnetDexPools(),
   vaults: buildVaults(),

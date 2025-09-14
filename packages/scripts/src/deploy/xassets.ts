@@ -1,4 +1,4 @@
-// Synthetic asset sets for xperps/xfutures/xoptions
+// Synthetic asset sets for xperps
 // These are intentionally separate from the standard derivative symbol maps.
 // No overlap with existing assets used by options/futures/perpetuals.
 

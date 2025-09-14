@@ -6,9 +6,7 @@ import { deployConfig, type DeployConfig } from './config.js';
 import { writeFile } from 'node:fs/promises';
 import { DeepBookClient } from '@mysten/deepbook-v3';
 import { MAINNET_DERIVATIVE_TYPE_TAGS, TESTNET_DERIVATIVE_TYPE_TAGS } from './markets.js';
-import { buildMainnetXPerps, buildTestnetXPerps } from './xperps.js';
-import { buildMainnetXFutureSeries, buildTestnetXFutureSeries } from './xfutures.js';
-import { buildMainnetXOptions, buildTestnetXOptions } from './xoptions.js';
+// xperps deployer is defined locally; builders are wired via config
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -81,8 +79,6 @@ type DeployedPerp = {
 };
 type DeployedDexPool = { poolId: string; base: string; quote: string; tickSize: number; lotSize: number; minSize: number; registryId: string };
 type DeployedXPerp = DeployedPerp & { symbol: string };
-type DeployedXFuture = DeployedFutures & { symbol: string };
-type DeployedXOption = DeployedOptions;
 
 // Collect every raw response from signAndExecuteTransaction
 const txResponses: Array<{ label: string; digest?: string; response: any }> = [];
@@ -129,8 +125,6 @@ type DeploymentSummary = {
   dexPools: DeployedDexPool[];
   vaults: Array<{ id: string; asset: string }>;
   xperps: DeployedXPerp[];
-  xfutures: DeployedXFuture[];
-  xoptions: DeployedXOption[];
 };
 
 function kpFromEnv(): Ed25519Keypair {
@@ -949,136 +943,6 @@ async function deployXPerps(client: SuiClient, cfg: DeployConfig, keypair: Ed255
   }
 }
 
-async function deployXFutureSeries(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
-  if (!cfg.xfutures?.length) return;
-  logger.info(`Deploying XFuture series: ${cfg.xfutures.length} spec(s)`);
-  for (const f of cfg.xfutures) {
-    if (!f.marketId) {
-      const tx = new Transaction();
-      tx.moveCall({
-        target: `${cfg.pkgId}::xfutures::init_market`,
-        typeArguments: [f.collat],
-        arguments: [
-          tx.object(cfg.adminRegistryId),
-          tx.pure.u64(f.expiryMs),
-          tx.pure.u64(f.contractSize),
-          tx.pure.u64((f as any).initialMark1e6 ?? 1_000_000),
-          tx.pure.u64((f as any).fundingIntervalMs ?? 3_600_000),
-          tx.pure.u64(f.initialMarginBps),
-          tx.pure.u64(f.maintenanceMarginBps),
-          tx.pure.u64(f.liquidationFeeBps),
-          tx.pure.u64((f as any).keeperIncentiveBps ?? 0),
-          tx.pure.u64(f.tickSize),
-          tx.pure.u64(f.lotSize),
-          tx.pure.u64(f.minSize),
-        ],
-      });
-      const res = await execTx(client, tx, keypair, `xfutures.init_market ${f.symbol}`);
-      accumulateFromRes(res, summary);
-      const id = extractCreatedId(res, `${cfg.pkgId}::xfutures::XFutureMarket<`);
-      if (id) {
-        logger.info(`xfutures.market created id=${id}`);
-        summary.xfutures.push({
-          marketId: id,
-          collat: f.collat,
-          symbol: f.symbol,
-          expiryMs: f.expiryMs,
-          contractSize: f.contractSize,
-          tickSize: f.tickSize,
-          lotSize: f.lotSize,
-          minSize: f.minSize,
-          initialMarginBps: f.initialMarginBps,
-          maintenanceMarginBps: f.maintenanceMarginBps,
-          liquidationFeeBps: f.liquidationFeeBps,
-          keeperIncentiveBps: (f as any).keeperIncentiveBps ?? 0,
-        } as any);
-        // Optional post-init caps and tiers
-        if ((f as any).accountMaxNotional1e6 || (f as any).marketMaxNotional1e6) {
-          const t = new Transaction();
-          t.moveCall({ target: `${cfg.pkgId}::xfutures::set_notional_caps`, typeArguments: [f.collat], arguments: [
-            t.object(cfg.adminRegistryId), t.object(id),
-            t.pure.u128(BigInt((f as any).accountMaxNotional1e6 || '0')),
-            t.pure.u128(BigInt((f as any).marketMaxNotional1e6 || '0')),
-          ] as any });
-          await execTx(client, t, keypair, `xfutures.set_notional_caps ${f.symbol}`);
-        }
-        if (typeof (f as any).accountShareOfOiBps === 'number') {
-          const t = new Transaction();
-          t.moveCall({ target: `${cfg.pkgId}::xfutures::set_share_of_oi_bps`, typeArguments: [f.collat], arguments: [
-            t.object(cfg.adminRegistryId), t.object(id), t.pure.u64((f as any).accountShareOfOiBps),
-          ] });
-          await execTx(client, t, keypair, `xfutures.set_share_of_oi_bps ${f.symbol}`);
-        }
-        if ((f as any).tierThresholds1e6 && (f as any).tierImBps) {
-          const thresholds = (f as any).tierThresholds1e6 as number[];
-          const imbps = (f as any).tierImBps as number[];
-          const t = new Transaction();
-          t.moveCall({ target: `${cfg.pkgId}::xfutures::set_risk_tiers`, typeArguments: [f.collat], arguments: [
-            t.object(cfg.adminRegistryId), t.object(id), t.pure.vector('u64', thresholds), t.pure.vector('u64', imbps),
-          ] as any });
-          await execTx(client, t, keypair, `xfutures.set_risk_tiers ${f.symbol}`);
-        }
-        if (typeof (f as any).pnlFeeShareBps === 'number') {
-          const t = new Transaction();
-          t.moveCall({ target: `${cfg.pkgId}::xfutures::set_pnl_fee_share_bps`, typeArguments: [f.collat], arguments: [
-            t.object(cfg.adminRegistryId), t.object(id), t.pure.u64((f as any).pnlFeeShareBps),
-          ] });
-          await execTx(client, t, keypair, `xfutures.set_pnl_fee_share_bps ${f.symbol}`);
-        }
-        // EMA params for xfutures index
-        if ((f as any).alphaNum || (f as any).capMultipleBps || (f as any).markGateBps) {
-          const t = new Transaction();
-          t.moveCall({ target: `${cfg.pkgId}::xfutures::set_ema_params`, typeArguments: [f.collat], arguments: [
-            t.object(cfg.adminRegistryId), t.object(id),
-            t.pure.u64((f as any).alphaNum ?? 1), t.pure.u64((f as any).alphaDen ?? 480),
-            t.pure.u64((f as any).alphaLongNum ?? 1), t.pure.u64((f as any).alphaLongDen ?? 43200),
-            t.pure.u64((f as any).capMultipleBps ?? 40000), t.pure.u64((f as any).markGateBps ?? 0),
-          ] });
-          await execTx(client, t, keypair, `xfutures.set_ema_params ${f.symbol}`);
-        }
-      }
-    }
-  }
-}
-
-async function deployXOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
-  if (!cfg.xoptions?.length) return;
-  logger.info(`Deploying XOptions: ${cfg.xoptions.length} market(s)`);
-  for (const m of cfg.xoptions) {
-    let marketId = m.marketId;
-    if (!marketId) {
-      const tx = new Transaction();
-      tx.moveCall({ target: `${cfg.pkgId}::xoptions::init_market`, arguments: [tx.object(cfg.adminRegistryId)] });
-      const res = await execTx(client, tx, keypair, 'xoptions.init_market');
-      accumulateFromRes(res, summary);
-      marketId = extractCreatedId(res, `${cfg.pkgId}::xoptions::XOptionsMarket<`) || marketId;
-      if (marketId) logger.info(`xoptions.market created id=${marketId}`);
-    }
-    if (m.series?.length && marketId) {
-      for (const s of m.series) {
-        const tx = new Transaction();
-        tx.moveCall({
-          target: `${cfg.pkgId}::xoptions::create_option_series`,
-          typeArguments: [m.base, m.quote],
-          arguments: [
-            tx.object(cfg.adminRegistryId),
-            tx.object(marketId),
-            tx.pure.u64(s.expiryMs),
-            tx.pure.u64(s.strike1e6),
-            tx.pure.bool(s.isCall),
-            tx.pure.string(s.underlying),
-            tx.pure.u64(s.initialMark1e6),
-            tx.pure.u64(m.tickSize),
-            tx.pure.u64(m.lotSize),
-            tx.pure.u64(m.minSize),
-          ],
-        });
-        await execTx(client, tx, keypair, `xoptions.create_series ${s.underlying}`);
-      }
-    }
-    if (marketId) summary.xoptions.push({ marketId, base: m.base, quote: m.quote, series: (m.series as any) || [] });
-  }
-}
 
 async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25519Keypair, summary: DeploymentSummary) {
   if (!cfg.lendingMarkets?.length) return;
@@ -1285,8 +1149,7 @@ async function writeDeploymentMarkdown(summary: DeploymentSummary) {
   lines.push(`- **Gas Futures**: ${summary.gasFutures.length}`);
   lines.push(`- **Perpetuals**: ${summary.perpetuals.length}`);
   lines.push(`- **XPerps**: ${summary.xperps.length}`);
-  lines.push(`- **XFuture series**: ${summary.xfutures.length}`);
-  lines.push(`- **XOptions**: ${summary.xoptions.length}`);
+  // Removed synthetic modules xfutures/xoptions
   lines.push(`- **DEX Pools**: ${summary.dexPools.length}`);
   lines.push(`- **Vaults**: ${summary.vaults.length}`);
   lines.push('');
@@ -1435,8 +1298,6 @@ export async function main(): Promise<void> {
     dexPools: [],
     vaults: [],
     xperps: [],
-    xfutures: [],
-    xoptions: [],
   };
 
   const ensuredOracleId = await ensureOracleRegistry(client, deployConfig, keypair, summary);
@@ -1455,8 +1316,6 @@ export async function main(): Promise<void> {
   await deployPerpetuals(client, deployConfig, keypair, summary);
   // x- synthetic protocols
   await deployXPerps(client, deployConfig, keypair, summary);
-  await deployXFutureSeries(client, deployConfig, keypair, summary);
-  await deployXOptions(client, deployConfig, keypair, summary);
   await deployDexPools(client, deployConfig, keypair, summary);
 
   // Create vaults (optional)

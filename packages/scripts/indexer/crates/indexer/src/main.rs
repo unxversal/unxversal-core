@@ -113,8 +113,6 @@ async fn main() -> Result<(), anyhow::Error> {
                 "staking",
                 "unxv",
                 "usdu",
-                "xfutures",
-                "xoptions",
                 "xperps",
             ]), package_allowlist),
             Default::default(),

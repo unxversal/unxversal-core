@@ -101,6 +101,8 @@ export interface FuturesComponentProps extends FuturesActions {
   feeVaultId?: string;
   stakingPoolId?: string;
   rewardsId?: string;
+  oracleRegistryId?: string;
+  aggregatorId?: string;
 
   // ticker/stats for selected market
   summary: FuturesSummary;
