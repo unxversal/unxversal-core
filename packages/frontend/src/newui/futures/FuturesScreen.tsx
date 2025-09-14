@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 import { DerivativesScreen } from '../../components/derivatives/DerivativesScreen';
-import { GasFuturesTradePanel } from '../../components/gas-futures/GasFuturesTradePanel';
+import { FuturesTradePanel } from './FuturesTradePanel';
 import { createMockDerivativesProvider, createMockTradePanelProvider, createMockExpiryContracts } from '../../components/derivatives/providers/mock';
 import type { DerivativesDataProvider, TradePanelDataProvider, ExpiryContract } from '../../components/derivatives/types';
 import { useFuturesIndexer } from './useFuturesIndexer';
@@ -52,7 +52,7 @@ export function FuturesScreen({ useSampleData = false }: { useSampleData?: boole
         selectedSymbol={symbol}
         onSelectSymbol={setSymbol}
         symbolIconMap={symbolIconMap}
-        TradePanelComponent={(p) => <GasFuturesTradePanel mid={p.mid} provider={p.provider} baseSymbol={p.baseSymbol} quoteSymbol={p.quoteSymbol} />}
+        TradePanelComponent={(p) => <FuturesTradePanel mid={p.mid} provider={p.provider} baseSymbol={p.baseSymbol} quoteSymbol={p.quoteSymbol} />}
       />
     );
   }
@@ -163,7 +163,7 @@ export function FuturesScreen({ useSampleData = false }: { useSampleData?: boole
       selectedSymbol={symbol}
       onSelectSymbol={setSymbol}
       symbolIconMap={symbolIconMap}
-      TradePanelComponent={(p) => <GasFuturesTradePanel mid={p.mid} provider={p.provider} baseSymbol={p.baseSymbol} quoteSymbol={p.quoteSymbol} />}
+      TradePanelComponent={(p) => <FuturesTradePanel mid={p.mid} provider={p.provider} baseSymbol={p.baseSymbol} quoteSymbol={p.quoteSymbol} />}
     />
   );
 }
