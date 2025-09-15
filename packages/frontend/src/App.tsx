@@ -24,6 +24,7 @@ import { SwapScreen } from './components/swap'
 import { createMockOptionsProvider } from './components/options/providers/mock'
 import { OptionsScreen as NewOptionsScreen } from './newui/options/OptionsScreen'
 import { FuturesScreen as NewFuturesScreen } from './newui/futures/FuturesScreen'
+import { GasFuturesScreen as NewGasFuturesScreen } from './newui/gas-futures'
 import { Toaster } from 'sonner'
 
 type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'bridge' | 'swap' | 'settings'
@@ -149,7 +150,11 @@ function App() {
       />
       <main className={view === 'dex' || view === 'gas' || view === 'futures' || view === 'perps' || view === 'lending' || view === 'staking' || view === 'swap' ? styles.mainDex : styles.main}>
         {view === 'dex' && <DexScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
-        {view === 'gas' && <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />}
+        {view === 'gas' && (
+          useNewUi
+            ? <NewGasFuturesScreen useSampleData={useSampleData} />
+            : <GasFuturesScreen started={started} surgeReady={surgeReady} network={network} protocolStatus={protocolStatus} />
+        )}
         {view === 'lending' && (
           useNewUi
             ? <LendingWrapper useSampleData={useSampleData} />
