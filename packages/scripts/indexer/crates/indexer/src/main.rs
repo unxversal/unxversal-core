@@ -100,19 +100,25 @@ async fn main() -> Result<(), anyhow::Error> {
     let package_allowlist: Option<Vec<String>> = std::env::var("UNXV_PACKAGE_IDS")
         .ok()
         .map(|s| s.split(',').map(|x| x.trim().to_ascii_lowercase()).filter(|x| !x.is_empty()).collect());
+    // Modular packages: same module names across different package ids.
+    // Keep module allowlist broad; restrict by UNXV_PACKAGE_IDS for security.
     indexer
         .concurrent_pipeline(
             UnxvEventsHandler::new(Some(vec![
+                "admin",
+                "fees",
+                "oracle",
+                "staking",
+                "rewards",
+                "usdu",
+                "book",
+                "big_vector",
                 "dex",
                 "futures",
                 "gas_futures",
-                "lending",
-                "options",
                 "perpetuals",
-                "rewards",
-                "staking",
-                "unxv",
-                "usdu",
+                "options",
+                "lending",
                 "xperps",
             ]), package_allowlist),
             Default::default(),

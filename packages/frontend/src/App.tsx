@@ -24,6 +24,7 @@ import { SwapScreen } from './components/swap'
 import { createMockOptionsProvider } from './components/options/providers/mock'
 import { OptionsScreen as NewOptionsScreen } from './newui/options/OptionsScreen'
 import { FuturesScreen as NewFuturesScreen } from './newui/futures/FuturesScreen'
+import { Toaster } from 'sonner'
 
 type View = 'dex' | 'gas' | 'lending' | 'staking' | 'faucet' | 'options' | 'futures' | 'perps' | 'bridge' | 'swap' | 'settings'
 
@@ -189,6 +190,7 @@ function App() {
         )}
         {view === 'settings' && <SettingsScreen onClose={() => setView('dex')} />}
       </main>
+      <Toaster richColors position="top-center" />
       {!(view === 'dex' || view === 'gas' || view === 'futures' || view === 'lending' || view === 'staking' || view === 'perps' || view === 'bridge' || view === 'swap') && (
         <footer className={styles.footer}>
           <div className={styles.statusBadges}>

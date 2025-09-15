@@ -9,6 +9,7 @@ import { loadSettings, getTokenBySymbol } from '../../lib/settings.config';
 import { useCurrentAccount, useSuiClient, useSignAndExecuteTransaction } from '@mysten/dapp-kit';
 import { FuturesClient } from '../../clients/futures';
 import { Transaction } from '@mysten/sui/transactions';
+import { toast } from 'sonner';
 
 export function FuturesScreen({ useSampleData = false }: { useSampleData?: boolean }) {
   const settings = loadSettings();
@@ -129,21 +130,79 @@ export function FuturesScreen({ useSampleData = false }: { useSampleData?: boole
     },
     async getActiveStake() { return 0; },
     async submitOrder(o: { side: 'long' | 'short'; size: number; price?: number; leverage: number }) {
-      if (!acct?.address) throw new Error('Connect wallet');
+      if (!acct?.address) { toast.error('Connect wallet'); throw new Error('Connect wallet'); }
       const pkg = settings.contracts.pkgUnxversal;
-      if (!pkg) throw new Error('Configure pkgUnxversal in Settings');
+      if (!pkg) { toast.error('Configure pkgUnxversal in Settings'); throw new Error('Missing pkgUnxversal'); }
       const fc = new FuturesClient(pkg);
       const qty = BigInt(Math.max(0, Math.floor(o.size)));
       const oracleRegistryId = ix.oracleRegistryId || '';
       const aggregatorId = ix.aggregatorId || '';
       const marketId = ix.marketId || '';
-      if (!marketId || !oracleRegistryId || !aggregatorId) throw new Error('Missing market or config IDs');
+      if (!marketId || !oracleRegistryId || !aggregatorId) { toast.error('Missing market or oracle IDs'); throw new Error('Missing IDs'); }
       const price1e6 = BigInt(Math.max(1, Math.floor((o.price || ix.summary?.last || 0) * 1_000_000)));
       const expireTs = BigInt(Math.floor(Date.now()/1000) + 15 * 60);
-      const tx = o.side === 'long'
-        ? fc.placeLimitBid({ marketId, price1e6, qty, expireTs, oracleRegistryId, aggregatorId })
-        : fc.placeLimitAsk({ marketId, price1e6, qty, expireTs, oracleRegistryId, aggregatorId });
-      await signAndExecute({ transaction: tx as unknown as Transaction });
+      const id = `fut-order-${Date.now()}`;
+      try {
+        toast.loading('Submitting order…', { id, position: 'top-center' });
+        const tx = o.side === 'long'
+          ? fc.placeLimitBid({ marketId, price1e6, qty, expireTs, oracleRegistryId, aggregatorId })
+          : fc.placeLimitAsk({ marketId, price1e6, qty, expireTs, oracleRegistryId, aggregatorId });
+        await signAndExecute({ transaction: tx as unknown as Transaction });
+        toast.success('Order submitted', { id, position: 'top-center' });
+      } catch (e: any) {
+        toast.error(e?.message ?? 'Order failed', { id, position: 'top-center' });
+        throw e;
+      }
+    },
+    async cancelOrder(orderId: string | number) {
+      if (!acct?.address) { toast.error('Connect wallet'); throw new Error('Connect wallet'); }
+      const pkg = settings.contracts.pkgUnxversal; if (!pkg) throw new Error('Configure pkgUnxversal');
+      const fc = new FuturesClient(pkg);
+      const oracleRegistryId = ix.oracleRegistryId || '';
+      const aggregatorId = ix.aggregatorId || '';
+      const marketId = ix.marketId || '';
+      if (!marketId || !oracleRegistryId || !aggregatorId) throw new Error('Missing IDs');
+      const id = `fut-cancel-${orderId}`;
+      try {
+        toast.loading('Canceling order…', { id, position: 'top-center' });
+        const tx = fc.cancelOrder({ marketId, orderId: BigInt(orderId), oracleRegistryId, aggregatorId });
+        await signAndExecute({ transaction: tx as unknown as Transaction });
+        toast.success('Order canceled', { id, position: 'top-center' });
+      } catch (e: any) { toast.error(e?.message ?? 'Cancel failed', { id, position: 'top-center' }); throw e; }
+    },
+    async depositCollateral() {
+      toast.info('Deposit collateral not wired: requires coin selection', { position: 'top-center' });
+    },
+    async withdrawCollateral(amountUi: number) {
+      if (!acct?.address) { toast.error('Connect wallet'); throw new Error('Connect wallet'); }
+      const pkg = settings.contracts.pkgUnxversal; if (!pkg) throw new Error('Configure pkgUnxversal');
+      const fc = new FuturesClient(pkg);
+      const oracleRegistryId = ix.oracleRegistryId || '';
+      const aggregatorId = ix.aggregatorId || '';
+      const marketId = ix.marketId || '';
+      if (!marketId || !oracleRegistryId || !aggregatorId) throw new Error('Missing IDs');
+      const id = 'fut-withdraw';
+      try {
+        toast.loading('Withdrawing collateral…', { id, position: 'top-center' });
+        const tx = fc.withdrawCollateral({ marketId, amount: BigInt(Math.max(0, Math.floor(amountUi))), oracleRegistryId, aggregatorId });
+        await signAndExecute({ transaction: tx as unknown as Transaction });
+        toast.success('Withdrawn', { id, position: 'top-center' });
+      } catch (e: any) { toast.error(e?.message ?? 'Withdraw failed', { id, position: 'top-center' }); throw e; }
+    },
+    async claimPnlCredit() {
+      if (!acct?.address) { toast.error('Connect wallet'); throw new Error('Connect wallet'); }
+      const pkg = settings.contracts.pkgUnxversal; if (!pkg) throw new Error('Configure pkgUnxversal');
+      const fc = new FuturesClient(pkg);
+      const marketId = ix.marketId || '';
+      const feeVaultId = settings.dex.feeVaultId || '';
+      if (!marketId || !feeVaultId) throw new Error('Missing IDs');
+      const id = 'fut-claimpnl';
+      try { 
+        toast.loading('Claiming PnL credit…', { id, position: 'top-center' });
+        const tx = fc.claimPnlCredit({ marketId, feeVaultId });
+        await signAndExecute({ transaction: tx as unknown as Transaction });
+        toast.success('PnL credit claimed', { id, position: 'top-center' });
+      } catch (e: any) { toast.error(e?.message ?? 'Claim failed', { id, position: 'top-center' }); throw e; }
     },
   };
 

@@ -83,6 +83,16 @@ const EXTRA_FUTURES_TESTNET: NonNullable<DeployConfig['futures']> = (() => {
 export const deployConfig: DeployConfig = {
   network: 'mainnet',
   pkgId: '',
+  pkgIds: {
+    core: '',  // fill after publishing unxvcore
+    dex: '',
+    futures: '',
+    perps: '',
+    gas: '',
+    options: '',
+    lending: '',
+    xperps: '',
+  },
   adminRegistryId: '',
   feeConfigId: '',
   feeVaultId: '',
@@ -115,6 +125,16 @@ export const deployConfig: DeployConfig = {
 export const testnetDeployConfig: DeployConfig = {
   network: 'testnet',
   pkgId: '',
+  pkgIds: {
+    core: '',  // fill after publishing unxvcore
+    dex: '',
+    futures: '',
+    perps: '',
+    gas: '',
+    options: '',
+    lending: '',
+    xperps: '',
+  },
   adminRegistryId: '',
   feeConfigId: '',
   feeVaultId: '',

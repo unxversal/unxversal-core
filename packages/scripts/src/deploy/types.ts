@@ -25,7 +25,19 @@ export type RiskParams = {
 
 export type DeployConfig = {
   network: NetworkName;
+  /** Core package id (unxvcore). For modular deployments this is the core pkg. */
   pkgId: string;
+  /** Optional per-package ids when deploying modular packages */
+  pkgIds?: {
+    core?: string;      // unxvcore (alias of pkgId)
+    dex?: string;       // unxvdex
+    futures?: string;   // unxvfutures
+    perps?: string;     // unxvperps
+    gas?: string;       // unxvgasfutures
+    options?: string;   // unxvoptions
+    lending?: string;   // unxvlending
+    xperps?: string;    // unxvxperps
+  };
   adminRegistryId: string;
   feeConfigId: string;
   feeVaultId: string;

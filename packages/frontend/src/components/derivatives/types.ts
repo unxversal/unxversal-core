@@ -87,6 +87,10 @@ export interface TradePanelDataProvider {
   getFeeInfo?: () => Promise<{ takerBps: number; unxvDiscountBps: number }>;
   getActiveStake?: (address: string) => Promise<number>;
   submitOrder?: (o: { side: 'long' | 'short'; size: number; price?: number; leverage: number }) => Promise<void>;
+  cancelOrder?: (orderId: string | number) => Promise<void>;
+  depositCollateral?: () => Promise<void>;
+  withdrawCollateral?: (amountUi: number) => Promise<void>;
+  claimPnlCredit?: () => Promise<void>;
 }
 
 export interface TradePanelProps {

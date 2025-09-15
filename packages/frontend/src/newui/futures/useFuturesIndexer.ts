@@ -3,6 +3,7 @@ import type { SuiClient } from '@mysten/sui/client';
 import type { FuturesComponentProps, FuturesSummary, OrderbookSnapshot, TradeFillRow, FuturesPositionRow, UserOrderRow, OrderHistoryRow } from './types';
 import { loadSettings } from '../../lib/settings.config';
 import { getLatestPrice } from '../../lib/switchboard';
+import { toast } from 'sonner';
 
 export type UseFuturesIndexerArgs = {
   client: SuiClient;
@@ -32,6 +33,7 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
 
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | undefined>();
+  const lastErrorRef = useRef<string | undefined>(undefined);
 
   // selections
   const allSymbols = settings.markets.watchlist;
@@ -334,6 +336,13 @@ export function useFuturesIndexer({ client, selectedSymbol, selectedExpiryMs, ad
     return () => { stopped = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, selectedSymbol, selectedExpiryMs, address, pkg, enabled]);
+
+  useEffect(() => {
+    if (error && error !== lastErrorRef.current) {
+      lastErrorRef.current = error;
+      toast.error(error, { position: 'top-center', id: 'fut-indexer-error' });
+    }
+  }, [error]);
 
   return {
     props: {

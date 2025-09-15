@@ -54,6 +54,11 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
   const feeInput = notional * (takerBps / 10000);
   const feeUnxv = notional * ((takerBps * (1 - unxvDiscBps / 10000)) / 10000);
   const requiredMargin = leverage > 0 ? notional / leverage : notional;
+  const liqPrice = useMemo(() => {
+    if (!effPrice || leverage <= 0) return 'N/A';
+    const lp = side === 'long' ? effPrice * (1 - 0.75 / leverage) : effPrice * (1 + 0.75 / leverage);
+    return `${lp.toFixed(4)} ${quoteSymbol}`;
+  }, [effPrice, leverage, side, quoteSymbol]);
 
   const applyPercent = (p: number) => {
     const maxSize = leverage > 0 ? (quoteBal * leverage) / (effPrice || 1) : (quoteBal / (effPrice || 1));
@@ -156,17 +161,18 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
             </div>
           </div>
 
-          <div className={styles.orderSummary}>
-            <div className={styles.summaryRow}><span>Order Value</span><span>{notional.toFixed(2)} {quoteSymbol}</span></div>
-            <div className={styles.summaryRow}><span>Margin Required</span><span>{requiredMargin.toFixed(2)} {quoteSymbol}</span></div>
-            <div className={styles.summaryRow}><span>Trading Fee</span><span>{feeType==='unxv' ? `${feeUnxv.toFixed(6)} UNXV` : `${feeInput.toFixed(6)} ${quoteSymbol}`}</span></div>
-          </div>
-
           <div className={styles.feeSection}>
             <div className={styles.feeSelector}>
               <span className={styles.feeLabel}>Fee Payment</span>
               <button className={`${styles.feeToggle} ${feeType==='unxv'?styles.active:''}`} onClick={()=>setFeeType(feeType==='unxv'?'input':'unxv')}>{feeType==='unxv' ? 'UNXV' : quoteSymbol}</button>
             </div>
+          </div>
+
+          <div className={styles.orderSummary}>
+            <div className={styles.summaryRow}><span>Order Value</span><span>{notional.toFixed(2)} {quoteSymbol}</span></div>
+            <div className={styles.summaryRow}><span>Margin Required</span><span>{requiredMargin.toFixed(2)} {quoteSymbol}</span></div>
+            <div className={styles.summaryRow}><span>Trading Fee</span><span>{feeType==='unxv' ? `${feeUnxv.toFixed(6)} UNXV` : `${feeInput.toFixed(6)} ${quoteSymbol}`}</span></div>
+            <div className={styles.summaryRow}><span>Liquidation Price</span><span>{liqPrice}</span></div>
           </div>
         </div>
 

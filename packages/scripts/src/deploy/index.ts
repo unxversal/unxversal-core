@@ -199,11 +199,12 @@ async function ensureOracleRegistry(client: SuiClient, cfg: DeployConfig, keypai
   }
   logger.info('oracle.init_registry starting');
   const tx = new Transaction();
-  tx.moveCall({ target: `${cfg.pkgId}::oracle::init_registry`, arguments: [tx.object(cfg.adminRegistryId), tx.object('0x6')] });
+  const corePkg = cfg.pkgIds?.core || cfg.pkgId;
+  tx.moveCall({ target: `${corePkg}::oracle::init_registry`, arguments: [tx.object(cfg.adminRegistryId), tx.object('0x6')] });
   const res = await execTx(client, tx, keypair, 'oracle.init_registry');
   accumulateFromRes(res, summary);
-  const id = extractCreatedId(res, `${cfg.pkgId}::oracle::OracleRegistry`)
-    || extractCreatedId(res, `${cfg.pkgId}::oracle::OracleRegistry`)
+  const id = extractCreatedId(res, `${corePkg}::oracle::OracleRegistry`)
+    || extractCreatedId(res, `${corePkg}::oracle::OracleRegistry`)
     || '';
   return id;
 }
@@ -212,7 +213,8 @@ async function setOracleParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
   if (cfg.oracleMaxAgeSec && cfg.oracleRegistryId) {
     logger.info(`oracle.set_max_age -> ${cfg.oracleMaxAgeSec}s on registry ${cfg.oracleRegistryId}`);
     const tx = new Transaction();
-    tx.moveCall({ target: `${cfg.pkgId}::oracle::set_max_age_registry`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.u64(cfg.oracleMaxAgeSec), tx.object('0x6')] });
+    const corePkg = cfg.pkgIds?.core || cfg.pkgId;
+    tx.moveCall({ target: `${corePkg}::oracle::set_max_age_registry`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.u64(cfg.oracleMaxAgeSec), tx.object('0x6')] });
     await execTx(client, tx, keypair, 'oracle.set_max_age');
   }
   if (cfg.oracleFeeds && cfg.oracleFeeds.length && cfg.oracleRegistryId) {
@@ -220,7 +222,8 @@ async function setOracleParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
     for (const f of cfg.oracleFeeds) {
       logger.debug(`  feed ${f.symbol} -> ${f.priceId}`);
       const tx = new Transaction();
-      tx.moveCall({ target: `${cfg.pkgId}::oracle::set_feed_from_bytes`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.string(f.symbol), tx.pure.vector('u8', Array.from(Buffer.from(f.priceId.replace(/^0x/, ''), 'hex'))), tx.object('0x6')] as any });
+      const corePkg = cfg.pkgIds?.core || cfg.pkgId;
+      tx.moveCall({ target: `${corePkg}::oracle::set_feed_from_bytes`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.oracleRegistryId), tx.pure.string(f.symbol), tx.pure.vector('u8', Array.from(Buffer.from(f.priceId.replace(/^0x/, ''), 'hex'))), tx.object('0x6')] as any });
       await execTx(client, tx, keypair, `oracle.set_feed_from_bytes ${f.symbol}`);
     }
   }
@@ -231,7 +234,8 @@ async function addAdditionalAdmins(client: SuiClient, cfg: DeployConfig, keypair
   logger.info(`admin.add_admin for ${cfg.additionalAdmins.length} addresses`);
   for (const addr of cfg.additionalAdmins) {
     const tx = new Transaction();
-    tx.moveCall({ target: `${cfg.pkgId}::admin::add_admin`, arguments: [tx.object(cfg.adminRegistryId), tx.pure.address(addr)] });
+    const corePkg = cfg.pkgIds?.core || cfg.pkgId;
+    tx.moveCall({ target: `${corePkg}::admin::add_admin`, arguments: [tx.object(cfg.adminRegistryId), tx.pure.address(addr)] });
     await execTx(client, tx, keypair, `admin.add_admin ${addr}`);
   }
 }
@@ -242,8 +246,9 @@ async function updateFeeParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
     logger.info('fees.set_params');
     logger.debug(JSON.stringify(p));
     const tx = new Transaction();
+    const corePkg = cfg.pkgIds?.core || cfg.pkgId;
     tx.moveCall({
-      target: `${cfg.pkgId}::fees::set_params`,
+      target: `${corePkg}::fees::set_params`,
       arguments: [
         tx.object(cfg.adminRegistryId),
         tx.object(cfg.feeConfigId),
@@ -264,8 +269,9 @@ async function updateFeeParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
     logger.info('fees.set_staking_tiers');
     logger.debug(JSON.stringify(t));
     const tx = new Transaction();
+    const corePkg = cfg.pkgIds?.core || cfg.pkgId;
     tx.moveCall({
-      target: `${cfg.pkgId}::fees::set_staking_tiers`,
+      target: `${corePkg}::fees::set_staking_tiers`,
       arguments: [
         tx.object(cfg.adminRegistryId),
         tx.object(cfg.feeConfigId),
@@ -284,7 +290,8 @@ async function updateFeeParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
     logger.info('fees.set_trade_fees (DEX)');
     logger.debug(JSON.stringify(t));
     const tx = new Transaction();
-    tx.moveCall({ target: `${cfg.pkgId}::fees::set_trade_fees`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(t.takerBps), tx.pure.u64(t.makerBps)] });
+    const corePkg = cfg.pkgIds?.core || cfg.pkgId;
+    tx.moveCall({ target: `${corePkg}::fees::set_trade_fees`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(t.takerBps), tx.pure.u64(t.makerBps)] });
     await execTx(client, tx, keypair, 'fees.set_trade_fees');
   }
   if (cfg.tradeFees?.futures) {
@@ -292,7 +299,8 @@ async function updateFeeParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
     logger.info('fees.set_futures_trade_fees');
     logger.debug(JSON.stringify(t));
     const tx = new Transaction();
-    tx.moveCall({ target: `${cfg.pkgId}::fees::set_futures_trade_fees`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(t.takerBps), tx.pure.u64(t.makerBps)] });
+    const corePkg = cfg.pkgIds?.core || cfg.pkgId;
+    tx.moveCall({ target: `${corePkg}::fees::set_futures_trade_fees`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(t.takerBps), tx.pure.u64(t.makerBps)] });
     await execTx(client, tx, keypair, 'fees.set_futures_trade_fees');
   }
   if (cfg.tradeFees?.gasFutures) {
@@ -300,7 +308,8 @@ async function updateFeeParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
     logger.info('fees.set_gasfutures_trade_fees');
     logger.debug(JSON.stringify(t));
     const tx = new Transaction();
-    tx.moveCall({ target: `${cfg.pkgId}::fees::set_gasfutures_trade_fees`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(t.takerBps), tx.pure.u64(t.makerBps)] });
+    const corePkg = cfg.pkgIds?.core || cfg.pkgId;
+    tx.moveCall({ target: `${corePkg}::fees::set_gasfutures_trade_fees`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(t.takerBps), tx.pure.u64(t.makerBps)] });
     await execTx(client, tx, keypair, 'fees.set_gasfutures_trade_fees');
   }
   if (cfg.lendingParams) {
@@ -308,13 +317,15 @@ async function updateFeeParams(client: SuiClient, cfg: DeployConfig, keypair: Ed
     logger.info('fees.set_lending_params');
     logger.debug(JSON.stringify(lp));
     const tx = new Transaction();
-    tx.moveCall({ target: `${cfg.pkgId}::fees::set_lending_params`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(lp.borrowFeeBps), tx.pure.u64(lp.collateralBonusMaxBps)] });
+    const corePkg = cfg.pkgIds?.core || cfg.pkgId;
+    tx.moveCall({ target: `${corePkg}::fees::set_lending_params`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(lp.borrowFeeBps), tx.pure.u64(lp.collateralBonusMaxBps)] });
     await execTx(client, tx, keypair, 'fees.set_lending_params');
   }
   if (typeof cfg.poolCreationFeeUnxv === 'number') {
     logger.info(`fees.set_pool_creation_fee_unxv -> ${cfg.poolCreationFeeUnxv}`);
     const tx = new Transaction();
-    tx.moveCall({ target: `${cfg.pkgId}::fees::set_pool_creation_fee_unxv`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(cfg.poolCreationFeeUnxv)] });
+    const corePkg = cfg.pkgIds?.core || cfg.pkgId;
+    tx.moveCall({ target: `${corePkg}::fees::set_pool_creation_fee_unxv`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.feeConfigId), tx.pure.u64(cfg.poolCreationFeeUnxv)] });
     await execTx(client, tx, keypair, 'fees.set_pool_creation_fee_unxv');
   }
 }
@@ -325,13 +336,15 @@ async function applyUsduFaucetSettings(client: SuiClient, cfg: DeployConfig, key
   if (perAddressLimit != null) {
     logger.info(`usdu.set_per_address_limit -> ${perAddressLimit}`);
     const tx = new Transaction();
-    tx.moveCall({ target: `${cfg.pkgId}::usdu::set_per_address_limit`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.usduFaucetId), tx.pure.u64(perAddressLimit), tx.object('0x6')] });
+    const corePkg = cfg.pkgIds?.core || cfg.pkgId;
+    tx.moveCall({ target: `${corePkg}::usdu::set_per_address_limit`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.usduFaucetId), tx.pure.u64(perAddressLimit), tx.object('0x6')] });
     await execTx(client, tx, keypair, 'usdu.set_per_address_limit');
   }
   if (paused != null) {
     logger.info(`usdu.set_paused -> ${paused}`);
     const tx = new Transaction();
-    tx.moveCall({ target: `${cfg.pkgId}::usdu::set_paused`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.usduFaucetId), tx.pure.bool(paused), tx.object('0x6')] });
+    const corePkg = cfg.pkgIds?.core || cfg.pkgId;
+    tx.moveCall({ target: `${corePkg}::usdu::set_paused`, arguments: [tx.object(cfg.adminRegistryId), tx.object(cfg.usduFaucetId), tx.pure.bool(paused), tx.object('0x6')] });
     await execTx(client, tx, keypair, 'usdu.set_paused');
   }
 }
@@ -344,10 +357,11 @@ async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25
     if (!marketId) {
       logger.debug(`options.init_market (base=${m.base}, quote=${m.quote})`);
       const tx = new Transaction();
-      tx.moveCall({ target: `${cfg.pkgId}::options::init_market`, arguments: [tx.object(cfg.adminRegistryId)] });
+      const optPkg = cfg.pkgIds?.options || cfg.pkgId;
+      tx.moveCall({ target: `${optPkg}::options::init_market`, arguments: [tx.object(cfg.adminRegistryId)] });
       const res = await execTx(client, tx, keypair, 'options.init_market');
       accumulateFromRes(res, summary);
-      marketId = extractCreatedId(res, `${cfg.pkgId}::options::OptionsMarket<`) || marketId;
+      marketId = extractCreatedId(res, `${optPkg}::options::OptionsMarket<`) || marketId;
       if (marketId) logger.info(`options.market created id=${marketId}`);
     }
     if (m.series?.length && marketId) {
@@ -355,8 +369,9 @@ async function deployOptions(client: SuiClient, cfg: DeployConfig, keypair: Ed25
       logger.info(`Creating ${m.series.length} option series for market ${marketId} (${symbol})`);
       for (const s of m.series) {
         const tx = new Transaction();
+        const optPkg = cfg.pkgIds?.options || cfg.pkgId;
         tx.moveCall({
-          target: `${cfg.pkgId}::options::create_option_series`,
+          target: `${optPkg}::options::create_option_series`,
           typeArguments: [m.base, m.quote],
           arguments: [
             tx.object(cfg.adminRegistryId),
@@ -389,8 +404,9 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
     if (!f.marketId) {
       logger.debug(`futures.init_market symbol=${f.symbol} expiryMs=${(f as any).expiryMs ?? 0}`);
       const tx = new Transaction();
+      const futPkg = cfg.pkgIds?.futures || cfg.pkgId;
       tx.moveCall({
-        target: `${cfg.pkgId}::futures::init_market`,
+        target: `${futPkg}::futures::init_market`,
         typeArguments: [f.collat],
         arguments: [
           tx.object(cfg.adminRegistryId),
@@ -408,7 +424,7 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
       });
       const res = await execTx(client, tx, keypair, `futures.init_market ${f.symbol}`);
       accumulateFromRes(res, summary);
-      const id = extractCreatedId(res, `${cfg.pkgId}::futures::FuturesMarket<`);
+      const id = extractCreatedId(res, `${futPkg}::futures::FuturesMarket<`);
       if (id) logger.info(`futures.market created id=${id}`);
       if (id) summary.futures.push({
         marketId: id,
@@ -439,45 +455,53 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
         const fc = f as any;
         if (typeof fc.closeOnly === 'boolean') {
           const t1 = new Transaction();
-          t1.moveCall({ target: `${cfg.pkgId}::futures::set_close_only`, typeArguments: [f.collat], arguments: [t1.object(cfg.adminRegistryId), t1.object(id), t1.pure.bool(fc.closeOnly)] });
+          const futPkg = cfg.pkgIds?.futures || cfg.pkgId;
+          t1.moveCall({ target: `${futPkg}::futures::set_close_only`, typeArguments: [f.collat], arguments: [t1.object(cfg.adminRegistryId), t1.object(id), t1.pure.bool(fc.closeOnly)] });
           await execTx(client, t1, keypair, `futures.set_close_only ${f.symbol}`);
         }
         if (typeof fc.maxDeviationBps === 'number') {
           const t2 = new Transaction();
-          t2.moveCall({ target: `${cfg.pkgId}::futures::set_price_deviation_bps`, typeArguments: [f.collat], arguments: [t2.object(cfg.adminRegistryId), t2.object(id), t2.pure.u64(fc.maxDeviationBps)] });
+          const futPkg = cfg.pkgIds?.futures || cfg.pkgId;
+          t2.moveCall({ target: `${futPkg}::futures::set_price_deviation_bps`, typeArguments: [f.collat], arguments: [t2.object(cfg.adminRegistryId), t2.object(id), t2.pure.u64(fc.maxDeviationBps)] });
           await execTx(client, t2, keypair, `futures.set_price_deviation_bps ${f.symbol}`);
         }
         if (typeof fc.pnlFeeShareBps === 'number') {
           const t3 = new Transaction();
-          t3.moveCall({ target: `${cfg.pkgId}::futures::set_pnl_fee_share_bps`, typeArguments: [f.collat], arguments: [t3.object(cfg.adminRegistryId), t3.object(id), t3.pure.u64(fc.pnlFeeShareBps)] });
+          const futPkg = cfg.pkgIds?.futures || cfg.pkgId;
+          t3.moveCall({ target: `${futPkg}::futures::set_pnl_fee_share_bps`, typeArguments: [f.collat], arguments: [t3.object(cfg.adminRegistryId), t3.object(id), t3.pure.u64(fc.pnlFeeShareBps)] });
           await execTx(client, t3, keypair, `futures.set_pnl_fee_share_bps ${f.symbol}`);
         }
         if (typeof fc.liqTargetBufferBps === 'number') {
           const t4 = new Transaction();
-          t4.moveCall({ target: `${cfg.pkgId}::futures::set_liq_target_buffer_bps`, typeArguments: [f.collat], arguments: [t4.object(cfg.adminRegistryId), t4.object(id), t4.pure.u64(fc.liqTargetBufferBps)] });
+          const futPkg = cfg.pkgIds?.futures || cfg.pkgId;
+          t4.moveCall({ target: `${futPkg}::futures::set_liq_target_buffer_bps`, typeArguments: [f.collat], arguments: [t4.object(cfg.adminRegistryId), t4.object(id), t4.pure.u64(fc.liqTargetBufferBps)] });
           await execTx(client, t4, keypair, `futures.set_liq_target_buffer_bps ${f.symbol}`);
         }
         if (fc.imbalanceParams) {
           const p = fc.imbalanceParams as { surchargeMaxBps: number; thresholdBps: number };
           const t5 = new Transaction();
-          t5.moveCall({ target: `${cfg.pkgId}::futures::set_imbalance_params`, typeArguments: [f.collat], arguments: [t5.object(cfg.adminRegistryId), t5.object(id), t5.pure.u64(p.surchargeMaxBps), t5.pure.u64(p.thresholdBps)] });
+          const futPkg = cfg.pkgIds?.futures || cfg.pkgId;
+          t5.moveCall({ target: `${futPkg}::futures::set_imbalance_params`, typeArguments: [f.collat], arguments: [t5.object(cfg.adminRegistryId), t5.object(id), t5.pure.u64(p.surchargeMaxBps), t5.pure.u64(p.thresholdBps)] });
           await execTx(client, t5, keypair, `futures.set_imbalance_params ${f.symbol}`);
         }
         if (fc.accountMaxNotional1e6 || fc.marketMaxNotional1e6) {
           const t6 = new Transaction();
-          t6.moveCall({ target: `${cfg.pkgId}::futures::set_notional_caps`, typeArguments: [f.collat], arguments: [t6.object(cfg.adminRegistryId), t6.object(id), t6.pure.u128(BigInt(fc.accountMaxNotional1e6 || '0')), t6.pure.u128(BigInt(fc.marketMaxNotional1e6 || '0'))] as any });
+          const futPkg = cfg.pkgIds?.futures || cfg.pkgId;
+          t6.moveCall({ target: `${futPkg}::futures::set_notional_caps`, typeArguments: [f.collat], arguments: [t6.object(cfg.adminRegistryId), t6.object(id), t6.pure.u128(BigInt(fc.accountMaxNotional1e6 || '0')), t6.pure.u128(BigInt(fc.marketMaxNotional1e6 || '0'))] as any });
           await execTx(client, t6, keypair, `futures.set_notional_caps ${f.symbol}`);
         }
         if (typeof fc.accountShareOfOiBps === 'number') {
           const t7 = new Transaction();
-          t7.moveCall({ target: `${cfg.pkgId}::futures::set_share_of_oi_bps`, typeArguments: [f.collat], arguments: [t7.object(cfg.adminRegistryId), t7.object(id), t7.pure.u64(fc.accountShareOfOiBps)] });
+          const futPkg = cfg.pkgIds?.futures || cfg.pkgId;
+          t7.moveCall({ target: `${futPkg}::futures::set_share_of_oi_bps`, typeArguments: [f.collat], arguments: [t7.object(cfg.adminRegistryId), t7.object(id), t7.pure.u64(fc.accountShareOfOiBps)] });
           await execTx(client, t7, keypair, `futures.set_share_of_oi_bps ${f.symbol}`);
         }
         if (fc.tierThresholds1e6 && fc.tierImBps) {
           const thresholds = fc.tierThresholds1e6 as number[];
           const imbps = fc.tierImBps as number[];
           const t8 = new Transaction();
-          t8.moveCall({ target: `${cfg.pkgId}::futures::set_risk_tiers`, typeArguments: [f.collat], arguments: [t8.object(cfg.adminRegistryId), t8.object(id), t8.pure.vector('u64', thresholds), t8.pure.vector('u64', imbps)] as any });
+          const futPkg = cfg.pkgIds?.futures || cfg.pkgId;
+          t8.moveCall({ target: `${futPkg}::futures::set_risk_tiers`, typeArguments: [f.collat], arguments: [t8.object(cfg.adminRegistryId), t8.object(id), t8.pure.vector('u64', thresholds), t8.pure.vector('u64', imbps)] as any });
           await execTx(client, t8, keypair, `futures.set_risk_tiers ${f.symbol}`);
         }
       }
@@ -508,7 +532,8 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
       });
       if (typeof (f as any).keeperIncentiveBps === 'number' && f.marketId) {
         const tx = new Transaction();
-        tx.moveCall({ target: `${cfg.pkgId}::futures::set_keeper_incentive_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).keeperIncentiveBps)] });
+        const futPkgX = cfg.pkgIds?.futures || cfg.pkgId;
+        tx.moveCall({ target: `${futPkgX}::futures::set_keeper_incentive_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).keeperIncentiveBps)] });
         await execTx(client, tx, keypair, `futures.set_keeper_incentive_bps ${f.symbol}`);
       }
 
@@ -517,45 +542,53 @@ async function deployFutures(client: SuiClient, cfg: DeployConfig, keypair: Ed25
         // Optional admin knobs post-init
         if (typeof (f as any).closeOnly === 'boolean') {
           const tx = new Transaction();
-          tx.moveCall({ target: `${cfg.pkgId}::futures::set_close_only`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.bool((f as any).closeOnly)] });
+          const futPkgX = cfg.pkgIds?.futures || cfg.pkgId;
+          tx.moveCall({ target: `${futPkgX}::futures::set_close_only`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.bool((f as any).closeOnly)] });
           await execTx(client, tx, keypair, `futures.set_close_only ${f.symbol}`);
         }
         if (typeof (f as any).maxDeviationBps === 'number') {
           const tx = new Transaction();
-          tx.moveCall({ target: `${cfg.pkgId}::futures::set_price_deviation_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).maxDeviationBps)] });
+          const futPkgX = cfg.pkgIds?.futures || cfg.pkgId;
+          tx.moveCall({ target: `${futPkgX}::futures::set_price_deviation_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).maxDeviationBps)] });
           await execTx(client, tx, keypair, `futures.set_price_deviation_bps ${f.symbol}`);
         }
         if (typeof (f as any).pnlFeeShareBps === 'number') {
           const tx = new Transaction();
-          tx.moveCall({ target: `${cfg.pkgId}::futures::set_pnl_fee_share_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).pnlFeeShareBps)] });
+          const futPkgX = cfg.pkgIds?.futures || cfg.pkgId;
+          tx.moveCall({ target: `${futPkgX}::futures::set_pnl_fee_share_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).pnlFeeShareBps)] });
           await execTx(client, tx, keypair, `futures.set_pnl_fee_share_bps ${f.symbol}`);
         }
         if (typeof (f as any).liqTargetBufferBps === 'number') {
           const tx = new Transaction();
-          tx.moveCall({ target: `${cfg.pkgId}::futures::set_liq_target_buffer_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).liqTargetBufferBps)] });
+          const futPkgX = cfg.pkgIds?.futures || cfg.pkgId;
+          tx.moveCall({ target: `${futPkgX}::futures::set_liq_target_buffer_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).liqTargetBufferBps)] });
           await execTx(client, tx, keypair, `futures.set_liq_target_buffer_bps ${f.symbol}`);
         }
         if ((f as any).imbalanceParams) {
           const p = (f as any).imbalanceParams as { surchargeMaxBps: number; thresholdBps: number };
           const tx = new Transaction();
-          tx.moveCall({ target: `${cfg.pkgId}::futures::set_imbalance_params`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64(p.surchargeMaxBps), tx.pure.u64(p.thresholdBps)] });
+          const futPkgX = cfg.pkgIds?.futures || cfg.pkgId;
+          tx.moveCall({ target: `${futPkgX}::futures::set_imbalance_params`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64(p.surchargeMaxBps), tx.pure.u64(p.thresholdBps)] });
           await execTx(client, tx, keypair, `futures.set_imbalance_params ${f.symbol}`);
         }
         if ((f as any).accountMaxNotional1e6 || (f as any).marketMaxNotional1e6) {
           const tx = new Transaction();
-          tx.moveCall({ target: `${cfg.pkgId}::futures::set_notional_caps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u128(BigInt((f as any).accountMaxNotional1e6 || '0')), tx.pure.u128(BigInt((f as any).marketMaxNotional1e6 || '0'))] as any });
+          const futPkgX = cfg.pkgIds?.futures || cfg.pkgId;
+          tx.moveCall({ target: `${futPkgX}::futures::set_notional_caps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u128(BigInt((f as any).accountMaxNotional1e6 || '0')), tx.pure.u128(BigInt((f as any).marketMaxNotional1e6 || '0'))] as any });
           await execTx(client, tx, keypair, `futures.set_notional_caps ${f.symbol}`);
         }
         if (typeof (f as any).accountShareOfOiBps === 'number') {
           const tx = new Transaction();
-          tx.moveCall({ target: `${cfg.pkgId}::futures::set_share_of_oi_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).accountShareOfOiBps)] });
+          const futPkgX = cfg.pkgIds?.futures || cfg.pkgId;
+          tx.moveCall({ target: `${futPkgX}::futures::set_share_of_oi_bps`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.u64((f as any).accountShareOfOiBps)] });
           await execTx(client, tx, keypair, `futures.set_share_of_oi_bps ${f.symbol}`);
         }
         if ((f as any).tierThresholds1e6 && (f as any).tierImBps) {
           const thresholds = (f as any).tierThresholds1e6 as number[];
           const imbps = (f as any).tierImBps as number[];
           const tx = new Transaction();
-          tx.moveCall({ target: `${cfg.pkgId}::futures::set_risk_tiers`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.vector('u64', thresholds), tx.pure.vector('u64', imbps)] as any });
+          const futPkgX = cfg.pkgIds?.futures || cfg.pkgId;
+          tx.moveCall({ target: `${futPkgX}::futures::set_risk_tiers`, typeArguments: [f.collat], arguments: [tx.object(cfg.adminRegistryId), tx.object(f.marketId), tx.pure.vector('u64', thresholds), tx.pure.vector('u64', imbps)] as any });
           await execTx(client, tx, keypair, `futures.set_risk_tiers ${f.symbol}`);
         }
       }
@@ -570,8 +603,9 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
     if (!g.marketId) {
       logger.debug(`gas_futures.init_market expiryMs=${g.expiryMs}`);
       const tx = new Transaction();
+      const gasPkg = cfg.pkgIds?.gas || cfg.pkgId;
       tx.moveCall({
-        target: `${cfg.pkgId}::gas_futures::init_market`,
+        target: `${gasPkg}::gas_futures::init_market`,
         typeArguments: [g.collat],
         arguments: [
           tx.object(cfg.adminRegistryId),
@@ -588,7 +622,7 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
       });
       const res = await execTx(client, tx, keypair, 'gas_futures.init_market');
       accumulateFromRes(res, summary);
-      const id = extractCreatedId(res, `${cfg.pkgId}::gas_futures::GasMarket<`);
+      const id = extractCreatedId(res, `${gasPkg}::gas_futures::GasMarket<`);
       if (id) logger.info(`gas_futures.market created id=${id}`);
       if (id) summary.gasFutures.push({
         marketId: id,
@@ -618,45 +652,53 @@ async function deployGasFutures(client: SuiClient, cfg: DeployConfig, keypair: E
         const gc = g as any;
         if (typeof gc.closeOnly === 'boolean') {
           const t1 = new Transaction();
-          t1.moveCall({ target: `${cfg.pkgId}::gas_futures::set_close_only`, typeArguments: [g.collat], arguments: [t1.object(cfg.adminRegistryId), t1.object(id), t1.pure.bool(gc.closeOnly)] });
+          const gasPkg = cfg.pkgIds?.gas || cfg.pkgId;
+          t1.moveCall({ target: `${gasPkg}::gas_futures::set_close_only`, typeArguments: [g.collat], arguments: [t1.object(cfg.adminRegistryId), t1.object(id), t1.pure.bool(gc.closeOnly)] });
           await execTx(client, t1, keypair, `gas_futures.set_close_only`);
         }
         if (typeof gc.maxDeviationBps === 'number') {
           const t2 = new Transaction();
-          t2.moveCall({ target: `${cfg.pkgId}::gas_futures::set_price_deviation_bps`, typeArguments: [g.collat], arguments: [t2.object(cfg.adminRegistryId), t2.object(id), t2.pure.u64(gc.maxDeviationBps)] });
+          const gasPkg = cfg.pkgIds?.gas || cfg.pkgId;
+          t2.moveCall({ target: `${gasPkg}::gas_futures::set_price_deviation_bps`, typeArguments: [g.collat], arguments: [t2.object(cfg.adminRegistryId), t2.object(id), t2.pure.u64(gc.maxDeviationBps)] });
           await execTx(client, t2, keypair, `gas_futures.set_price_deviation_bps`);
         }
         if (typeof gc.pnlFeeShareBps === 'number') {
           const t3 = new Transaction();
-          t3.moveCall({ target: `${cfg.pkgId}::gas_futures::set_pnl_fee_share_bps`, typeArguments: [g.collat], arguments: [t3.object(cfg.adminRegistryId), t3.object(id), t3.pure.u64(gc.pnlFeeShareBps)] });
+          const gasPkg = cfg.pkgIds?.gas || cfg.pkgId;
+          t3.moveCall({ target: `${gasPkg}::gas_futures::set_pnl_fee_share_bps`, typeArguments: [g.collat], arguments: [t3.object(cfg.adminRegistryId), t3.object(id), t3.pure.u64(gc.pnlFeeShareBps)] });
           await execTx(client, t3, keypair, `gas_futures.set_pnl_fee_share_bps`);
         }
         if (typeof gc.liqTargetBufferBps === 'number') {
           const t4 = new Transaction();
-          t4.moveCall({ target: `${cfg.pkgId}::gas_futures::set_liq_target_buffer_bps`, typeArguments: [g.collat], arguments: [t4.object(cfg.adminRegistryId), t4.object(id), t4.pure.u64(gc.liqTargetBufferBps)] });
+          const gasPkg = cfg.pkgIds?.gas || cfg.pkgId;
+          t4.moveCall({ target: `${gasPkg}::gas_futures::set_liq_target_buffer_bps`, typeArguments: [g.collat], arguments: [t4.object(cfg.adminRegistryId), t4.object(id), t4.pure.u64(gc.liqTargetBufferBps)] });
           await execTx(client, t4, keypair, `gas_futures.set_liq_target_buffer_bps`);
         }
         if (gc.imbalanceParams) {
           const p = gc.imbalanceParams as { surchargeMaxBps: number; thresholdBps: number };
           const t5 = new Transaction();
-          t5.moveCall({ target: `${cfg.pkgId}::gas_futures::set_imbalance_params`, typeArguments: [g.collat], arguments: [t5.object(cfg.adminRegistryId), t5.object(id), t5.pure.u64(p.surchargeMaxBps), t5.pure.u64(p.thresholdBps)] });
+          const gasPkg = cfg.pkgIds?.gas || cfg.pkgId;
+          t5.moveCall({ target: `${gasPkg}::gas_futures::set_imbalance_params`, typeArguments: [g.collat], arguments: [t5.object(cfg.adminRegistryId), t5.object(id), t5.pure.u64(p.surchargeMaxBps), t5.pure.u64(p.thresholdBps)] });
           await execTx(client, t5, keypair, `gas_futures.set_imbalance_params`);
         }
         if (gc.accountMaxNotional1e6 || gc.marketMaxNotional1e6) {
           const t6 = new Transaction();
-          t6.moveCall({ target: `${cfg.pkgId}::gas_futures::set_notional_caps`, typeArguments: [g.collat], arguments: [t6.object(cfg.adminRegistryId), t6.object(id), t6.pure.u128(BigInt(gc.accountMaxNotional1e6 || '0')), t6.pure.u128(BigInt(gc.marketMaxNotional1e6 || '0'))] as any });
+          const gasPkg = cfg.pkgIds?.gas || cfg.pkgId;
+          t6.moveCall({ target: `${gasPkg}::gas_futures::set_notional_caps`, typeArguments: [g.collat], arguments: [t6.object(cfg.adminRegistryId), t6.object(id), t6.pure.u128(BigInt(gc.accountMaxNotional1e6 || '0')), t6.pure.u128(BigInt(gc.marketMaxNotional1e6 || '0'))] as any });
           await execTx(client, t6, keypair, 'gas_futures.set_notional_caps');
         }
         if (typeof gc.accountShareOfOiBps === 'number') {
           const t7 = new Transaction();
-          t7.moveCall({ target: `${cfg.pkgId}::gas_futures::set_share_of_oi_bps`, typeArguments: [g.collat], arguments: [t7.object(cfg.adminRegistryId), t7.object(id), t7.pure.u64(gc.accountShareOfOiBps)] });
+          const gasPkg = cfg.pkgIds?.gas || cfg.pkgId;
+          t7.moveCall({ target: `${gasPkg}::gas_futures::set_share_of_oi_bps`, typeArguments: [g.collat], arguments: [t7.object(cfg.adminRegistryId), t7.object(id), t7.pure.u64(gc.accountShareOfOiBps)] });
           await execTx(client, t7, keypair, 'gas_futures.set_share_of_oi_bps');
         }
         if (gc.tierThresholds1e6 && gc.tierImBps) {
           const thresholds = gc.tierThresholds1e6 as number[];
           const imbps = gc.tierImBps as number[];
           const t8 = new Transaction();
-          t8.moveCall({ target: `${cfg.pkgId}::gas_futures::set_risk_tiers`, typeArguments: [g.collat], arguments: [t8.object(cfg.adminRegistryId), t8.object(id), t8.pure.vector('u64', thresholds), t8.pure.vector('u64', imbps)] as any });
+          const gasPkg = cfg.pkgIds?.gas || cfg.pkgId;
+          t8.moveCall({ target: `${gasPkg}::gas_futures::set_risk_tiers`, typeArguments: [g.collat], arguments: [t8.object(cfg.adminRegistryId), t8.object(id), t8.pure.vector('u64', thresholds), t8.pure.vector('u64', imbps)] as any });
           await execTx(client, t8, keypair, 'gas_futures.set_risk_tiers');
         }
       }
@@ -747,8 +789,9 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
     if (!p.marketId) {
       logger.debug(`perpetuals.init_market symbol=${p.symbol}`);
       const tx = new Transaction();
+      const perpsPkg = cfg.pkgIds?.perps || cfg.pkgId;
       tx.moveCall({
-        target: `${cfg.pkgId}::perpetuals::init_market`,
+        target: `${perpsPkg}::perpetuals::init_market`,
         typeArguments: [p.collat],
         arguments: [
           tx.object(cfg.adminRegistryId),
@@ -766,7 +809,7 @@ async function deployPerpetuals(client: SuiClient, cfg: DeployConfig, keypair: E
       });
       const res = await execTx(client, tx, keypair, `perpetuals.init_market ${p.symbol}`);
       accumulateFromRes(res, summary);
-      const id = extractCreatedId(res, `${cfg.pkgId}::perpetuals::PerpMarket<`);
+      const id = extractCreatedId(res, `${perpsPkg}::perpetuals::PerpMarket<`);
       if (id) logger.info(`perpetuals.market created id=${id}`);
       if (id) summary.perpetuals.push({
         marketId: id,
@@ -863,9 +906,10 @@ async function deployXPerps(client: SuiClient, cfg: DeployConfig, keypair: Ed255
   logger.info(`Deploying XPerps: ${cfg.xperps.length} market spec(s)`);
   for (const p of cfg.xperps) {
     if (!p.marketId) {
+      const xpPkg = cfg.pkgIds?.xperps || cfg.pkgId;
       const tx = new Transaction();
       tx.moveCall({
-        target: `${cfg.pkgId}::xperps::init_market`,
+        target: `${xpPkg}::xperps::init_market`,
         typeArguments: [p.collat],
         arguments: [
           tx.object(cfg.adminRegistryId),
@@ -883,7 +927,7 @@ async function deployXPerps(client: SuiClient, cfg: DeployConfig, keypair: Ed255
       });
       const res = await execTx(client, tx, keypair, `xperps.init_market ${p.symbol}`);
       accumulateFromRes(res, summary);
-      const id = extractCreatedId(res, `${cfg.pkgId}::xperps::XPerpMarket<`);
+      const id = extractCreatedId(res, `${xpPkg}::xperps::XPerpMarket<`);
       if (id) {
         logger.info(`xperps.market created id=${id}`);
         summary.xperps.push({
@@ -904,7 +948,7 @@ async function deployXPerps(client: SuiClient, cfg: DeployConfig, keypair: Ed255
         const hasEma = (p as any).alphaNum != null || (p as any).capMultipleBps != null || (p as any).markGateBps != null;
         if (hasEma) {
           const t = new Transaction();
-          t.moveCall({ target: `${cfg.pkgId}::xperps::set_ema_params`, typeArguments: [p.collat], arguments: [
+          t.moveCall({ target: `${xpPkg}::xperps::set_ema_params`, typeArguments: [p.collat], arguments: [
             t.object(cfg.adminRegistryId), t.object(id),
             t.pure.u64((p as any).alphaNum ?? 1), t.pure.u64((p as any).alphaDen ?? 480),
             t.pure.u64((p as any).alphaLongNum ?? 1), t.pure.u64((p as any).alphaLongDen ?? 43200),
@@ -915,7 +959,7 @@ async function deployXPerps(client: SuiClient, cfg: DeployConfig, keypair: Ed255
         // Optional caps and tiers
         if ((p as any).accountMaxNotional1e6 || (p as any).marketMaxNotional1e6) {
           const t = new Transaction();
-          t.moveCall({ target: `${cfg.pkgId}::xperps::set_notional_caps`, typeArguments: [p.collat], arguments: [
+          t.moveCall({ target: `${xpPkg}::xperps::set_notional_caps`, typeArguments: [p.collat], arguments: [
             t.object(cfg.adminRegistryId), t.object(id),
             t.pure.u128(BigInt((p as any).accountMaxNotional1e6 || '0')),
             t.pure.u128(BigInt((p as any).marketMaxNotional1e6 || '0')),
@@ -924,7 +968,7 @@ async function deployXPerps(client: SuiClient, cfg: DeployConfig, keypair: Ed255
         }
         if (typeof (p as any).accountShareOfOiBps === 'number') {
           const t = new Transaction();
-          t.moveCall({ target: `${cfg.pkgId}::xperps::set_share_of_oi_bps`, typeArguments: [p.collat], arguments: [
+          t.moveCall({ target: `${xpPkg}::xperps::set_share_of_oi_bps`, typeArguments: [p.collat], arguments: [
             t.object(cfg.adminRegistryId), t.object(id), t.pure.u64((p as any).accountShareOfOiBps),
           ] });
           await execTx(client, t, keypair, `xperps.set_share_of_oi_bps ${p.symbol}`);
@@ -933,7 +977,7 @@ async function deployXPerps(client: SuiClient, cfg: DeployConfig, keypair: Ed255
           const thresholds = (p as any).tierThresholds1e6 as number[];
           const imbps = (p as any).tierImBps as number[];
           const t = new Transaction();
-          t.moveCall({ target: `${cfg.pkgId}::xperps::set_risk_tiers`, typeArguments: [p.collat], arguments: [
+          t.moveCall({ target: `${xpPkg}::xperps::set_risk_tiers`, typeArguments: [p.collat], arguments: [
             t.object(cfg.adminRegistryId), t.object(id), t.pure.vector('u64', thresholds), t.pure.vector('u64', imbps),
           ] as any });
           await execTx(client, t, keypair, `xperps.set_risk_tiers ${p.symbol}`);
@@ -950,10 +994,11 @@ async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25
   for (const m of cfg.lendingMarkets) {
     if (!m.marketId) {
       logger.debug(`lending.init_market symbol=${m.symbol}`);
+      const lendPkg = cfg.pkgIds?.lending || cfg.pkgId;
       const tx = new Transaction();
       tx.moveCall({
-        target: `${cfg.pkgId}::lending::init_market`,
-        typeArguments: [resolveTypeTag(m.collat, cfg.pkgId), resolveTypeTag(m.debt, cfg.pkgId)],
+        target: `${lendPkg}::lending::init_market`,
+        typeArguments: [resolveTypeTag(m.collat, lendPkg), resolveTypeTag(m.debt, lendPkg)],
         arguments: [
           tx.object(cfg.adminRegistryId),
           tx.pure.string(m.symbol),
@@ -969,7 +1014,7 @@ async function deployLending(client: SuiClient, cfg: DeployConfig, keypair: Ed25
       });
       const res = await execTx(client, tx, keypair, `lending.init_market ${m.collat}`);
       accumulateFromRes(res, summary);
-      const id = extractCreatedId(res, `${cfg.pkgId}::lending::LendingMarket<`);
+      const id = extractCreatedId(res, `${lendPkg}::lending::LendingMarket<`);
       if (id) {
         logger.info(`lending.market created id=${id}`);
         summary.lending.push({

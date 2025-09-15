@@ -7,9 +7,9 @@ module testtokens::usui {
     use sui::event;
     use std::string::{Self as string, String};
 
-    use unxversal::admin::{Self as AdminMod, AdminRegistry};
-    use unxversal::oracle::{Self as oracle, OracleRegistry};
-    use unxversal::usdu::USDU;
+    use unxvcore::admin::{Self as AdminMod, AdminRegistry};
+    use unxvcore::oracle::{Self as oracle, OracleRegistry};
+    use unxvcore::usdu::USDU;
     use pyth::price_info::PriceInfoObject;
 
     public struct USUI has drop {}
