@@ -3,10 +3,11 @@ import styles from '../../components/gas-futures/GasFuturesTradePanel.module.css
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
 import type { TradePanelDataProvider } from '../../components/derivatives/types';
-import { useCurrentAccount, ConnectButton } from '@mysten/dapp-kit';
+import { useCurrentAccount, ConnectButton, useSuiClient } from '@mysten/dapp-kit';
 
 export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymbol = 'USDC' }: { mid: number; provider?: TradePanelDataProvider; baseSymbol?: string; quoteSymbol?: string }) {
   const acct = useCurrentAccount();
+  const sui = useSuiClient();
   const [side, setSide] = useState<'long' | 'short'>('long');
   const [price, setPrice] = useState<number>(mid || 0);
   const [size, setSize] = useState<number>(0);
@@ -19,6 +20,10 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
   const [takerBps, setTakerBps] = useState<number>(70);
   const [unxvDiscBps, setUnxvDiscBps] = useState<number>(3000);
   const [feeType, setFeeType] = useState<'unxv' | 'input'>('unxv');
+  const [lockingNotional, setLockingNotional] = useState<boolean>(true);
+  const [targetNotional, setTargetNotional] = useState<number>(0);
+  const [showDepositModal, setShowDepositModal] = useState<boolean>(false);
+  const [coinOptions, setCoinOptions] = useState<Array<{ id: string; balance: bigint }>>([]);
 
   useEffect(() => {
     let live = true;
@@ -60,9 +65,27 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
     return `${lp.toFixed(4)} ${quoteSymbol}`;
   }, [effPrice, leverage, side, quoteSymbol]);
 
+  // Keep notional constant when editing price
+  useEffect(() => {
+    if (!lockingNotional) return;
+    if (targetNotional > 0 && effPrice > 0) {
+      setSize(targetNotional / effPrice);
+    }
+  }, [effPrice]);
+
+  const onChangePrice = (v: number) => {
+    const pv = Number(v) || 0;
+    if (lockingNotional) {
+      if (notional <= 0 && size > 0) setTargetNotional(size * (effPrice || 0));
+      else if (notional > 0) setTargetNotional(notional);
+    }
+    setPrice(pv);
+  };
+
   const applyPercent = (p: number) => {
     const maxSize = leverage > 0 ? (quoteBal * leverage) / (effPrice || 1) : (quoteBal / (effPrice || 1));
     setSize(Math.max(0, maxSize * p));
+    if (lockingNotional) setTargetNotional(Math.max(0, maxSize * p) * effPrice);
   };
 
   async function submit() {
@@ -80,6 +103,18 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
     return maxSize > 0 ? Math.round((size / maxSize) * 100) : 0;
   }, [quoteBal, leverage, effPrice, size]);
 
+  const openDepositModal = async () => {
+    if (!acct?.address) return;
+    try {
+      // Query quote coin type; assume provider pays with quoteSymbol
+      // In most futures, collateral is quote coin
+      const coins = await sui.getCoins({ owner: acct.address, coinType: (quoteSymbol === 'USDC' ? '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC' : '') as any }).catch(() => ({ data: [] as any[] }));
+      const list = (coins.data ?? []).map(c => ({ id: c.coinObjectId, balance: BigInt(c.balance ?? '0') }));
+      setCoinOptions(list);
+      setShowDepositModal(true);
+    } catch { setCoinOptions([]); setShowDepositModal(true); }
+  };
+
   return (
     <div className={styles.root}>
       <div className={styles.walletCard}>
@@ -94,6 +129,11 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
           <div className={styles.balances}>
             <div className={styles.balanceRow}><span>{baseSymbol}:</span><span>{baseBal.toLocaleString()}</span></div>
             <div className={styles.balanceRow}><span>{quoteSymbol}:</span><span>{quoteBal.toLocaleString()}</span></div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button className={styles.miniButton || ''} onClick={openDepositModal}>Deposit</button>
+              <button className={styles.miniButton || ''} onClick={() => provider?.withdrawCollateral?.(Math.min(quoteBal, 1))}>Withdraw</button>
+              <button className={styles.miniButton || ''} onClick={() => provider?.claimPnlCredit?.()}>Claim PnL</button>
+            </div>
           </div>
         ) : (
           <div className={styles.balances}>
@@ -119,7 +159,7 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
           <div className={styles.field}>
             <div className={styles.fieldLabel}>Price</div>
             <div className={styles.inputGroup}>
-              <input type="number" value={price || ''} onChange={(e)=>setPrice(Number(e.target.value))} placeholder={String(mid || 0)} className={styles.inputWithLabel} />
+              <input type="number" value={price || ''} onChange={(e)=>onChangePrice(Number(e.target.value))} placeholder={String(mid || 0)} className={styles.inputWithLabel} />
               <div className={styles.tokenSelector}><span>{quoteSymbol}</span></div>
               <span className={styles.midIndicator}>Mid</span>
             </div>
@@ -128,7 +168,7 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
           <div className={styles.field}>
             <div className={styles.fieldLabel}>Size</div>
             <div className={styles.inputGroup}>
-              <input type="number" value={size || ''} onChange={(e)=>setSize(Number(e.target.value))} placeholder="0" className={styles.inputWithLabel} />
+              <input type="number" value={size || ''} onChange={(e)=>{ const v = Number(e.target.value) || 0; setSize(v); if (lockingNotional) setTargetNotional(v * effPrice); }} placeholder="0" className={styles.inputWithLabel} />
               <div className={styles.tokenSelector}><span>{baseSymbol}</span></div>
             </div>
           </div>
@@ -155,6 +195,7 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
                     const idx = Array.isArray(val) ? val[0] : (val as number);
                     const next = arr[idx] ?? 10;
                     setLeverage(next);
+                    if (lockingNotional) setTargetNotional((size || 0) * effPrice);
                   }} dots marks={{0:'0×',1:'5×',2:'10×',3:'15×',4:'20×',5:'30×',6:'40×'}} />
                 </div>
               </div>
@@ -186,6 +227,27 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
           )}
         </div>
       </div>
+
+      {showDepositModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={()=>setShowDepositModal(false)}>
+          <div style={{ background: '#0a0c12', border: '1px solid #1a1d29', borderRadius: 8, padding: 16, minWidth: 320 }} onClick={(e)=>e.stopPropagation()}>
+            <div style={{ color: '#e5e7eb', fontWeight: 600, marginBottom: 8 }}>Select Collateral Coin</div>
+            <div style={{ display: 'grid', gap: 8, maxHeight: 260, overflowY: 'auto' }}>
+              {coinOptions.length === 0 ? (
+                <div style={{ color: '#9ca3af' }}>No {quoteSymbol} coins found.</div>
+              ) : coinOptions.map((c) => (
+                <button key={c.id} style={{ background: '#111827', color: '#e5e7eb', border: '1px solid #1f2937', borderRadius: 6, padding: 8, textAlign: 'left' }} onClick={() => { setShowDepositModal(false); provider?.depositCollateral?.(c.id); }}>
+                  <div style={{ fontSize: 12 }}>{c.id.slice(0,10)}…{c.id.slice(-6)}</div>
+                  <div style={{ fontSize: 11, color: '#9ca3af' }}>Balance: {Number(c.balance).toLocaleString()}</div>
+                </button>
+              ))}
+            </div>
+            <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+              <button style={{ background: '#1f2937', color: '#e5e7eb', border: 'none', borderRadius: 6, padding: '6px 10px' }} onClick={()=>setShowDepositModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

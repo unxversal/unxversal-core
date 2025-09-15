@@ -609,6 +609,7 @@ export function DerivativesScreen({
                         <th>Total</th>
                         <th>Leverage</th>
                         <th>Status</th>
+                        {panelProvider?.cancelOrder ? <th>Action</th> : null}
                       </tr>
                     </thead>
                     <tbody>
@@ -621,6 +622,11 @@ export function DerivativesScreen({
                           <td>{order.total}</td>
                           <td>{order.leverage}</td>
                           <td>{order.status}</td>
+                          {panelProvider?.cancelOrder ? (
+                            <td>
+                              <button className={styles.cancelButton} onClick={() => panelProvider.cancelOrder?.(order.id || order.orderId)}>Cancel</button>
+                            </td>
+                          ) : null}
                         </tr>
                       ))}
                     </tbody>

@@ -91,7 +91,15 @@ export function FuturesScreen({ useSampleData = false }: { useSampleData?: boole
     },
     async getOpenOrders() {
       return (ix.openOrders || []).map((o) => ({
-        type: 'Limit', side: o.isBid ? 'Long' : 'Short', size: o.qtyRemaining, price: o.priceQuote, total: '-', leverage: '-', status: o.status ?? 'Open'
+        id: o.orderId,
+        orderId: o.orderId,
+        type: 'Limit',
+        side: o.isBid ? 'Long' : 'Short',
+        size: o.qtyRemaining,
+        price: o.priceQuote,
+        total: '-',
+        leverage: '-',
+        status: o.status ?? 'Open'
       } as any));
     },
     async getTwap() {
@@ -170,8 +178,20 @@ export function FuturesScreen({ useSampleData = false }: { useSampleData?: boole
         toast.success('Order canceled', { id, position: 'top-center' });
       } catch (e: any) { toast.error(e?.message ?? 'Cancel failed', { id, position: 'top-center' }); throw e; }
     },
-    async depositCollateral() {
-      toast.info('Deposit collateral not wired: requires coin selection', { position: 'top-center' });
+    async depositCollateral(coinId?: string) {
+      if (!acct?.address) { toast.error('Connect wallet'); throw new Error('Connect wallet'); }
+      const pkg = settings.contracts.pkgUnxversal; if (!pkg) throw new Error('Configure pkgUnxversal');
+      const fc = new FuturesClient(pkg);
+      const marketId = ix.marketId || '';
+      if (!marketId) throw new Error('Missing market');
+      if (!coinId) { toast.error('Select a coin'); throw new Error('Missing coinId'); }
+      const id = 'fut-deposit';
+      try {
+        toast.loading('Depositing collateral…', { id, position: 'top-center' });
+        const tx = fc.depositCollateral({ marketId, collatCoinId: coinId });
+        await signAndExecute({ transaction: tx as unknown as Transaction });
+        toast.success('Deposited', { id, position: 'top-center' });
+      } catch (e: any) { toast.error(e?.message ?? 'Deposit failed', { id, position: 'top-center' }); throw e; }
     },
     async withdrawCollateral(amountUi: number) {
       if (!acct?.address) { toast.error('Connect wallet'); throw new Error('Connect wallet'); }

@@ -88,7 +88,7 @@ export interface TradePanelDataProvider {
   getActiveStake?: (address: string) => Promise<number>;
   submitOrder?: (o: { side: 'long' | 'short'; size: number; price?: number; leverage: number }) => Promise<void>;
   cancelOrder?: (orderId: string | number) => Promise<void>;
-  depositCollateral?: () => Promise<void>;
+  depositCollateral?: (coinId?: string) => Promise<void>;
   withdrawCollateral?: (amountUi: number) => Promise<void>;
   claimPnlCredit?: () => Promise<void>;
 }
