@@ -2,7 +2,8 @@ import { Transaction } from '@mysten/sui/transactions';
 
 export class LendingClient {
   private readonly pkg: string;
-  constructor(pkgUnxversal: string) { this.pkg = pkgUnxversal; }
+  private readonly core: string;
+  constructor(pkgLending: string, corePkgId?: string) { this.pkg = pkgLending; this.core = corePkgId ?? pkgLending; }
 
   // ===== Debt supplier flows (Debt side liquidity) =====
   supplyDebt<Collat extends string, Debt extends string>(args: { marketId: string; amountDebtCoinId: string }) {

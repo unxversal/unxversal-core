@@ -3,9 +3,11 @@ import { Transaction } from '@mysten/sui/transactions';
 export class DexClient {
   private readonly pkg: string;
   private readonly deepbookPkg: string;
-  constructor(pkgUnxversal: string, deepbookPackageId: string) {
-    this.pkg = pkgUnxversal;
+  private readonly core: string;
+  constructor(pkgDex: string, deepbookPackageId: string, corePkgId?: string) {
+    this.pkg = pkgDex;
     this.deepbookPkg = deepbookPackageId;
+    this.core = corePkgId ?? pkgDex;
   }
 
   // ===== Helpers =====
@@ -28,7 +30,7 @@ export class DexClient {
   }) {
     const tx = new Transaction();
     const tradeProof = this.genProofAsOwner(tx, args.balanceManagerId);
-    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const unxvType = `${this.core}::unxv::UNXV`;
     const optUnxv = args.maybeUnxvCoinId ? this.optSomeObj(tx, this.coinType(unxvType), args.maybeUnxvCoinId) : this.optNone(tx, this.coinType(unxvType));
     tx.moveCall({
       target: `${this.pkg}::dex::place_limit_order_with_protocol_fee_bid<${args.baseType}, ${args.quoteType}>`,
@@ -65,7 +67,7 @@ export class DexClient {
   }) {
     const tx = new Transaction();
     const tradeProof = this.genProofAsOwner(tx, args.balanceManagerId);
-    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const unxvType = `${this.core}::unxv::UNXV`;
     const optUnxv = args.maybeUnxvCoinId ? this.optSomeObj(tx, this.coinType(unxvType), args.maybeUnxvCoinId) : this.optNone(tx, this.coinType(unxvType));
     tx.moveCall({
       target: `${this.pkg}::dex::place_limit_order_with_protocol_fee_ask<${args.baseType}, ${args.quoteType}>`,

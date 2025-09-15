@@ -2,7 +2,8 @@ import { Transaction } from '@mysten/sui/transactions';
 
 export class PerpetualsClient {
   private readonly pkg: string;
-  constructor(pkgUnxversal: string) { this.pkg = pkgUnxversal; }
+  private readonly core: string;
+  constructor(pkgPerps: string, corePkgId?: string) { this.pkg = pkgPerps; this.core = corePkgId ?? pkgPerps; }
 
   // ===== Collateral =====
   depositCollateral<Collat extends string>(args: { marketId: string; collatCoinId: string }) {
@@ -40,7 +41,7 @@ export class PerpetualsClient {
     maybeUnxvCoinId?: string;
   }) {
     const tx = new Transaction();
-    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const unxvType = `${this.core}::unxv::UNXV`;
     const optUnxv = args.maybeUnxvCoinId
       ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
       : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
@@ -75,7 +76,7 @@ export class PerpetualsClient {
     maybeUnxvCoinId?: string;
   }) {
     const tx = new Transaction();
-    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const unxvType = `${this.core}::unxv::UNXV`;
     const optUnxv = args.maybeUnxvCoinId
       ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
       : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
@@ -110,7 +111,7 @@ export class PerpetualsClient {
     maybeUnxvCoinId?: string;
   }) {
     const tx = new Transaction();
-    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const unxvType = `${this.core}::unxv::UNXV`;
     const optUnxv = args.maybeUnxvCoinId
       ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
       : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
@@ -145,7 +146,7 @@ export class PerpetualsClient {
     maybeUnxvCoinId?: string;
   }) {
     const tx = new Transaction();
-    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const unxvType = `${this.core}::unxv::UNXV`;
     const optUnxv = args.maybeUnxvCoinId
       ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
       : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });

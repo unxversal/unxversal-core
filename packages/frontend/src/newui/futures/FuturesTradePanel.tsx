@@ -4,6 +4,7 @@ import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
 import type { TradePanelDataProvider } from '../../components/derivatives/types';
 import { useCurrentAccount, ConnectButton, useSuiClient } from '@mysten/dapp-kit';
+import { loadSettings, getTokenBySymbol } from '../../lib/settings.config';
 
 export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymbol = 'USDC' }: { mid: number; provider?: TradePanelDataProvider; baseSymbol?: string; quoteSymbol?: string }) {
   const acct = useCurrentAccount();
@@ -24,6 +25,8 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
   const [targetNotional, setTargetNotional] = useState<number>(0);
   const [showDepositModal, setShowDepositModal] = useState<boolean>(false);
   const [coinOptions, setCoinOptions] = useState<Array<{ id: string; balance: bigint }>>([]);
+  const [showWithdrawModal, setShowWithdrawModal] = useState<boolean>(false);
+  const [withdrawAmount, setWithdrawAmount] = useState<string>('');
 
   useEffect(() => {
     let live = true;
@@ -106,13 +109,24 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
   const openDepositModal = async () => {
     if (!acct?.address) return;
     try {
-      // Query quote coin type; assume provider pays with quoteSymbol
-      // In most futures, collateral is quote coin
-      const coins = await sui.getCoins({ owner: acct.address, coinType: (quoteSymbol === 'USDC' ? '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC' : '') as any }).catch(() => ({ data: [] as any[] }));
+      const settings = loadSettings();
+      const tokenInfo = getTokenBySymbol(quoteSymbol, settings);
+      const coinType = tokenInfo?.typeTag || '';
+      const coins = coinType
+        ? await sui.getCoins({ owner: acct.address, coinType })
+        : { data: [] as any[] };
       const list = (coins.data ?? []).map(c => ({ id: c.coinObjectId, balance: BigInt(c.balance ?? '0') }));
       setCoinOptions(list);
       setShowDepositModal(true);
     } catch { setCoinOptions([]); setShowDepositModal(true); }
+  };
+
+  const submitWithdraw = () => {
+    const amt = Number(withdrawAmount);
+    if (!isFinite(amt) || amt <= 0) return;
+    provider?.withdrawCollateral?.(amt);
+    setShowWithdrawModal(false);
+    setWithdrawAmount('');
   };
 
   return (
@@ -129,10 +143,10 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
           <div className={styles.balances}>
             <div className={styles.balanceRow}><span>{baseSymbol}:</span><span>{baseBal.toLocaleString()}</span></div>
             <div className={styles.balanceRow}><span>{quoteSymbol}:</span><span>{quoteBal.toLocaleString()}</span></div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button className={styles.miniButton || ''} onClick={openDepositModal}>Deposit</button>
-              <button className={styles.miniButton || ''} onClick={() => provider?.withdrawCollateral?.(Math.min(quoteBal, 1))}>Withdraw</button>
-              <button className={styles.miniButton || ''} onClick={() => provider?.claimPnlCredit?.()}>Claim PnL</button>
+            <div className={styles.walletActions}>
+              <button className={styles.walletActionBtn} onClick={openDepositModal}>Deposit</button>
+              <button className={styles.walletActionBtn} onClick={() => setShowWithdrawModal(true)}>Withdraw</button>
+              <button className={styles.walletActionBtn} onClick={() => provider?.claimPnlCredit?.()}>Claim PnL</button>
             </div>
           </div>
         ) : (
@@ -244,6 +258,22 @@ export function FuturesTradePanel({ mid, provider, baseSymbol = 'SUI', quoteSymb
             </div>
             <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
               <button style={{ background: '#1f2937', color: '#e5e7eb', border: 'none', borderRadius: 6, padding: '6px 10px' }} onClick={()=>setShowDepositModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showWithdrawModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={()=>setShowWithdrawModal(false)}>
+          <div style={{ background: '#0a0c12', border: '1px solid #1a1d29', borderRadius: 8, padding: 16, minWidth: 320 }} onClick={(e)=>e.stopPropagation()}>
+            <div style={{ color: '#e5e7eb', fontWeight: 600, marginBottom: 8 }}>Withdraw Collateral</div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <label style={{ color: '#9ca3af', fontSize: 12 }}>Amount ({quoteSymbol})</label>
+              <input style={{ background: '#111827', color: '#e5e7eb', border: '1px solid #1f2937', borderRadius: 6, padding: 8 }} type="number" value={withdrawAmount} onChange={(e)=>setWithdrawAmount(e.target.value)} placeholder="0.00" />
+            </div>
+            <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button style={{ background: '#1f2937', color: '#e5e7eb', border: 'none', borderRadius: 6, padding: '6px 10px' }} onClick={()=>setShowWithdrawModal(false)}>Cancel</button>
+              <button style={{ background: '#ffffff', color: '#000000', border: 'none', borderRadius: 6, padding: '6px 10px' }} onClick={submitWithdraw}>Withdraw</button>
             </div>
           </div>
         </div>

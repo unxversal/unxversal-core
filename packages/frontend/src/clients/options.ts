@@ -4,8 +4,9 @@ import { Transaction } from '@mysten/sui/transactions';
 export class OptionsClient {
   private readonly client: SuiClient;
   private readonly pkg: string;
-  constructor(client: SuiClient, pkgUnxversal: string) {
-    this.client = client; this.pkg = pkgUnxversal;
+  private readonly core: string;
+  constructor(client: SuiClient, pkgOptions: string, corePkgId?: string) {
+    this.client = client; this.pkg = pkgOptions; this.core = corePkgId ?? pkgOptions;
   }
 
   // ===== Helpers =====
@@ -75,7 +76,7 @@ export class OptionsClient {
     unxvFeeCoinId?: string;
   }) {
     const tx = new Transaction();
-    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const unxvType = `${this.core}::unxv::UNXV`;
     const feeOpt = args.unxvFeeCoinId ? this.optSomeObj(tx, this.coinType(unxvType), args.unxvFeeCoinId) : this.optNone(tx, this.coinType(unxvType));
     tx.moveCall({
       target: `${this.pkg}::options::place_option_buy_order`,

@@ -2,7 +2,11 @@ import { Transaction } from '@mysten/sui/transactions';
 
 export class FuturesClient {
   private readonly pkg: string;
-  constructor(pkgUnxversal: string) { this.pkg = pkgUnxversal; }
+  private readonly core: string;
+  constructor(pkgFutures: string, corePkgId?: string) {
+    this.pkg = pkgFutures;
+    this.core = corePkgId ?? pkgFutures;
+  }
 
   // ===== Collateral management =====
   depositCollateral<Collat extends string>(args: { marketId: string; collatCoinId: string }) {
@@ -44,7 +48,7 @@ export class FuturesClient {
     maybeUnxvCoinId?: string;
   }) {
     const tx = new Transaction();
-    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const unxvType = `${this.core}::unxv::UNXV`;
     const optUnxv = args.maybeUnxvCoinId
       ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
       : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
@@ -78,7 +82,7 @@ export class FuturesClient {
     maybeUnxvCoinId?: string;
   }) {
     const tx = new Transaction();
-    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const unxvType = `${this.core}::unxv::UNXV`;
     const optUnxv = args.maybeUnxvCoinId
       ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
       : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
@@ -112,7 +116,7 @@ export class FuturesClient {
     maybeUnxvCoinId?: string;
   }) {
     const tx = new Transaction();
-    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const unxvType = `${this.core}::unxv::UNXV`;
     const optUnxv = args.maybeUnxvCoinId
       ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
       : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });
@@ -146,7 +150,7 @@ export class FuturesClient {
     maybeUnxvCoinId?: string;
   }) {
     const tx = new Transaction();
-    const unxvType = `${this.pkg}::unxv::UNXV`;
+    const unxvType = `${this.core}::unxv::UNXV`;
     const optUnxv = args.maybeUnxvCoinId
       ? tx.moveCall({ target: '0x1::option::some', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [tx.object(args.maybeUnxvCoinId)] })
       : tx.moveCall({ target: '0x1::option::none', typeArguments: [`0x2::coin::Coin<${unxvType}>`], arguments: [] });

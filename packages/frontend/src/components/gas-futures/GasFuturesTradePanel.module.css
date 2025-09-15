@@ -63,6 +63,29 @@ select:focus {
   color: #000000; 
 }
 
+/* Wallet action buttons row */
+.walletActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+.walletActionBtn {
+  background: #1a1d29;
+  border: none;
+  color: #9ca3af;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  width: 100%;
+  transition: all 0.2s ease;
+}
+
+.walletActionBtn:hover {
+  background: #ffffff;
+  color: #000000;
+}
+
 .balances { 
   display: grid; 
   gap: 6px; 
@@ -390,7 +413,7 @@ select:focus {
   color: #e5e7eb;
   font-size: 12px;
   font-weight: 600;
-  background: #1e2230;
+  background: #1a1d29;
   padding: 4px 8px;
   border-radius: 4px;
   min-width: 40px;
